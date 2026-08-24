@@ -23,6 +23,11 @@ SCENES = ROOT / "project" / "scenes"
 BRIEF = ROOT / "templates" / "grok-prompt-brief.md"
 OUT_DIR = ROOT / "project" / "grok_inputs"
 
+# 작품 화풍의 단일 출처는 manifest.output.visual_style 이다(webapp.visual_style·vn_compose._visual_style 과 동일).
+# 매니페스트에 없을 때만 이 기본 문구를 쓴다 — 세 경로가 같은 문구여야 컷 간 화풍이 흔들리지 않는다.
+DEFAULT_VISUAL_STYLE = ("bright cel-shaded Korean romance webtoon, soft warm palette, "
+                        "clean line art")
+
 def _console_guard() -> None:
     for stream in (sys.stdout, sys.stderr):
         enc = (getattr(stream, "encoding", "") or "").lower()
@@ -42,6 +47,15 @@ def load(path: Path) -> dict:
 
 def kv(label: str, value) -> str:
     return f"- {label}: {value}" if value not in ("", None, []) else ""
+
+
+def visual_style(mf: dict, sc: dict | None = None) -> str:
+    """작품 전체 화풍 — 매니페스트 우선, 없으면 장면 필드, 그것도 없으면 기본 문구."""
+    out = mf.get("output") if isinstance(mf.get("output"), dict) else {}
+    v = str(out.get("visual_style", "") or "").strip()
+    if not v and isinstance(sc, dict):
+        v = str(sc.get("visual_style", "") or "").strip()
+    return v or DEFAULT_VISUAL_STYLE
 
 
 def build_input(sid: str) -> str:
@@ -69,7 +83,7 @@ def build_input(sid: str) -> str:
     add("==== 프로젝트 ====")
     add(kv("제목", mf.get("title")))
     add(kv("출력 비율", mf.get("output", {}).get("aspect_ratio")))
-    add(kv("작품 전체 화풍", sc.get("visual_style") or "장면 파일 visual_style 참고"))
+    add(kv("작품 전체 화풍", visual_style(mf, sc)))
     add("")
 
     # 3) 등장 캐릭터 기준정보

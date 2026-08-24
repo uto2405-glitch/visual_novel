@@ -795,6 +795,74 @@ def main() -> int:
             check("T50 secret_scan 탐지 + 원문 미노출(마스킹)",
                   len(hits) >= 1 and planted not in rendered,
                   f"hits={len(hits)}")
+
+            # T51 — 대화 로그는 절대 짧아지지 않는다(빈 화면에서 보낸 요청이 지난 대화를 지우면 안 됨)
+            spec_wa = importlib.util.spec_from_file_location("wa_box", str(box / "tools" / "webapp.py"))
+            wa = importlib.util.module_from_spec(spec_wa)
+            spec_wa.loader.exec_module(wa)
+            saved20 = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"}
+                       for i in range(20)]
+            m_fresh = wa._merge_talk(saved20, [{"role": "user", "content": "새 세션 첫 마디"}])
+            m_cont = wa._merge_talk(saved20, saved20 + [{"role": "user", "content": "이어서"}])
+            m_empty = wa._merge_talk(saved20, [])
+            check("T51 대화 병합 — 저장본이 잘리지 않음(빈 화면·이어쓰기·빈 목록)",
+                  len(m_fresh) == 21 and m_fresh[:20] == saved20
+                  and len(m_cont) == 21 and m_cont[:20] == saved20
+                  and len(m_empty) >= 20,
+                  f"fresh={len(m_fresh)} cont={len(m_cont)} empty={len(m_empty)}")
+
+            # T52 — 승인 장면의 선택 이미지는 웹·CLI 어느 쪽으로도 바뀌지 않는다(재승인 없는 교체 차단)
+            lock_dir = box / "images" / "raw" / "SCENE-001"
+            write_png(lock_dir / "lock_a.png", 1400, 1000)
+            write_png(lock_dir / "lock_b.png", 1400, 1000)
+            # 승인 상태를 직접 만든다 — 이전 테스트가 남긴 상태에 의존하지 않고 잠금 가드만 검증한다
+            def _approved(d):
+                d["status"] = "APPROVED"
+                d["assets"]["raw_images"] = ["images/raw/SCENE-001/lock_a.png",
+                                             "images/raw/SCENE-001/lock_b.png"]
+                d["assets"]["selected_image"] = "images/raw/SCENE-001/lock_a.png"
+                d.setdefault("review", {}).update({"auto": "PASS", "human": "PASS"})
+            edit_json(box / "project" / "scenes" / "SCENE-001.json", _approved)
+            st_ap = 200
+            code_sel = None
+            try:
+                wapi("/api/select", {"scene_id": "SCENE-001",
+                                     "image": "images/raw/SCENE-001/lock_b.png"})
+            except urllib.error.HTTPError as e:
+                code_sel = e.code
+            rc_cli, out_cli = run(adv, "select", "SCENE-001", "1")
+            s1 = json.loads((box / "project" / "scenes" / "SCENE-001.json").read_text(encoding="utf-8"))
+            check("T52 APPROVED 장면 선택 잠금(웹 400 · CLI 비정상 종료 · 선택본 불변)",
+                  st_ap == 200 and code_sel == 400 and rc_cli != 0
+                  and s1["assets"]["selected_image"].endswith("lock_a.png"),
+                  f"approve={st_ap} web={code_sel} cli={rc_cli} sel={s1['assets'].get('selected_image')}")
+
+            # T53 — CSRF: 교차 출처 POST 는 403, 출처 없는 요청(자가진단·CLI)은 그대로 통과
+            code_x = None
+            try:
+                req_x = ur.Request(f"http://127.0.0.1:{web_port}/api/state",
+                                   data=b"{}", headers={"Content-Type": "application/json",
+                                                        "Origin": "http://evil.example"})
+                opener.open(req_x, timeout=20)
+            except urllib.error.HTTPError as e:
+                code_x = e.code
+            st_plain, _ = wapi("/api/state")
+            check("T53 교차 출처 POST 403 · 출처 없는 요청 200",
+                  code_x == 403 and st_plain == 200, f"cross={code_x} plain={st_plain}")
+
+            # T54 — 감상본: 실리지 않은 장면을 가리키는 goto 는 정리된다(선택 직후 끊김 방지)
+            pruned = tcm.prune_dangling_gotos([
+                {"id": "SCENE-001", "choices": [{"text": "가다", "goto": "SCENE-999"}],
+                 "branch": [{"min": 3, "goto": "SCENE-998"}]},
+            ])
+            sc_after = [
+                {"id": "SCENE-001", "choices": [{"text": "가다", "goto": "SCENE-999"}],
+                 "branch": [{"min": 3, "goto": "SCENE-998"}]}]
+            tcm.prune_dangling_gotos(sc_after)
+            check("T54 감상본 dangling goto 정리 + 경고",
+                  len(pruned) >= 1 and "goto" not in sc_after[0]["choices"][0]
+                  and not sc_after[0].get("branch"),
+                  f"warn={len(pruned)}")
         finally:
             web.terminate()
             mock.shutdown()

@@ -204,6 +204,11 @@ def cmd_select(args: argparse.Namespace) -> None:
     sid = args.scene_id
     path = scene_path(sid)
     sc = load(path)
+    if sc.get("status") == "APPROVED":
+        # 승인 잠금 장면의 선택본 교체 금지 — 사람 승인(SCORECARD C)을 거치지 않은 이미지가
+        # 완성본 자리를 차지하는 것을 막는다. 웹 스튜디오(select_image)와 같은 규칙.
+        die(f"{sid} 는 APPROVED 입니다. 선택본을 바꾸려면 먼저 되돌리세요:\n"
+            f"  python tools/advance_scene.py revise {sid} IMAGE --note \"교체 사유\"")
     raws = sc["assets"].get("raw_images", [])
     if not raws:
         die("등록된 후보 이미지가 없습니다. add-images 를 먼저 실행하세요.")

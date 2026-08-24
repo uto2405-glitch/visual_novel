@@ -704,13 +704,18 @@ function pollGen(sid,msg){let live=true;
   setTimeout(tick,4000)};
  setTimeout(tick,4000);
  return ()=>{live=false}}
+// 결함 12: 정상 종료·실패·시간초과를 구분해 돌려준다.
+// {done:true} | {error:"사유"} | {timeout:true} — 호출부가 실패 사유를 화면에 남길 수 있어야 한다.
 async function pollGenUntilDone(sid,msg){
  for(let i=0;i<180;i++){                       // 최대 약 12분
   await new Promise(r=>setTimeout(r,4000));
-  try{const s=await api("/api/gen-status",{scene_id:sid});
-   if(s&&s.message)msg.textContent=s.message;
-   if(!s||s.running===false)return}
-  catch(e){return}}}
+  let s;
+  try{s=await api("/api/gen-status",{scene_id:sid})}
+  catch(e){return {error:(e&&e.message)||"진행 상태를 확인할 수 없습니다"}}
+  if(s&&s.message)msg.textContent=s.message;
+  if(!s)return {done:true};                    // 구버전 서버(빈 응답) → 기존처럼 완료로 간주
+  if(s.running===false)return s.error?{error:String(s.error)}:{done:true}}
+ return {timeout:true}}
 
 function sceneCard(sc){
  const card=el("div","card");
@@ -781,7 +786,11 @@ function sceneCard(sc){
   bgi.onclick=async()=>{bgi.disabled=true;msg.textContent="MakeFun 생성 중… (1~3분)";
    const stop=pollGen(sc.scene_id,msg);   // 서버가 진행 조회를 지원하면 상황을 보여준다
    try{const d=await api("/api/gen-image",{scene_id:sc.scene_id,n:1});
-    if(d&&d.running){await pollGenUntilDone(sc.scene_id,msg);stop();
+    if(d&&d.running){const r=await pollGenUntilDone(sc.scene_id,msg);stop();
+     // 실패·시간초과면 사유를 화면에 남긴다(refresh 는 카드를 통째로 새로 그려 메시지를 지운다)
+     if(r&&r.error){msg.textContent="실패: "+r.error;bgi.disabled=false;return}
+     if(r&&r.timeout){msg.textContent="시간 초과 — 아직 생성 중일 수 있습니다. 잠시 뒤 [폴더 스캔]으로 확인하세요.";
+      bgi.disabled=false;return}
      msg.textContent="생성 완료 — 후보를 확인하세요";await refresh();return}
     stop();msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;await refresh()}
    catch(e){stop();msg.textContent="실패: "+e.message;bgi.disabled=false}};
@@ -844,23 +853,92 @@ function sceneCard(sc){
     d.rows.map(r=>{const m=r.grade==="좋음"?"OK  ":(r.grade==="보통"?"~   ":"✗   ");
      return m+r.size+"  "+r.dpi+"DPI  "+r.grade+(r.crop_pct>1?" · 크롭 "+r.crop_pct+"%":"")}).join("\n")}
    out.hidden=false}catch(e){out.textContent="실패: "+e.message;out.hidden=false}};
-  pr.appendChild(btn);card.appendChild(pr);card.appendChild(out)}
+  pr.appendChild(btn);
+  // 75 · 크롭 미리보기 — 규격을 고르면 어디가 잘리는지 이미지 위에 직접 보여주고 앵커를 정한다
+  if(sc.image_url&&p.px){
+   const bc=el("button","btn ghost","✂ 크롭 미리보기");
+   const wrap=el("div");wrap.hidden=true;wrap.style.marginTop="8px";
+   const ctl=el("div","row");
+   const selSize=el("select");
+   for(const s of ["4x6","5x7","8x10","A5","A4","photocard"])selSize.appendChild(el("option",null,s));
+   selSize.value="5x7";
+   const selAnc=el("select");
+   for(const a of [["center","가운데"],["top","위"],["bottom","아래"],["left","왼쪽"],["right","오른쪽"]]){
+    const o=el("option",null,a[1]);o.value=a[0];selAnc.appendChild(o)}
+   const savedAnc=(sc.print&&sc.print.crop_anchor)||"center";selAnc.value=savedAnc;
+   const note=el("span","small");
+   ctl.appendChild(el("span","small","규격"));ctl.appendChild(selSize);
+   ctl.appendChild(el("span","small","기준"));ctl.appendChild(selAnc);ctl.appendChild(note);
+   const stage=el("div");stage.style.cssText=
+    "position:relative;display:inline-block;margin-top:8px;max-width:100%;line-height:0";
+   const im=el("img");im.src=sc.image_url+"?w=420";im.alt=sc.scene_id;
+   im.style.cssText="max-width:100%;border-radius:8px;display:block";
+   const shadeTop=el("div"),shadeBot=el("div"),frame=el("div");
+   const shadeCss="position:absolute;left:0;right:0;background:rgba(8,6,14,.66);pointer-events:none";
+   shadeTop.style.cssText=shadeCss;shadeBot.style.cssText=shadeCss;
+   frame.style.cssText="position:absolute;border:2px solid var(--jade);pointer-events:none;"+
+    "box-shadow:0 0 0 1px rgba(0,0,0,.5)";
+   stage.appendChild(im);stage.appendChild(shadeTop);stage.appendChild(shadeBot);stage.appendChild(frame);
+   const RATIO={"4x6":4/6,"5x7":5/7,"8x10":8/10,"A5":148/210,"A4":210/297,"photocard":55/85};
+   function draw(){
+    const iw=sc.print.px[0],ih=sc.print.px[1];
+    const want=RATIO[selSize.value]||(5/7);            // 세로(긴 변 아래) 기준 종횡비
+    const src=iw/ih;
+    let cw,ch;                                          // 잘라낼 영역(원본 px)
+    if(src>want){ch=ih;cw=Math.round(ih*want)}else{cw=iw;ch=Math.round(iw/want)}
+    const keep=Math.round((cw*ch)/(iw*ih)*100);
+    note.textContent="원본의 "+keep+"% 사용 · "+(100-keep)+"% 잘림";
+    note.className="small "+(keep>=88?"":"");
+    const pw=im.clientWidth||1,ph=im.clientHeight||1;   // 화면 표시 크기로 환산
+    const fw=pw*(cw/iw),fh=ph*(ch/ih);
+    let left=(pw-fw)/2,top=(ph-fh)/2;
+    const a=selAnc.value;
+    if(a==="top")top=0; else if(a==="bottom")top=ph-fh;
+    else if(a==="left")left=0; else if(a==="right")left=pw-fw;
+    frame.style.left=left+"px";frame.style.top=top+"px";
+    frame.style.width=Math.max(0,fw-4)+"px";frame.style.height=Math.max(0,fh-4)+"px";
+    shadeTop.style.top="0px";shadeTop.style.height=Math.max(0,top)+"px";
+    shadeBot.style.top=(top+fh)+"px";shadeBot.style.height=Math.max(0,ph-top-fh)+"px";
+   }
+   selSize.onchange=draw;selAnc.onchange=async()=>{draw();
+    try{await api("/api/set-crop",{scene_id:sc.scene_id,anchor:selAnc.value});
+     note.textContent+=" · 기준 저장됨"}catch(e){note.textContent+=" · 저장 실패(미지원 서버)"}};
+   im.onload=draw;
+   bc.onclick=()=>{wrap.hidden=!wrap.hidden;if(!wrap.hidden)draw()};
+   wrap.appendChild(ctl);wrap.appendChild(stage);
+   pr.appendChild(bc);card.appendChild(pr);card.appendChild(wrap);card.appendChild(out);
+   return card}
+  card.appendChild(pr);card.appendChild(out)}
  return card}
 function renderScenes(){const box=$("sceneList");box.replaceChildren();
  for(const sc of S.scenes)box.appendChild(sceneCard(sc))}
 // ---- 회상 갤러리 + 즐겨찾기(71) + 라이트박스(72) ----
 // 즐겨찾기는 서버(project/favorites.json)가 정본이고, 서버가 없거나 실패하면 localStorage 로 폴백한다.
-let favSet=new Set(),favRemote=false;
+let favSet=new Set(),favRemote=false,favPushed=false;
+// 결함 17: 서버의 빈 배열은 "즐겨찾기 없음"과 "favorites.json 이 아직 없음"을 구분하지 못한다.
+// 그러므로 서버 목록으로 로컬을 덮어쓰지 않고 항상 합집합을 취하고, 로컬에만 있던 항목은 서버로 올린다.
 function syncFav(){
- if(Array.isArray(S.favorites)){favSet=new Set(S.favorites);favRemote=true;saveFavLocal(favSet)}
- else if(!favRemote)favSet=loadFavLocal()}
+ if(!Array.isArray(S.favorites)){if(!favRemote)favSet=loadFavLocal();return}
+ const merged=new Set(S.favorites),extra=[];
+ for(const id of loadFavLocal())if(!merged.has(id)){merged.add(id);extra.push(id)}
+ favSet=merged;favRemote=true;saveFavLocal(favSet);
+ if(extra.length&&!favPushed){favPushed=true;pushFavUp(extra)}}
+async function pushFavUp(ids){
+ for(const id of ids){
+  try{await api("/api/favorite",{scene_id:id,on:true})}
+  catch(e){favRemote=false;break}}   // 실패해도 로컬 목록은 그대로 살아 있다
+ $("galMsg").textContent=favNote();renderGallery()}
 function favNote(){return "즐겨찾기 "+favSet.size+"개 (인화 후보)"+(favRemote?"":" · 이 브라우저에만 저장됨")}
 async function toggleFav(id){
  if(favSet.has(id))favSet.delete(id);else favSet.add(id);
  const on=favSet.has(id);
  saveFavLocal(favSet);$("galMsg").textContent=favNote();renderGallery();
  try{const d=await api("/api/favorite",{scene_id:id,on:on});
-  if(d&&Array.isArray(d.scene_ids)){favSet=new Set(d.scene_ids);favRemote=true;
+  if(d&&Array.isArray(d.scene_ids)){
+   // 결함 17: 서버 응답으로 통째로 갈아끼우면 아직 서버에 없는 로컬 항목이 사라진다 → 합집합.
+   const srv=new Set(d.scene_ids);if(on)srv.add(id);else srv.delete(id);
+   for(const x of favSet)if(x!==id)srv.add(x);
+   favSet=srv;favRemote=true;
    saveFavLocal(favSet);$("galMsg").textContent=favNote();renderGallery()}}
  catch(e){favRemote=false;$("galMsg").textContent=favNote()}}
 function galList(){const favOnly=$("galFavOnly").checked;
@@ -920,7 +998,7 @@ document.addEventListener("keydown",e=>{if($("lightbox").hidden)return;
  else if(e.key==="ArrowRight")lbMove(1)});
 
 // ---- 인물과 대화 (로컬 LLM · 미연시 창) ----
-let talkChat=[],vnTimer=null,vnFull="",talkWaiting=false,talkLoaded=false;
+let talkChat=[],vnTimer=null,vnFull="",talkWaiting=false,talkLoaded=false,talkReset=false;
 function vnHeroine(){return (S&&S.characters&&S.characters[0]&&S.characters[0].name)||"이지혜"}
 function vnCharId(){return (S&&S.characters&&S.characters[0]&&S.characters[0].id)||""}
 function vnDefaultCG(){const s=(S&&S.scenes||[]).find(x=>x.image_url);return s?s.image_url:""}
@@ -964,23 +1042,36 @@ function pickMsgs(o){if(!o||typeof o!=="object")return null;
   if(Array.isArray(v))return v;
   if(v&&typeof v==="object"&&Array.isArray(v.messages))return v.messages}
  return null}
+// 결함 1: 세 경로가 모두 실패하면 조용히 빈 화면으로 두지 않고 사용자에게 알린다.
+// 1순위는 서버 계약 POST /api/talk-history → {messages,character_id}.
+let talkRestoring=false;
 async function restoreTalk(status){
- if(talkLoaded)return;talkLoaded=true;
- let msgs=pickMsgs(S)||pickMsgs(status);
- if(!msgs){
-  const cid=vnCharId();
-  try{msgs=pickMsgs(await api("/api/talk-history",cid?{character_id:cid}:{}))}
-  catch(e){msgs=null}}   // 서버가 이 경로를 아직 지원하지 않으면 빈 상태로 시작
- if(!Array.isArray(msgs)||!msgs.length)return;
- const restored=[];
- for(const m of msgs){
-  if(!m||typeof m!=="object")continue;
-  if(m.role!=="user"&&m.role!=="assistant")continue;
-  restored.push({role:m.role,content:String(m.content==null?"":m.content),
-   photos:Array.isArray(m.photos)?m.photos:[]})}
- if(!restored.length)return;
- talkChat=restored;renderTalk();
- $("talkMsg").textContent="지난 대화 "+restored.length+"줄을 불러왔습니다 — 이어서 이야기하세요."}
+ if(talkLoaded||talkRestoring||talkChat.length||talkWaiting)return;
+ talkRestoring=true;
+ let msgs=null,ok=false;
+ try{
+  try{const d=await api("/api/talk-history",vnCharId()?{character_id:vnCharId()}:{});
+   if(d&&Array.isArray(d.messages)){msgs=d.messages;ok=true}
+   else{const v=pickMsgs(d);if(Array.isArray(v)){msgs=v;ok=true}}}
+  catch(e){ok=false}
+  if(!ok){const v=pickMsgs(S)||pickMsgs(status);   // 구버전 서버: 상태 응답에 이력이 실려 오는 경우
+   if(Array.isArray(v)){msgs=v;ok=true}}
+  if(!ok){$("talkMsg").textContent=
+    "지난 대화를 불러오지 못했습니다 — 빈 상태로 시작합니다. (서버가 꺼져 있거나 대화 기록 경로를 지원하지 않습니다. 지금부터의 대화는 정상 저장됩니다.)";
+   return}                                          // talkLoaded 를 세우지 않아 서버 복구 후 재시도된다
+  talkLoaded=true;
+  if(!msgs.length)return;                           // 저장된 대화가 아직 없음 — 정상
+  const restored=[];
+  for(const m of msgs){
+   if(!m||typeof m!=="object")continue;
+   if(m.role!=="user"&&m.role!=="assistant")continue;
+   restored.push({role:m.role,content:String(m.content==null?"":m.content),
+    photos:Array.isArray(m.photos)?m.photos:[]})}
+  if(!restored.length){$("talkMsg").textContent=
+    "지난 대화를 불러오지 못했습니다 — 기록 형식을 읽을 수 없습니다. 빈 상태로 시작합니다.";return}
+  talkChat=restored;renderTalk();
+  $("talkMsg").textContent="지난 대화 "+restored.length+"줄을 불러왔습니다 — 이어서 이야기하세요."}
+ finally{talkRestoring=false}}
 async function talkStatus(){const c=$("talkStatus");
  renderTalk();
  let st=null;
@@ -998,7 +1089,11 @@ async function talkSend(){if(talkWaiting)return;
  $("talkInput").value="";talkChat.push({role:"user",content:t});
  talkLock(true);renderTalk();vnTypingOn();
  const send=talkChat.map(m=>({role:m.role,content:m.content}));   // 모델엔 텍스트만
- try{const d=await api("/api/talk",{messages:send});
+ // 서버는 저장본과 병합해 지난 대화를 지키므로, [처음부터]로 비운 뒤 첫 발화에만 reset 을 실어
+ // 사용자가 의도한 초기화를 서버에도 반영한다(그 외에는 절대 덮어쓰지 않는다).
+ const body={messages:send};if(talkReset){body.reset=true}
+ try{const d=await api("/api/talk",body);
+  talkReset=false;
   talkChat.push({role:"assistant",content:d.reply,photos:d.photos||[]});
   talkLock(false);renderTalk();vnType(d.reply)}
  catch(e){talkLock(false);$("vnText").textContent="(대화 실패) "+e.message}
@@ -1008,7 +1103,9 @@ $("btnTalk").onclick=talkSend;
 $("btnTalkClear").onclick=()=>{
  if(talkWaiting)return;
  if(talkChat.length&&!confirm("지금까지의 대화 "+talkChat.length+"줄을 지우고 처음부터 시작할까요?\n(이 화면에서는 되돌릴 수 없습니다)"))return;
- talkChat=[];$("talkLog").hidden=true;$("talkMsg").textContent="처음부터 시작합니다.";
+ talkChat=[];talkLoaded=true;   // 명시적으로 비운 대화를 복원 재시도가 되살리지 않게
+ talkReset=true;                // 다음 발화에 reset 을 실어 서버 저장본도 함께 비운다
+ $("talkLog").hidden=true;$("talkMsg").textContent="처음부터 시작합니다. (다음 대화부터 새로 저장됩니다)";
  vnDone();renderTalk();$("talkInput").focus()};
 // 58 · 지금 이 대화를 장면으로 남긴다 (이미지 생성은 하지 않는다 — [장면] 탭에서 따로)
 $("btnTalkShot").onclick=async()=>{
@@ -1088,36 +1185,47 @@ $("btnExportPwa").onclick=async()=>{$("exportViewerMsg").textContent="PWA 내보
    :"실패: "+e.message}};
 
 // ---- 90 · LAN 접속 주소 + QR (외부 라이브러리 없이 직접 생성) ----
-function lanCandidates(){const out=[],port=location.port?(":"+location.port):"";
- const add=u=>{u=String(u||"").trim();if(u&&out.indexOf(u)<0)out.push(u)};
- for(const k of ["lan_urls","lan_addresses"])if(Array.isArray(S[k]))for(const u of S[k])add(u);
- for(const k of ["lan_ips","lan"])if(Array.isArray(S[k]))for(const ip of S[k])add("http://"+ip+port);
- add(location.origin);
+// 결함 11·7: 서버 계약은 /api/state 의 lan_urls 배열 하나뿐이다.
+// 없거나 비면 127.0.0.1 을 폰 주소인 것처럼 보여주지 않고 LAN 모드 안내를 낸다.
+let lanUrl="";
+function lanCandidates(){const out=[];
+ if(Array.isArray(S.lan_urls))for(const u of S.lan_urls){
+  const s=String(u||"").trim();if(s&&out.indexOf(s)<0)out.push(s)}
  return out}
 function renderLan(){const pick=$("lanPick");if(!pick)return;
  const list=lanCandidates(),prev=pick.value;
  pick.replaceChildren();
  for(const u of list){const o=el("option",null,u);o.value=u;pick.appendChild(o)}
  pick.hidden=list.length<2;
- pick.value=(list.indexOf(prev)>=0)?prev:(list[0]||"");
+ if(!list.length){pick.value="";showNoLan();return}
+ pick.value=(list.indexOf(prev)>=0)?prev:list[0];
  drawQR(pick.value)}
-function drawQR(text){const cv=$("qrCanvas"),msg=$("qrMsg"),addr=$("lanAddr");
+function showNoLan(){const cv=$("qrCanvas"),msg=$("qrMsg"),addr=$("lanAddr"),b=$("btnLanCopy");
+ lanUrl="";
+ if(cv)cv.hidden=true;
+ if(b)b.disabled=true;
+ if(addr)addr.textContent="LAN 주소 없음";
+ if(msg)msg.textContent="LAN 모드로 실행해야 폰에서 접속할 수 있습니다 — 터미널에서 "
+  +"python tools/webapp.py --lan 로 다시 켜세요. 지금 주소("+location.origin+")는 이 PC 안에서만 열립니다."}
+function drawQR(text){const cv=$("qrCanvas"),msg=$("qrMsg"),addr=$("lanAddr"),b=$("btnLanCopy");
  if(!cv||!addr)return;
- addr.textContent=text||"(주소 없음)";
+ if(!text){showNoLan();return}
+ lanUrl=text;addr.textContent=text;if(b)b.disabled=false;
  let mods=null;
  try{mods=qrEncode(text)}catch(e){mods=null}
  const ctx=cv.getContext?cv.getContext("2d"):null;
  if(!ctx||!mods){cv.hidden=true;
-  msg.textContent="QR 을 만들 수 없습니다 — 위 주소를 폰 브라우저에 직접 입력하세요.";return}
+  msg.textContent="QR 을 만들 수 없습니다 — 위 주소를 폰 브라우저에 직접 입력하세요([주소 복사] 사용).";return}
  cv.hidden=false;
  const n=mods.length,q=4,total=n+q*2,scale=Math.max(3,Math.floor(220/total)),px=total*scale;
  cv.width=px;cv.height=px;
  ctx.fillStyle="#fff";ctx.fillRect(0,0,px,px);ctx.fillStyle="#000";
  for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(mods[r][c])ctx.fillRect((c+q)*scale,(r+q)*scale,scale,scale);
- msg.textContent="폰 카메라로 이 QR 을 비추세요."}
+ msg.textContent="폰 카메라로 이 QR 을 비추세요. 안 읽히면 위 주소를 직접 입력하세요."}
 $("lanPick").onchange=e=>drawQR(e.target.value);
 $("btnLanCopy").onclick=async()=>{const b=$("btnLanCopy");
- try{await navigator.clipboard.writeText($("lanAddr").textContent||"");
+ if(!lanUrl){b.textContent="복사할 주소 없음";setTimeout(()=>{b.textContent="주소 복사"},1300);return}
+ try{await navigator.clipboard.writeText(lanUrl);
   b.textContent="복사됨";setTimeout(()=>{b.textContent="주소 복사"},1300)}
  catch(e){b.textContent="복사 실패 — 직접 입력하세요"}};
 
@@ -1338,6 +1446,10 @@ function closePanels(){$("vnLog").hidden=true;$("vnSettings").hidden=true;$("vnS
 function jumpTo(v,d){ended=false;hideEndCard();const before=vi;
  if(v!==before)navStack.push(before);   // 66: 기록·장면이동으로 건너뛴 것도 되짚을 수 있게
  vi=v;di=d;
+ // 결함 4: 선택지 대기 상태를 반드시 정리한다. 남겨두면 advance() 가 전부 무시되어 진행 불능.
+ awaitingChoice=false;clearTimeout(autoTimer);
+ const ch=$("choices");if(ch){ch.hidden=true;ch.replaceChildren()}
+ $("dlg").style.opacity="";
  $("vnLog").hidden=true;$("vnScenes").hidden=true;syncExpanded();
  if(vi!==before)renderImage();showLine()}
 function renderLog(){const box=$("vnLogInner");box.replaceChildren();
@@ -1348,7 +1460,10 @@ function renderLog(){const box=$("vnLogInner");box.replaceChildren();
   row.onclick=()=>jumpTo(h.vi,h.di);   // 백로그 클릭 → 그 지점으로 이동
   box.appendChild(row)}
  box.scrollTop=box.scrollHeight}
-function toggleLog(){const wasOpen=!$("vnLog").hidden;closePanels();if(!wasOpen){renderLog();$("vnLog").hidden=false;syncExpanded();$("btnLogClose").focus()}}
+// 결함 13: 숨김(display:none) 상태에선 레이아웃 박스가 없어 scrollTop 이 무시된다 →
+// 반드시 hidden 해제 뒤에 렌더·스크롤·포커스 순으로 적용한다.
+function toggleLog(){const wasOpen=!$("vnLog").hidden;closePanels();
+ if(!wasOpen){$("vnLog").hidden=false;renderLog();syncExpanded();$("btnLogClose").focus()}}
 // 70 · 장면 이동 패널: 썸네일 + 읽음 표시
 function sceneRead(i){const dl=dlen(S.scenes[i]);
  for(let d=0;d<dl;d++)if(seen.has(i+":"+d))return true;
@@ -1366,9 +1481,12 @@ function renderSceneJump(){const box=$("vnScenesInner");box.replaceChildren();
   it.onclick=()=>jumpTo(i,0);
   if(i===vi)here=it;
   box.appendChild(it)});
- if(here&&here.scrollIntoView)here.scrollIntoView({block:"center"})}
+ // 결함 13(동류): 패널이 보이는 상태에서만 유효. 페이지 전체가 딸려 스크롤되지 않도록
+ // scrollIntoView 대신 목록 컨테이너의 scrollTop 만 직접 조정한다.
+ if(here){const br=box.getBoundingClientRect(),hr=here.getBoundingClientRect();
+  if(br.height>0)box.scrollTop+=(hr.top-br.top)-(br.height-hr.height)/2}}
 function toggleScenes(){const wasOpen=!$("vnScenes").hidden;closePanels();
- if(!wasOpen){renderSceneJump();$("vnScenes").hidden=false;syncExpanded();$("btnScenesClose").focus()}}
+ if(!wasOpen){$("vnScenes").hidden=false;renderSceneJump();syncExpanded();$("btnScenesClose").focus()}}
 function toggleSettings(){const wasOpen=!$("vnSettings").hidden;closePanels();
  if(!wasOpen){syncSettings();$("vnSettings").hidden=false;syncExpanded();$("btnSetClose").focus()}}
 
@@ -1555,12 +1673,14 @@ function qrEncode(text){
   const t=m.map(r=>r.slice());
   for(let r=0;r<size;r++)for(let c=0;c<size;c++)if(!fn[r][c]&&QR_MASK[mk](r,c))t[r][c]^=1;
   const f=qrFormat(mk),gb=i=>(f>>i)&1;
-  for(let i=0;i<=5;i++)t[8][i]=gb(i);
-  t[8][7]=gb(6);t[8][8]=gb(7);t[7][8]=gb(8);
-  for(let i=9;i<15;i++)t[14-i][8]=gb(i);
-  for(let i=0;i<8;i++)t[size-1-i][8]=gb(i);
-  for(let i=8;i<15;i++)t[8][size-15+i]=gb(i);
-  t[size-8][8]=1;
+  // 결함 5 · 포맷 정보 15비트를 ISO/IEC 18004 표준 위치에 배치한다(행렬 규약 m[행][열]).
+  // 이전 코드는 행/열이 전치되어 있어 어떤 스캐너도 읽지 못했다.
+  for(let i=0;i<=5;i++)t[i][8]=gb(i);          // 사본1 세로: 열 8, 행 0~5
+  t[7][8]=gb(6);t[8][8]=gb(7);t[8][7]=gb(8);   // 사본1 모서리 3개
+  for(let i=9;i<15;i++)t[8][14-i]=gb(i);       // 사본1 가로: 행 8, 열 5~0
+  for(let i=0;i<8;i++)t[8][size-1-i]=gb(i);    // 사본2 가로: 행 8, 열 size-1~size-8
+  for(let i=8;i<15;i++)t[size-15+i][8]=gb(i);  // 사본2 세로: 열 8, 행 size-7~size-1
+  t[size-8][8]=1;                              // 다크 모듈 (행 4v+9, 열 8)
   const p=qrPenalty(t);
   if(p<bestP){bestP=p;best=t}}
  return best}

@@ -83,16 +83,19 @@ def _looks_benign(label: str, value: str) -> bool:
 
     접두사가 고정된 패턴(xai-/sk_/AKIA…)은 이미 정밀하므로 약한 휴리스틱을 적용하지 않는다.
     AWS 키처럼 전부 대문자인 진짜 키가 '환경변수 이름 같다'는 이유로 묻히면 안 된다.
+    (완화 휴리스틱을 모든 패턴에 걸면 '+' 가 든 base64 토큰·Bearer 헤더가 통째로 묵살된다.)
     """
     v = value.strip()
     if not v:
         return True
     if _PLACEHOLDER.search(v):
         return True
-    if any(ch in v for ch in "[]{}()\\*+|"):   # 정규식/포맷 문자열 소스
-        return True
     if label != "assigned-secret":
         return False
+    # 아래는 접두사 없는 assigned-secret 전용 완화 — 정규식/포맷 문자열 소스를 걸러낸다.
+    # '+' 는 base64 토큰·강한 비밀번호에도 흔해 제외한다(진짜 정규식이면 다른 메타문자가 함께 있다).
+    if any(ch in v for ch in "[]{}()\\*|"):
+        return True
     return bool(_ENVNAME.match(v)) or len(set(v)) <= 4   # 환경변수 이름·채움값
 
 

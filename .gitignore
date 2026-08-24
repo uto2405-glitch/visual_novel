@@ -19,6 +19,8 @@ logs/
 # 개인 대화 기록 — 인물과 나눈 사적 대화는 저장소에 올리지 않는다
 project/story/chatlog.json
 project/story/talk_*.json
+# 그 대화를 압축한 기억 요약본도 같은 사적 기록이다 (local_llm.save_memory_summary)
+project/story/memory_*.json
 
 # 재구성 백업 잔재 (backups/ 로 이관 전 과거 흔적)
 project/scenes_backup_*/

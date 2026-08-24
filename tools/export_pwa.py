@@ -18,8 +18,10 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import json
 import struct
 import sys
+import unicodedata
 import zlib
 from pathlib import Path
 
@@ -31,22 +33,55 @@ OUT = ROOT / "output" / "pwa"
 THEME = "#17110D"
 ACCENT = (224, 166, 75)
 
-MANIFEST = """{
-  "name": "__TITLE__",
-  "short_name": "__SHORT__",
-  "start_url": "./index.html",
-  "scope": "./",
-  "display": "standalone",
-  "orientation": "any",
-  "background_color": "#17110D",
-  "theme_color": "#17110D",
-  "description": "비주얼 노벨 소장본",
-  "icons": [
-    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
-  ]
+# 제목은 사용자 문자열이므로 템플릿 치환이 아니라 json.dumps 로 직렬화한다
+# (따옴표·역슬래시·제어문자가 든 제목이 webmanifest 를 깨뜨리지 않게).
+MANIFEST_BASE = {
+    "start_url": "./index.html",
+    "scope": "./",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": THEME,
+    "theme_color": THEME,
+    "description": "비주얼 노벨 소장본",
+    "icons": [
+        {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+        {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+    ],
 }
-"""
+
+# 결합열 도중에서 잘리면 안 되는 문자 — ZWJ, 변이 선택자(emoji/text presentation).
+_JOINERS = "\u200d\ufe0f\ufe0e"
+
+
+def _clean_title(title: str) -> str:
+    """서로게이트·제어문자를 제거한 안전한 제목. (UTF-8 로 쓸 수 없는 문자가 섞이면 저장 자체가 실패한다)"""
+    return "".join(ch for ch in str(title)
+                   if unicodedata.category(ch) not in ("Cs", "Cc")).strip()
+
+
+def short_name(title: str, limit: int = 12) -> str:
+    """홈 화면 아이콘 밑에 뜨는 짧은 이름. 이모지 결합열을 중간에서 자르지 않는다."""
+    s = _clean_title(title)
+    if len(s) <= limit:
+        return s or "VN"
+    cut = s[:limit]
+    while cut and (unicodedata.combining(cut[-1]) or cut[-1] in _JOINERS
+                   or 0x1F3FB <= ord(cut[-1]) <= 0x1F3FF):     # 피부색 수정자
+        cut = cut[:-1]
+    ri = 0                                                     # 국기: 지역 표시자 2개가 한 글자
+    while ri < len(cut) and 0x1F1E6 <= ord(cut[-1 - ri]) <= 0x1F1FF:
+        ri += 1
+    if ri % 2:
+        cut = cut[:-1]
+    return cut.strip() or "VN"
+
+
+def webmanifest(title: str) -> str:
+    """webmanifest 문자열. 제목은 어떤 문자가 들어와도 유효한 JSON 으로 직렬화된다."""
+    name = _clean_title(title) or "VN"
+    data = {"name": name, "short_name": short_name(name)}
+    data.update(MANIFEST_BASE)
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 SW = """// 오프라인 캐시(cache-first). CACHE 는 번들 내용의 sha256 — 내용이 바뀐 재배포에서만 갱신된다.
 const CACHE = "vn-__VER__";
@@ -153,10 +188,8 @@ def export(include_all: bool, max_edge: int, quality: int,
     html = html.replace("</body>", SW_REG + "</body>", 1)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "index.html").write_text(html, encoding="utf-8")
-    title = data["title"]
-    short = (title[:12]) or "VN"
-    webmanifest = MANIFEST.replace("__TITLE__", title).replace("__SHORT__", short)
-    (OUT / "manifest.webmanifest").write_text(webmanifest, encoding="utf-8")
+    wm = webmanifest(data["title"])
+    (OUT / "manifest.webmanifest").write_text(wm, encoding="utf-8")
 
     cut = _square_image(_pick_cut(data, icon_scene) or "") if icon_from_cut else None
     for size in (192, 512):
@@ -167,7 +200,7 @@ def export(include_all: bool, max_edge: int, quality: int,
     # 캐시 버전은 번들 내용의 sha256 — 내용이 같으면 재실행해도 그대로(불필요한 재캐시 방지)
     h = hashlib.sha256()
     h.update(html.encode("utf-8"))
-    h.update(webmanifest.encode("utf-8"))
+    h.update(wm.encode("utf-8"))
     for size in (192, 512):
         h.update((OUT / f"icon-{size}.png").read_bytes())
     (OUT / "sw.js").write_text(SW.replace("__VER__", h.hexdigest()[:12]), encoding="utf-8")

@@ -15,6 +15,9 @@
 보안:
   * API 키는 환경변수 XAI_API_KEY 로만. 서버 안에서만 쓰이고 브라우저로 전달되지 않는다.
   * 127.0.0.1 전용 바인딩 + Host 헤더 검증(DNS 리바인딩 방어) + /img·/dl 경로 탈출 차단.
+  * 상태를 바꾸는 POST 는 Origin/Referer 를 자기 출처와 대조한다(CSRF 방어) — 임의 웹사이트가
+    켜져 있는 스튜디오에 fetch 로 유료 생성 등을 시키지 못하게 한다.
+  * 인물 대화 로그는 클라이언트 목록으로 덮어쓰지 않고 항상 저장본과 병합한다(reset:true 만 예외).
   * scene_id 는 정규식(SCENE-숫자)으로만 통과 — 경로 탈출·임의 파일 접근 차단.
   * LAN 모드는 PIN 인증이 기본. 127.0.0.1 접속은 면제(로컬 작업은 그대로 편하게).
   * 프론트는 서버 데이터를 innerHTML 로 넣지 않는다(studio.html 안전 규약).
@@ -72,6 +75,8 @@ CHAT_WINDOW = 24  # API 로 보내는 최근 대화 수 (전체 로그는 디스
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 SCENE_ID_RE = re.compile(r"^SCENE-\d{3,}$")
 LOG_CAP = 1_500_000          # 대화 로그 파일 상한(초과분은 오래된 대화부터 잘라낸다)
+LAN_URLS: list[str] = []     # LAN 모드에서 폰이 실제로 열 수 있는 주소(QR 용). 그 외에는 빈 목록.
+SERVER_PORT = 0              # 실제 바인딩된 포트 — CSRF 출처 검증에서 쓴다(0 = 미기동)
 IMG_MAX_AGE = 86400          # /img 브라우저 캐시(초) — ETag 로 무효화되므로 길게 잡는다
 DEFAULT_STYLE = "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art"
 
@@ -133,12 +138,14 @@ def scene_print(sc: dict) -> dict | None:
     sel = (sc.get("assets", {}).get("selected_image") or "").strip()
     if not sel:
         return None
+    anchor = (sc.get("print", {}) or {}).get("crop_anchor", "center")
     size = print_preflight.image_size(ROOT / sel)
     if not size:
-        return {"px": None, "printable": None, "max": None, "long_in": None}
+        return {"px": None, "printable": None, "max": None, "long_in": None,
+                "crop_anchor": anchor}
     r = print_preflight.preflight_image(size[0], size[1], 300)
     return {"px": size, "printable": r["printable"], "max": r["max_size_at_target"],
-            "long_in": r["max_long_in_at_target"]}
+            "long_in": r["max_long_in_at_target"], "crop_anchor": anchor}
 
 
 def _load_json_safe(path: Path) -> dict | None:
@@ -206,6 +213,8 @@ def state() -> dict:
             "characters": [{"id": c.get("character_id"), "name": c.get("name", "")}
                            for c in (mf or {}).get("characters", [])],
             "favorites": load_favorites(),
+            # 폰 접속 QR 은 반드시 폰에서 열리는 주소여야 한다(127.0.0.1 은 폰 자신을 가리킨다).
+            "lan_urls": list(LAN_URLS),
             "episodes": [e for e in (mf or {}).get("episodes", []) if isinstance(e, dict)],
             "scenes": scenes, "storyline": storyline, "chat": chat}
 
@@ -345,9 +354,13 @@ def register_images(sid: str) -> dict:
 
 
 def select_image(sid: str, rel: str) -> dict:
-    register_images(sid)
-    with adv.WRITE_LOCK:
+    _require_scene(sid)
+    with adv.WRITE_LOCK:   # 검사~저장을 한 잠금 안에 둬 승인 직후의 교체(경쟁 상태)까지 막는다
         path = adv.scene_path(sid)
+        if adv.load(path).get("status") == "APPROVED":
+            # 승인 잠금 장면의 선택본 교체 금지 — 사람 승인 없이 다른 이미지가 완성본이 되면 안 된다.
+            raise RuntimeError("APPROVED 장면은 선택 이미지를 바꿀 수 없습니다. 먼저 revise 하세요.")
+        register_images(sid)
         sc = adv.load(path)
         if rel not in sc["assets"].get("raw_images", []):
             raise RuntimeError("해당 파일이 후보 목록에 없습니다. 폴더 스캔을 먼저 하세요.")
@@ -411,6 +424,26 @@ def r_preflight(b):
     if not size:
         return {"px": None, "rows": [], "printable": None}
     return print_preflight.preflight_image(size[0], size[1], int(b.get("dpi", 300)))
+
+
+_CROP_ANCHORS = {"center", "top", "bottom", "left", "right"}
+
+
+def r_set_crop(b):
+    """인화 크롭 기준점 저장 — 어디를 살릴지는 사람이 정한다(print_export.crop_anchor)."""
+    sid = b.get("scene_id")
+    _require_scene(sid)
+    anchor = str(b.get("anchor", "center"))
+    if anchor not in _CROP_ANCHORS:
+        raise RuntimeError(f"crop_anchor 는 {'/'.join(sorted(_CROP_ANCHORS))} 중 하나여야 합니다.")
+    with adv.WRITE_LOCK:
+        path = adv.scene_path(sid)
+        sc = adv.load(path)
+        pr = sc.get("print") if isinstance(sc.get("print"), dict) else {}
+        pr["crop_anchor"] = anchor
+        sc["print"] = pr
+        adv.save(path, sc)
+    return {"scene_id": sid, "crop_anchor": anchor}
 
 
 def r_export(b):
@@ -626,30 +659,114 @@ def r_talk_status(b):
     return local_llm.status()
 
 
+# ------------------------------------------------- 인물 대화 로그(사용자의 사적 자산)
+# 원칙: 이 로그는 어떤 경로로도 "조용히" 줄어들지 않는다. 클라이언트가 보낸 목록으로
+# 파일을 통째로 갈아엎지 않고 항상 저장본과 병합한다(명시적 reset:true 만 예외).
+def _safe_cid(cid) -> str:
+    """대화 로그 파일명에 쓸 안전한 캐릭터 ID(경로 탈출 차단). r_talk 저장 규칙과 동일."""
+    return "".join(c for c in str(cid or "") if c.isalnum() or c in "-_") or "CHAR"
+
+
+def _talk_file(cid) -> Path:
+    return STORY_DIR / f"talk_{_safe_cid(cid)}.json"
+
+
+def _resolve_talk_cid(cid) -> str:
+    """대화 상대 ID — 요청값 > manifest.talk.character_id > 첫 캐릭터 (local_llm 과 같은 규칙)."""
+    if isinstance(cid, str) and cid.strip():
+        return cid.strip()
+    mf = _load_json_safe(MANIFEST) or {}
+    talk = mf.get("talk") if isinstance(mf.get("talk"), dict) else {}
+    chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
+    return str((talk or {}).get("character_id")
+               or (chars[0].get("character_id") if chars else "") or "")
+
+
+def _load_talk(cid) -> list[dict]:
+    """저장된 대화 로그 읽기 — {"messages":[...]} 형식. 없거나 깨져도 예외 없이 빈 목록."""
+    d = _load_json_safe(_talk_file(cid)) or {}
+    raw = d.get("messages")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for m in raw:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            continue
+        item = {"role": m["role"], "content": str(m.get("content", "") or "")}
+        ph = m.get("photos")
+        if isinstance(ph, list):
+            item["photos"] = [p for p in ph if isinstance(p, dict)]
+        out.append(item)
+    return out
+
+
+def _msg_eq(a: dict, b: dict) -> bool:
+    """같은 대사인지 — 사진 메타는 클라이언트가 떼고 보내므로 역할·본문만 비교한다."""
+    return (a.get("role") == b.get("role")
+            and str(a.get("content", "")) == str(b.get("content", "")))
+
+
+def _merge_talk(saved: list, incoming: list) -> list:
+    """저장본 + 클라이언트가 보낸 이력 → 잃는 것 없이 합친다.
+
+    * 정상(이어서 대화): 저장본이 incoming 의 접두사 → 뒤에 붙은 새 대화만 추가.
+    * 새 세션이 빈 화면에서 시작: 겹치는 부분이 없음 → 저장본 뒤에 이어붙인다(절대 잘라내지 않음).
+    * 저장본이 더 길고 incoming 이 그 일부: 남는 저장본을 보존하고 새 발화만 뒤에 붙인다.
+    사진 메타는 저장본 쪽을 유지한다(클라이언트는 텍스트만 되돌려 보내므로).
+    """
+    if not saved:
+        return [dict(m) for m in incoming]
+    if not incoming:
+        return [dict(m) for m in saved]
+    p = 0
+    while p < len(saved) and p < len(incoming) and _msg_eq(saved[p], incoming[p]):
+        p += 1
+    if p == 0:   # 접두사가 전혀 겹치지 않으면 저장본의 꼬리와 겹치는지 본다(중복 방지)
+        for k in range(min(len(saved), len(incoming)), 0, -1):
+            if all(_msg_eq(saved[len(saved) - k + i], incoming[i]) for i in range(k)):
+                p = k
+                break
+    return [dict(m) for m in saved] + [dict(m) for m in incoming[p:]]
+
+
+def r_talk_history(b):
+    """저장된 인물 대화 이력 → {messages, character_id}. 새 세션이 지난 대화를 이어받는 경로."""
+    cid = _resolve_talk_cid(b.get("character_id"))
+    return {"messages": _load_talk(cid), "character_id": cid}
+
+
 def r_talk(b):
     """로컬 LLM 으로 인물과 실제 대화 + 어울리는 앨범 사진 표시.
 
     모델이 [사진:SCENE-ID] 를 붙이거나, 명시적 요청이면 라벨 키워드로 폴백 매칭.
     앨범(승인 이미지)에 실제로 있을 때만, '없다'는 답장이면 억제한다.
+
+    저장은 항상 '저장본 + 이번 대화' 병합이다. reset:true 를 명시했을 때만 새로 시작한다.
     """
-    msgs = b.get("messages", []) if isinstance(b.get("messages"), list) else []
+    raw = b.get("messages", []) if isinstance(b.get("messages"), list) else []
+    incoming = [{"role": m.get("role"), "content": str(m.get("content", "") or "")}
+                for m in raw
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
     sysmsg, meta = local_llm.persona_prompt(b.get("character_id"))
-    window = [{"role": m.get("role"), "content": m.get("content", "")} for m in msgs[-16:]
-              if isinstance(m, dict)]
+    cid = str(meta["character_id"])
+    reset = bool(b.get("reset"))
+    # 모델에 넘길 창은 병합 이력 기준 — 빈 화면에서 시작해도 대화가 이어진다.
+    context = list(incoming) if reset else _merge_talk(_load_talk(cid), incoming)
+    win = int(getattr(local_llm, "TALK_WINDOW", 16) or 16)   # 기억 요약이 덮는 창과 같은 크기
+    window = [{"role": m["role"], "content": m["content"]} for m in context[-win:]]
     reply = local_llm.chat([{"role": "system", "content": sysmsg}] + window)
 
-    last_user = next((str(m.get("content", "")) for m in reversed(msgs)
-                      if isinstance(m, dict) and m.get("role") == "user"), "")
+    last_user = next((m["content"] for m in reversed(context) if m["role"] == "user"), "")
     clean, photo_meta = local_llm.resolve_photos(reply, meta.get("album", {}), last_user)
     photos = [{"scene_id": p["scene_id"], "url": "/img/" + p["rel"][len("images/"):],
                "caption": p.get("caption", "")}
               for p in photo_meta if p["rel"].startswith("images/")]
-    cid = str(meta["character_id"])
-    safe_cid = "".join(c for c in cid if c.isalnum() or c in "-_") or "CHAR"   # 파일명 경로 차단
     with adv.WRITE_LOCK:
-        _write_messages(STORY_DIR / f"talk_{safe_cid}.json",
-                        msgs + [{"role": "assistant", "content": clean, "photos": photos}])
-    return {"reply": clean, "name": meta["name"], "photos": photos}
+        # 잠금 안에서 다시 읽어 병합한다 — 답장을 기다리는 동안 다른 기기가 남긴 대화도 보존.
+        final = list(incoming) if reset else _merge_talk(_load_talk(cid), incoming)
+        final.append({"role": "assistant", "content": clean, "photos": photos})
+        _write_messages(_talk_file(cid), final)
+    return {"reply": clean, "name": meta["name"], "photos": photos, "saved": len(final)}
 
 
 def _next_scene_slot() -> tuple[str, int]:
@@ -802,15 +919,41 @@ def r_export_viewer(b):
             "mb": round(out.stat().st_size / 1_000_000, 2)}
 
 
+def r_export_pwa(b):
+    """감상본을 설치형 앱(PWA) 번들로 — output/pwa/. 아이콘 옵션은 Pillow 가 있을 때만 효과."""
+    try:   # 서버는 Pillow·export_viewer 없이도 뜨도록 지연 임포트(r_export 와 같은 규칙)
+        import export_pwa
+    except Exception as exc:
+        raise RuntimeError(f"PWA 내보내기를 불러올 수 없습니다({exc}). "
+                           "아이콘을 컷으로 만들려면:  python -m pip install Pillow")
+    max_edge = max(480, min(int(b.get("max_edge", 1600) or 1600), 4096))
+    quality = max(40, min(int(b.get("quality", 85) or 85), 100))
+    params = inspect.signature(export_pwa.export).parameters
+    kw = {}
+    for key, arg, cast in (("cover", "cover_id", str), ("embed_font", "font_spec", str),
+                           ("icon_from_cut", "icon_from_cut", bool),
+                           ("icon_scene", "icon_scene", str)):
+        if b.get(key) and arg in params:
+            kw[arg] = cast(b[key])
+    out = export_pwa.export(bool(b.get("all")), max_edge, quality, **kw)
+    files = sorted(f.name for f in out.glob("*") if f.is_file())
+    total = sum((out / f).stat().st_size for f in files)
+    return {"dir": out.relative_to(ROOT).as_posix(), "files": files,
+            "mb": round(total / 1_000_000, 2)}
+
+
 POST_ROUTES = {
     "/api/chat": r_chat, "/api/storyline": r_storyline,
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,
     "/api/compose-manual": r_compose_manual, "/api/grok-input": r_grok_input,
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
+    "/api/set-crop": r_set_crop,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
-    "/api/export-viewer": r_export_viewer, "/api/upload-image": r_upload_image,
+    "/api/export-viewer": r_export_viewer, "/api/export-pwa": r_export_pwa,
+    "/api/upload-image": r_upload_image,
     "/api/talk": r_talk, "/api/talk-status": r_talk_status,
+    "/api/talk-history": r_talk_history,
     "/api/gen-prompt": r_gen_prompt, "/api/gen-image": r_gen_image,
     "/api/gen-status": r_gen_status, "/api/favorite": r_favorite,
     "/api/talk-to-scene": r_talk_to_scene,
@@ -972,6 +1115,40 @@ class Handler(BaseHTTPRequestHandler):
         ip = self._client_ip()
         return ip.startswith("127.") or ip in ("::1", "localhost")
 
+    def _origin_ok(self, url: str) -> bool:
+        """그 URL 이 이 스튜디오 자신의 출처인지 — 허용 호스트(+LAN IP) & 서버 포트만."""
+        try:
+            u = urllib.parse.urlsplit(url.strip())
+            host, port = (u.hostname or "").lower(), u.port
+        except ValueError:
+            return False
+        if u.scheme not in ("http", "https") or host not in ALLOWED_HOSTS:
+            return False
+        want = {str(SERVER_PORT)} if SERVER_PORT else set()
+        hp = (self.headers.get("Host") or "").partition(":")[2].strip()
+        if hp.isdecimal():
+            want.add(hp)          # 포트포워딩 등으로 대외 포트가 다를 수 있어 Host 포트도 인정
+        got = str(port) if port else ("443" if u.scheme == "https" else "80")
+        return not want or got in want
+
+    def _csrf_ok(self) -> bool:
+        """상태를 바꾸는 POST 의 출처 검증(CSRF 방어).
+
+        브라우저는 교차 출처 POST 에 Origin 을 반드시 붙인다 → 있으면 허용 목록과 대조하고,
+        불일치면 403. 사용자가 스튜디오를 켜 둔 채 임의 사이트를 열어도 그 페이지의 fetch 가
+        /api/gen-image(유료) 같은 경로를 부를 수 없다.
+        Origin 이 없는 요청(같은 출처 fetch·curl·자가진단·CLI)은 기존대로 통과시킨다.
+        """
+        if (self.headers.get("Sec-Fetch-Site") or "").strip().lower() == "cross-site":
+            return False
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin:
+            return False if origin.lower() == "null" else self._origin_ok(origin)
+        ref = (self.headers.get("Referer") or "").strip()
+        if ref:
+            return self._origin_ok(ref)   # Origin 을 안 붙이는 브라우저 경로는 Referer 로 대조
+        return True                       # 비-브라우저 경로(curl·selftest·도구)
+
     def _authed(self) -> bool:
         """PIN 미사용이거나 로컬 접속이면 통과. 그 외에는 인증 쿠키가 있어야 한다."""
         if not AUTH["pin"] or self._is_local():
@@ -1095,6 +1272,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "forbidden host"}, 403)
             return
         self._trace()
+        if not self._csrf_ok():
+            log.warning("교차 출처 POST 차단 %s %s origin=%s", self._client_ip(), self.path[:60],
+                        (self.headers.get("Origin") or self.headers.get("Referer") or "")[:80])
+            self._json({"error": "교차 출처 요청이 차단되었습니다(CSRF 방어). "
+                                 "스튜디오 화면에서 직접 조작하세요."}, 403)
+            return
         handler = POST_ROUTES.get(self.path)
         if handler is None and self.path != "/api/auth":
             self._json({"error": "not found"}, 404)
@@ -1176,12 +1359,14 @@ def main() -> int:
     bind = "0.0.0.0" if args.lan else "127.0.0.1"
     srv = ThreadingHTTPServer((bind, args.port), Handler)
     port = srv.server_address[1]
+    globals()["SERVER_PORT"] = port
     key = "설정됨" if xai_client.key_set() else "미설정 (스토리/장면구성 탭은 수동 모드로)"
     log.info("서버 기동 bind=%s port=%s pin=%s", bind, port, "on" if AUTH["pin"] else "off")
 
     if args.lan:
         ips = _lan_ips()
         ALLOWED_HOSTS.update(ips)   # 폰이 보내는 Host(=LAN IP)를 허용(그 외 Host 는 계속 403)
+        LAN_URLS[:] = [f"http://{ip}:{port}/" for ip in ips]   # /api/state → 폰 접속 QR
         print("=" * 56)
         print("LAN 모드 — 같은 와이파이의 폰/태블릿에서 아래 주소로 접속:")
         for ip in ips:
@@ -1199,6 +1384,17 @@ def main() -> int:
     url = f"http://127.0.0.1:{port}/"
     print(f"웹 스튜디오 실행: {url}")
     print(f"XAI_API_KEY: {key}  |  로그: logs/webapp.log  |  종료: Ctrl+C")
+    if AUTH["pin"]:
+        # 콘솔을 놓치거나(창 숨김·출력 리다이렉트) 스크롤로 지나쳐도 폰 접속을 못 하게 되면 안 되므로
+        # 실행 중에만 유효한 PIN 을 조회 가능한 자리에 남긴다. logs/ 는 git 제외 대상.
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            (LOG_DIR / "lan_pin.txt").write_text(
+                f"{AUTH['pin']}\n(이번 실행에만 유효한 접속 PIN — 서버를 끄면 무효)\n", encoding="utf-8")
+            print("  PIN 을 놓쳤다면: logs/lan_pin.txt")
+        except OSError:
+            pass
+    sys.stdout.flush()   # 출력이 리다이렉트돼도 PIN·주소가 즉시 보이도록
     if not args.no_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html as _html
 import json
 import sys
 from pathlib import Path
@@ -62,6 +63,11 @@ def _load(path: Path):
         return None
 
 
+def html_escape(text: str) -> str:
+    """HTML 본문/속성에 넣어도 안전한 문자열. (제목처럼 사람이 정한 값도 그대로 믿지 않는다)"""
+    return _html.escape(str(text), quote=True)
+
+
 def char_color(cid: str) -> str:
     h = 0
     for c in str(cid):
@@ -91,6 +97,43 @@ def image_data_uri(path: Path, max_edge: int, quality: int) -> str | None:
     mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
             "webp": "image/webp"}.get(path.suffix.lower().lstrip("."), "application/octet-stream")
     return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+def prune_dangling_gotos(scenes: list) -> list:
+    """감상본에 실리지 않은 장면을 가리키는 goto 를 정리한다. → 경고 문구 목록.
+
+    이미지 없는 장면은 payload 에서 빠지는데 goto 는 그대로 남아, 재생기가 목적지를 찾지 못하고
+    선택 직후 이야기가 멈춘다. 선택지는 goto 만 떼어 선형 진행으로 폴백시키고(선택 자체는 살린다),
+    조건 분기는 해당 항목을 지운다. 무엇을 떨어뜨렸는지 반드시 호출자가 알리게 한다.
+    """
+    ids = {s.get("id") for s in scenes}
+    warns: list[str] = []
+    for s in scenes:
+        sid = s.get("id", "?")
+        if isinstance(s.get("choices"), list):
+            fixed = []
+            for c in s["choices"]:
+                if isinstance(c, dict) and c.get("goto") and c["goto"] not in ids:
+                    label = str(c.get("text", "")).strip()[:18] or "(무제)"
+                    warns.append(f"{sid}: 선택지 '{label}' 의 goto {c['goto']} 가 감상본에 없음 "
+                                 f"— 다음 장면으로 이어지도록 폴백")
+                    c = {k: v for k, v in c.items() if k != "goto"}
+                fixed.append(c)
+            s["choices"] = fixed
+        if isinstance(s.get("branch"), list):
+            kept = []
+            for b in s["branch"]:
+                if not isinstance(b, dict) or b.get("goto") not in ids:
+                    tgt = b.get("goto") if isinstance(b, dict) else b
+                    warns.append(f"{sid}: 분기 goto {tgt} 가 감상본에 없음 — 그 분기를 제거")
+                    continue
+                kept.append(b)
+            if kept:
+                s["branch"] = kept
+            else:
+                s.pop("branch", None)   # 분기가 모두 사라지면 선형 진행으로 되돌린다
+                warns.append(f"{sid}: 분기가 모두 제거됨 — 선형 진행으로 이어짐")
+    return warns
 
 
 def build_data(include_all: bool, max_edge: int, quality: int, cover_id: str | None = None) -> dict:
@@ -133,6 +176,8 @@ def build_data(include_all: bool, max_edge: int, quality: int, cover_id: str | N
     scenes.sort(key=lambda s: s.get("order") or 0)
     if not scenes:
         raise RuntimeError("내보낼 장면이 없습니다. (selected_image 있는 APPROVED 장면 — --all 로 전체)")
+    for w in prune_dangling_gotos(scenes):
+        print(f"  ⚠ {w}")
     dating = mf.get("dating") if isinstance(mf.get("dating"), dict) else None
     return {"title": mf.get("title") or "무제", "scenes": scenes, "dating": dating,
             "cover": pick_cover(scenes, cover_id)}
@@ -547,7 +592,8 @@ def build_html(include_all: bool, max_edge: int, quality: int,
     data = build_data(include_all, max_edge, quality, cover_id)
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     fcss = font_css(find_font(font_spec), used_text(data))
-    html = (TEMPLATE.replace("__TITLE__", data["title"])
+    # 제목은 <title>·<h1> 에 그대로 들어가므로 이스케이프한다(따옴표·꺾쇠가 든 제목이 문서를 깨지 않게).
+    html = (TEMPLATE.replace("__TITLE__", html_escape(data["title"]))
             .replace("__FONTCSS__", fcss).replace("__DATA__", payload))
     return data, html
 
