@@ -1,0 +1,47 @@
+{
+  "scene_id": "SCENE-005",
+  "scene_order": 5,
+  "status": "APPROVED",
+  "location_id": "LOC-002",
+  "time": "비 그친 직후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "가게를 나서니 비가 그쳐 있고, 하람이 되살아난 우산을 편다",
+  "action_beat": "가게 문을 나서며 파란 우산을 활짝 펴 든다",
+  "emotion": "옅은 놀라움과 후련함",
+  "camera": {
+    "shot": "wide shot",
+    "angle": "eye level",
+    "framing": "젖은 골목 속 인물",
+    "focus": "펼친 파란 우산"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, wide shot, 17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat, opening a repaired blue umbrella just outside a shop, rain-soaked alley after the rain, puddles reflecting the sky, faint rainbow, quiet relief",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "…어느새 비가 그쳤네.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-005/SCENE-005_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-005/SCENE-005_a-2.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

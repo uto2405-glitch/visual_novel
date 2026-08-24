@@ -2,47 +2,46 @@
   "scene_id": "SCENE-002",
   "scene_order": 2,
   "status": "APPROVED",
-  "location_id": "LOC-002",
-  "time": "방과 후",
+  "location_id": "LOC-001",
+  "time": "비 오는 오후",
   "characters": [
-    "CHAR-001",
-    "CHAR-002"
+    "CHAR-002",
+    "CHAR-001"
   ],
   "props": [],
-  "purpose": "엔지니어 준을 설득",
-  "action_beat": "준의 앞에 헤드폰을 내밀며 부탁한다",
-  "emotion": "간절함과 장난기",
+  "purpose": "서씨가 우산을 살피고, 하람이 우산의 사연을 꺼낸다",
+  "action_beat": "돋보기 안경 너머로 부러진 살을 짚어보고, 하람이 조심스레 말을 잇는다",
+  "emotion": "잔잔한 온기",
   "camera": {
     "shot": "two shot",
     "angle": "eye level",
-    "framing": "마주보는 두 인물",
-    "focus": "손과 표정"
+    "framing": "마주 선 두 인물",
+    "focus": "우산을 든 손"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "warm cel-shaded webtoon, 17-year-old Korean girl, short brown bob hair, bright eyes, yellow hoodie and 17-year-old Korean boy, black curly hair, round glasses, navy school uniform, in old school broadcasting room, fluorescent light, vintage radio equipment, offering headphones, facing each other",
+    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, two shot, 60-year-old Korean woman, short silver hair, round glasses, work apron and 17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat, examining a broken blue umbrella together in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, gentle warmth",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
-      "speaker_id": "CHAR-001",
-      "text": "너 없으면 소리가 안 나오잖아.",
+      "speaker_id": "CHAR-002",
+      "text": "허어… 오래 함께한 녀석이구나.",
       "placement": "bottom"
     },
     {
-      "speaker_id": "CHAR-002",
-      "text": "...딱 한 번이야.",
+      "speaker_id": "CHAR-001",
+      "text": "아빠가 쓰시던 거예요. 이젠 제가 들고요.",
       "placement": "bottom"
     }
   ],
   "assets": {
     "raw_images": [
-      "images/raw/SCENE-002/SCENE-002_a.png",
-      "images/raw/SCENE-002/SCENE-002_b.png"
+      "images/raw/SCENE-002/SCENE-002_a-2.png"
     ],
-    "selected_image": "images/raw/SCENE-002/SCENE-002_a.png"
+    "selected_image": "images/raw/SCENE-002/SCENE-002_a-2.png"
   },
   "review": {
     "auto": "PASS",

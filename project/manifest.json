@@ -1,20 +1,20 @@
 {
   "project_id": "PROJECT-001",
-  "title": "옥상의 라디오",
+  "title": "비 그친 우산 가게",
   "language": "ko-KR",
   "orchestrator": {
-    "provider": "Grok (SuperGrok 구독)",
+    "provider": "Grok (SuperGrok 구독 · 수동 복붙)",
     "mode": "manual",
     "api": {
       "base_url": "https://api.x.ai/v1",
       "model": "grok-4.6",
       "key_env": "XAI_API_KEY",
-      "note": "수동 모드 — API 미사용"
+      "note": "수동 모드 — grok.com 복붙으로 운용(크레딧 0). 자동화 원하면 크레딧 충전 후 mode 를 api 로"
     }
   },
   "image_generator": {
-    "provider": "샘플(E2E)",
-    "model": "sample"
+    "provider": "TBD (외부 이미지 AI)",
+    "model": "TBD"
   },
   "output": {
     "mode": "visual_novel_scene_cards",
@@ -23,69 +23,59 @@
     "min_long_edge_px": 1024
   },
   "workflow": {
-    "human_gates": [
-      "story",
-      "visual_reference",
-      "scene_plan",
-      "image",
-      "delivery"
-    ],
+    "human_gates": ["story", "visual_reference", "scene_plan", "image", "delivery"],
     "scene_batch_size": 1
   },
   "characters": [
     {
       "character_id": "CHAR-001",
-      "name": "하리",
+      "name": "하람",
       "version": 1,
       "profile": {
         "age": "17",
         "gender_presentation": "여성",
-        "hair": "갈색 단발",
-        "eyes": "밝은 갈색",
+        "hair": "낮게 묶은 긴 흑발",
+        "eyes": "크고 둥근 눈",
         "build": "보통",
-        "wardrobe": "노란 후드",
-        "signature_props": [
-          "헤드폰"
-        ]
+        "wardrobe": "노란 우비",
+        "signature_props": ["낡은 파란 우산"]
       },
       "reference_images": [],
-      "prompt_anchor": "17-year-old Korean girl, short brown bob hair, bright eyes, yellow hoodie"
+      "prompt_anchor": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat"
     },
     {
       "character_id": "CHAR-002",
-      "name": "준",
+      "name": "서씨 아주머니",
       "version": 1,
       "profile": {
-        "age": "17",
-        "gender_presentation": "남성",
-        "hair": "검은 곱슬",
-        "eyes": "검정",
-        "build": "마른",
-        "wardrobe": "남색 교복",
-        "signature_props": [
-          "둥근 안경"
-        ]
+        "age": "60대",
+        "gender_presentation": "여성",
+        "hair": "은발 단발",
+        "eyes": "온화한 주름눈",
+        "build": "자그마함",
+        "wardrobe": "작업 앞치마",
+        "signature_props": ["돋보기 안경"]
       },
       "reference_images": [],
-      "prompt_anchor": "17-year-old Korean boy, black curly hair, round glasses, navy school uniform"
+      "prompt_anchor": "60-year-old Korean woman, short silver hair, round glasses, work apron"
     }
   ],
   "locations": [
     {
       "location_id": "LOC-001",
-      "name": "학교 옥상",
+      "name": "우산 가게",
       "version": 1,
-      "description": "노을 지는 방과 후 옥상",
+      "description": "천장에 우산이 매달린 오래된 목조 수선집, 따뜻한 백열등",
       "reference_images": [],
-      "prompt_anchor": "school rooftop at sunset, orange sky, chain-link fence"
+      "prompt_anchor": "cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light"
     },
     {
       "location_id": "LOC-002",
-      "name": "방송실",
+      "name": "비 그친 골목",
       "version": 1,
-      "description": "오래된 교내 방송실",
+      "description": "비가 막 그친 젖은 골목, 물웅덩이에 하늘이 비치고 옅은 무지개",
       "reference_images": [],
-      "prompt_anchor": "old school broadcasting room, fluorescent light, vintage radio equipment"
+      "prompt_anchor": "rain-soaked alley after the rain, puddles reflecting the sky, faint rainbow"
     }
   ],
   "props": []
