@@ -55,6 +55,9 @@ BACKUPS = ROOT / "backups"
 TEMPLATES = ROOT / "templates"
 SCENE_TEMPLATE = TEMPLATES / "scene.json"
 CHECKER = TOOLS / "check_protocol.py"
+# 검사기 응답 대기 상한(초). 전역 WRITE_LOCK 을 쥔 채 도는 호출이라 무한 대기는
+# 스튜디오 전체를 멈춘다. 장면 수백 개에서도 1초 안쪽이라 60초는 충분히 넉넉하다.
+CHECKER_TIMEOUT = 60
 
 # 장면 ID 형식 — 경로 탈출 차단과 order 무결성의 첫 관문(웹·CLI 공통).
 SCENE_ID_RE = re.compile(r"^SCENE-\d{3,}$")
@@ -354,12 +357,26 @@ def run_checker(sid: str | None = None) -> tuple[int, str]:
 
     별도 프로세스인 이유: 검사기는 도구가 고칠 수 없는 판정자다. 같은 프로세스에서
     import 하면 도구 쪽 전역 상태(경로·캐시)가 판정에 섞일 수 있다.
+
+    **타임아웃과 stdin 차단이 필수다.** 이 호출은 거의 항상 전역 WRITE_LOCK 을 쥔 채
+    일어난다(scene_ops 의 모든 전이). 검사기가 입력을 기다리거나 멈추면 잠금이 풀리지
+    않아 스튜디오의 모든 쓰기가 함께 멈춘다 — 서버를 껐다 켜는 것 말고는 방법이 없다.
+    멈춘 검사기는 죽이고 '판정 불가(FAIL)'로 돌려주는 편이, 조용히 매달려 있는 것보다
+    사용자에게 정직하다.
     """
     cmd = [sys.executable, str(CHECKER)]
     if sid:
         cmd += ["--scene", sid]
-    proc = subprocess.run(cmd, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              stdin=subprocess.DEVNULL, timeout=CHECKER_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return 1, (f"[검사기] {CHECKER_TIMEOUT}초 안에 끝나지 않아 중단했습니다.\n"
+                   "  직접 실행해 원인을 확인하세요:  python tools/check_protocol.py\n"
+                   "RESULT: FAIL — 검사기 응답 없음")
+    except OSError as exc:
+        return 1, f"[검사기] 실행할 수 없습니다: {exc}\nRESULT: FAIL — 검사기 실행 실패"
     return proc.returncode, (proc.stdout + proc.stderr)
 
 

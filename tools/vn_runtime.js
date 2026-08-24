@@ -539,10 +539,22 @@
     }
 
     // ---- 분기 엔진(호감도·선택지·엔딩) ----
-    var affMax = function () { return (data.dating && data.dating.max) || 100; };
+    // 눈금(최대·시작값)은 **반드시 data.dating 에서 온다.** 예전에는 여기에 100/30 이
+    // 리터럴로 박혀 있었는데, 파이썬 쪽(vn_compose·scene_lint)은 매니페스트에서 눈금을
+    // 읽도록 이미 고친 뒤였다 — 눈금을 바꾼 작품에서 린터는 새 눈금으로 판정하고 엔진만
+    // 30/100 으로 굴려, **린터가 통과시킨 분기가 재생에서는 다른 엔딩으로 갈릴 수 있었다.**
+    // 아래 두 폴백 값은 templates/manifest.json 의 dating 기본값과 **같아야 한다** —
+    // 파이썬 쪽이 그 파일을 정본으로 읽으므로, 여기만 다르면 판정이 갈린다.
+    // 자가진단이 이 리터럴과 템플릿 값을 대조한다(갈라지면 실패).
+    var AFF_MAX_FALLBACK = 100, AFF_START_FALLBACK = 30;
+    var hasDating = !!(data.dating && typeof data.dating === "object");
+    var affMax = function () {
+      var m = hasDating ? data.dating.max : null;
+      return (typeof m === "number" && m > 0) ? m : AFF_MAX_FALLBACK;
+    };
     var affStart = function () {
-      return (data.dating && typeof data.dating.start_affection === "number")
-        ? data.dating.start_affection : 30;
+      var s = hasDating ? data.dating.start_affection : null;
+      return (typeof s === "number") ? s : AFF_START_FALLBACK;
     };
     var clampAff = function (v) { return Math.max(0, Math.min(affMax(), v)); };
     var dlen = function (sc) { return ((sc && sc.lines) || []).length || 1; };  // 대사 0줄이면 purpose 1줄

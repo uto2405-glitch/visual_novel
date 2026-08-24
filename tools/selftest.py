@@ -1137,6 +1137,50 @@ def checker_const(b: Box, name: str) -> list[str]:
     raise Failed(f"check_protocol.{name} 을 찾지 못했습니다(구조가 바뀌었습니다)")
 
 
+@test("arch", "L07 호감도 눈금 — 재생 엔진 폴백이 템플릿 기본값과 같다(엔딩이 갈리지 않게)")
+def l07(b: Box):
+    """분기 판정의 눈금(최대·시작 호감도)이 파이썬과 JS 에서 갈리면 **린터가 통과시킨 분기가
+    재생에서는 다른 엔딩으로 간다.** 파이썬 쪽(vn_compose·scene_lint)은 templates/manifest.json
+    의 dating 을 정본으로 읽는데, 재생 엔진은 JS 라 그 파일을 읽을 수 없어 폴백 리터럴을 갖는다.
+    그 리터럴이 정본과 같은지 여기서 대조한다 — 두 값이 갈리는 순간 실패한다.
+    """
+    tpl = json.loads(b.p("templates/manifest.json").read_text(encoding="utf-8"))
+    dating = tpl.get("dating")
+    if not isinstance(dating, dict):
+        raise Gap("templates/manifest.json 에 dating 이 없다 — 눈금 정본이 사라졌다")
+    js = b.p("tools/vn_runtime.js").read_text(encoding="utf-8")
+    m = re.search(r"AFF_MAX_FALLBACK\s*=\s*(\d+)\s*,\s*AFF_START_FALLBACK\s*=\s*(\d+)", js)
+    if not m:
+        raise Gap("vn_runtime.js 에서 호감도 폴백 상수를 찾지 못했습니다(이름이 바뀌었습니다)")
+    eq(int(m.group(1)), int(dating.get("max", -1)),
+       "엔진의 최대 호감도 폴백 ≠ templates/manifest.json 의 dating.max")
+    eq(int(m.group(2)), int(dating.get("start_affection", -1)),
+       "엔진의 시작 호감도 폴백 ≠ templates/manifest.json 의 dating.start_affection")
+    # 리터럴이 다시 흩어지지 않게: 엔진 안에 다른 30/100 판정이 남아 있지 않은지
+    ok(js.count("AFF_MAX_FALLBACK") >= 2 and js.count("AFF_START_FALLBACK") >= 2,
+       "폴백 상수가 선언만 되고 쓰이지 않습니다(리터럴이 따로 남아 있을 수 있습니다)")
+
+
+@test("arch", "L08 검사기 호출에 타임아웃·stdin 차단 — 잠금을 쥔 채 매달리지 않는다")
+def l08(b: Box):
+    """run_checker 는 거의 항상 전역 WRITE_LOCK 안에서 돈다. 검사기가 입력을 기다리거나
+    멈추면 잠금이 영원히 안 풀려 스튜디오의 모든 쓰기가 함께 멈춘다 — 서버 재시작 말고는
+    빠져나올 길이 없다. 멈춘 검사기는 죽이고 FAIL 로 돌려주는 편이 정직하다.
+    """
+    vc = b.mod("vn_core")
+    body = func_body(b, "vn_core", "run_checker")
+    if not body:
+        raise Failed("vn_core.run_checker 가 없습니다")
+    # func_body 는 AST 노드 목록이다 — 문자열 검사를 하려면 다시 소스로 편다
+    # (독스트링도 함께 펴지므로, 설명이 아니라 실제 호출인지는 아래 인자 이름으로 가른다)
+    src = "\n".join(ast.unparse(n) for n in body)
+    ok("timeout=" in src, "run_checker 의 subprocess 호출에 timeout 이 없습니다")
+    ok("DEVNULL" in src, "run_checker 가 stdin 을 막지 않습니다(입력 대기로 매달릴 수 있습니다)")
+    ok("TimeoutExpired" in src, "타임아웃을 잡아 사용자에게 알리지 않습니다")
+    ok(isinstance(getattr(vc, "CHECKER_TIMEOUT", None), int) and vc.CHECKER_TIMEOUT > 0,
+       "CHECKER_TIMEOUT 상수가 없습니다")
+
+
 # ============================================================ pipeline (CLI)
 @test("pipeline", "P01 매니페스트 없으면 RED(exit 1) + 시작 안내")
 def p01(b: Box):
