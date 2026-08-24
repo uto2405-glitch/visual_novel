@@ -21,8 +21,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
+import socket
 import sys
 import threading
 import urllib.parse
@@ -303,6 +305,42 @@ def r_lint(b):
     return scene_lint.lint_scenes()
 
 
+def r_upload_image(b):
+    """폰 등에서 생성한 이미지를 base64 로 업로드 → images/raw/<scene>/ 저장 후 자동 스캔.
+
+    (폰에서는 이미지를 폴더에 직접 넣을 수 없으므로 이 경로로 '만들기'를 완성한다.)
+    """
+    sid = b.get("scene_id")
+    _require_scene(sid)
+    name = os.path.basename(str(b.get("filename", "upload.png")))
+    ext = Path(name).suffix.lower()
+    if ext not in IMAGE_EXTS:
+        raise RuntimeError("이미지 파일만 업로드할 수 있습니다 (png/jpg/jpeg/webp).")
+    data = str(b.get("data_b64", ""))
+    if data.startswith("data:") and "," in data:   # data URI 접두 제거
+        data = data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except Exception:
+        raise RuntimeError("이미지 데이터를 해석할 수 없습니다.")
+    if not raw:
+        raise RuntimeError("빈 이미지입니다.")
+    if len(raw) > 30_000_000:
+        raise RuntimeError("이미지가 너무 큽니다 (30MB 초과).")
+    dest = RAW_DIR / sid
+    dest.mkdir(parents=True, exist_ok=True)
+    safe = "".join(c for c in Path(name).stem if c.isalnum() or c in "-_") or "upload"
+    target = dest / f"{safe}{ext}"
+    n = 2
+    while target.exists():
+        target = dest / f"{safe}-{n}{ext}"
+        n += 1
+    target.write_bytes(raw)
+    reg = register_images(sid)   # 저장 즉시 후보 등록·자동검사
+    return {"saved": target.relative_to(ROOT).as_posix(), "count": reg.get("count"),
+            "auto": reg.get("auto")}
+
+
 def r_export_viewer(b):
     # 타임캡슐 감상본: 승인 장면+이미지+뷰어를 단일 HTML 로 (Pillow 있으면 용량 최적화)
     import export_viewer
@@ -319,7 +357,7 @@ POST_ROUTES = {
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
-    "/api/export-viewer": r_export_viewer,
+    "/api/export-viewer": r_export_viewer, "/api/upload-image": r_upload_image,
 }
 
 
@@ -411,14 +449,49 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 400)
 
 
+def _lan_ips() -> list[str]:
+    ips = set()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.add(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                ips.add(ip)
+    except OSError:
+        pass
+    return sorted(ips)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="AI 웹툰 웹 스튜디오")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--lan", action="store_true",
+                    help="같은 와이파이의 폰 등에서 접속 허용(0.0.0.0 바인딩). 신뢰된 네트워크에서만!")
     args = ap.parse_args()
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    url = f"http://127.0.0.1:{srv.server_address[1]}/"
-    key = "설정됨" if xai_client.key_set() else "미설정 (스토리/장면구성 탭 사용 불가)"
+
+    bind = "0.0.0.0" if args.lan else "127.0.0.1"
+    srv = ThreadingHTTPServer((bind, args.port), Handler)
+    port = srv.server_address[1]
+    key = "설정됨" if xai_client.key_set() else "미설정 (스토리/장면구성 탭은 수동 모드로)"
+
+    if args.lan:
+        ips = _lan_ips()
+        ALLOWED_HOSTS.update(ips)   # 폰이 보내는 Host(=LAN IP)를 허용(그 외 Host 는 계속 403)
+        print("=" * 56)
+        print("LAN 모드 — 같은 와이파이의 폰/태블릿에서 아래 주소로 접속:")
+        for ip in ips:
+            print(f"  http://{ip}:{port}/")
+        print("⚠ 같은 네트워크의 다른 기기도 접속 가능합니다. 신뢰된 와이파이에서만 쓰세요.")
+        print("  (API 키는 여전히 서버에만 있고 브라우저로 전달되지 않습니다.)")
+        print("=" * 56)
+    url = f"http://127.0.0.1:{port}/"
     print(f"웹 스튜디오 실행: {url}")
     print(f"XAI_API_KEY: {key}  |  종료: Ctrl+C")
     if not args.no_browser:

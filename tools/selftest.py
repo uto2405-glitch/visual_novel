@@ -659,6 +659,24 @@ def main() -> int:
             check("T41 타임캡슐 감상본(단일 HTML·이미지 내장·스크롤 모드)",
                   out_tc.exists() and "data:image" in html_tc and "bScroll" in html_tc
                   and html_tc.count("innerHTML") == 0)
+
+            # T42 — 폰용 이미지 업로드(base64) → 저장·자동등록 + 잘못된 확장자 거부(만들기 모바일화)
+            import base64 as _b64
+            up_src = box / "up_src.png"
+            write_png(up_src, 1400, 1000)
+            b64 = _b64.b64encode(up_src.read_bytes()).decode("ascii")
+            stU, dU = wapi("/api/upload-image",
+                           {"scene_id": "SCENE-001", "filename": "phone.png",
+                            "data_b64": "data:image/png;base64," + b64})
+            saved_ok = (stU == 200 and dU.get("count", 0) >= 1
+                        and (box / "images" / "raw" / "SCENE-001" / "phone.png").exists())
+            code_bad = None
+            try:
+                wapi("/api/upload-image", {"scene_id": "SCENE-001", "filename": "x.exe", "data_b64": b64})
+            except urllib.error.HTTPError as e:
+                code_bad = e.code
+            check("T42 폰 이미지 업로드(base64)+자동등록 · 잘못된 확장자 400",
+                  saved_ok and code_bad == 400)
         finally:
             web.terminate()
             mock.shutdown()

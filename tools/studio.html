@@ -594,6 +594,19 @@ function sceneCard(sc){
  btnScan.onclick=async()=>{try{const d=await api("/api/register-images",{scene_id:sc.scene_id});
    msg.textContent="후보 "+d.count+"장 · 자동검사 "+d.auto;await refresh()}catch(e){alert(e.message)}};
  act.appendChild(btnScan);
+ // 폰/PC 공용: 이미지 직접 업로드(폴더 접근 없이 만들기 완성)
+ if(sc.status!=="APPROVED"){
+  const up=el("input");up.type="file";up.accept="image/*";up.style.display="none";
+  const bup=el("button","btn ghost","📤 이미지 업로드");
+  bup.onclick=()=>up.click();
+  up.onchange=()=>{const f=up.files&&up.files[0];if(!f)return;
+   msg.textContent="업로드 중…";const rd=new FileReader();
+   rd.onload=async()=>{try{const d=await api("/api/upload-image",
+     {scene_id:sc.scene_id,filename:f.name,data_b64:String(rd.result)});
+     msg.textContent="업로드+검사 "+d.auto+" (후보 "+d.count+"장)";await refresh()}
+    catch(e){msg.textContent="실패: "+e.message}};
+   rd.readAsDataURL(f)};
+  act.appendChild(bup);act.appendChild(up)}
  if(sc.selected_image){
   const btnSeal=el("button","btn seal","승인 도장 찍기");
   btnSeal.onclick=async()=>{try{await api("/api/approve",{scene_id:sc.scene_id});await refresh()}
