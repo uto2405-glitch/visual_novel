@@ -686,7 +686,11 @@ $("galFavOnly").onchange=renderGallery;
 // ---- 인물과 대화 (로컬 LLM) ----
 let talkChat=[];
 function renderTalk(){const box=$("talklog");box.replaceChildren();
- for(const m of talkChat)box.appendChild(el("div","msg "+m.role,m.content));
+ for(const m of talkChat){const b=el("div","msg "+m.role,m.content);
+  for(const p of (m.photos||[])){const im=el("img");im.src=p.url;im.alt=p.caption||"";
+   im.title=p.caption||"";im.style.cssText="max-width:72%;border-radius:10px;margin-top:8px;display:block;border:1px solid var(--line)";
+   b.appendChild(im)}
+  box.appendChild(b)}
  box.scrollTop=box.scrollHeight}
 async function talkStatus(){const c=$("talkStatus");
  try{const d=await api("/api/talk-status",{});
@@ -696,8 +700,9 @@ async function talkStatus(){const c=$("talkStatus");
 async function talkSend(){const t=$("talkInput").value.trim();if(!t)return;
  $("talkInput").value="";talkChat.push({role:"user",content:t});renderTalk();
  const wait=el("div","msg assistant","…");$("talklog").appendChild(wait);$("talklog").scrollTop=1e9;
- try{const d=await api("/api/talk",{messages:talkChat});
-  talkChat.push({role:"assistant",content:d.reply});renderTalk()}
+ const send=talkChat.map(m=>({role:m.role,content:m.content}));   // 모델엔 텍스트만
+ try{const d=await api("/api/talk",{messages:send});
+  talkChat.push({role:"assistant",content:d.reply,photos:d.photos||[]});renderTalk()}
  catch(e){wait.textContent="(대화 실패) "+e.message}}
 $("btnTalk").onclick=talkSend;
 $("btnTalkClear").onclick=()=>{talkChat=[];renderTalk()};

@@ -24,6 +24,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -311,17 +312,29 @@ def r_talk_status(b):
 
 
 def r_talk(b):
-    """로컬 LLM 으로 인물과 실제 대화. 인물 페르소나는 매니페스트에서 생성."""
+    """로컬 LLM 으로 인물과 실제 대화 + 어울리는 앨범 사진 표시.
+
+    모델이 [사진:SCENE-ID] 를 붙이거나, 명시적 요청이면 라벨 키워드로 폴백 매칭.
+    앨범(승인 이미지)에 실제로 있을 때만, '없다'는 답장이면 억제한다.
+    """
     msgs = b.get("messages", []) if isinstance(b.get("messages"), list) else []
     sysmsg, meta = local_llm.persona_prompt(b.get("character_id"))
-    window = msgs[-16:]   # 최근 대화만 전송(로컬 컨텍스트 관리)
+    window = [{"role": m.get("role"), "content": m.get("content", "")} for m in msgs[-16:]
+              if isinstance(m, dict)]
     reply = local_llm.chat([{"role": "system", "content": sysmsg}] + window)
+
+    last_user = next((str(m.get("content", "")) for m in reversed(msgs)
+                      if isinstance(m, dict) and m.get("role") == "user"), "")
+    clean, photo_meta = local_llm.resolve_photos(reply, meta.get("album", {}), last_user)
+    photos = [{"scene_id": p["scene_id"], "url": "/img/" + p["rel"][len("images/"):],
+               "caption": p.get("caption", "")}
+              for p in photo_meta if p["rel"].startswith("images/")]
     with adv.WRITE_LOCK:
         STORY_DIR.mkdir(parents=True, exist_ok=True)
         (STORY_DIR / f"talk_{meta['character_id']}.json").write_text(
-            json.dumps({"messages": msgs + [{"role": "assistant", "content": reply}]},
+            json.dumps({"messages": msgs + [{"role": "assistant", "content": clean, "photos": photos}]},
                        ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"reply": reply, "name": meta["name"]}
+    return {"reply": clean, "name": meta["name"], "photos": photos}
 
 
 def r_upload_image(b):

@@ -693,6 +693,20 @@ def main() -> int:
             check("T43 로컬 LLM: 서버 off→status.up=False + 페르소나 생성",
                   stll.get("up") is False and isinstance(sysmsg, str)
                   and meta.get("name") and meta["name"] in sysmsg)
+
+            # T44 — 대화 중 앨범 사진: 태그 파싱 / '없다' 억제 / 키워드 폴백
+            alb = {"SCENE-001": {"rel": "images/raw/SCENE-001/a.png", "label": "카페에서 만나는 장면"},
+                   "SCENE-005": {"rel": "images/raw/SCENE-005/a.png", "label": "노을 강변 산책"}}
+            c1, p1 = llm.resolve_photos("이거 봐~ [사진:SCENE-005]", alb, "노을 사진 보여줘")
+            tag_ok = p1 and p1[0]["scene_id"] == "SCENE-005" and "사진:" not in c1
+            c2, p2 = llm.resolve_photos("그 사진은 지금 없네~", alb, "수영복 사진 보여줘")
+            neg_ok = len(p2) == 0
+            c3, p3 = llm.resolve_photos("응 좋았지!", alb, "카페에서 찍은 사진 보여줘")   # 태그 없음 → 폴백
+            fb_ok = p3 and p3[0]["scene_id"] == "SCENE-001"
+            c4, p4 = llm.resolve_photos("오늘 날씨 좋다", alb, "그냥 잡담")             # 사진 요청 아님
+            noreq_ok = len(p4) == 0
+            check("T44 앨범 사진(태그 파싱·없음 억제·키워드 폴백·요청아님)",
+                  tag_ok and neg_ok and fb_ok and noreq_ok)
         finally:
             web.terminate()
             mock.shutdown()
