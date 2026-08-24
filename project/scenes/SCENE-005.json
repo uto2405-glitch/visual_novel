@@ -1,9 +1,10 @@
 {
   "scene_id": "SCENE-005",
   "scene_order": 5,
+  "episode": 1,
   "status": "APPROVED",
   "location_id": "LOC-003",
-  "time": "해질녘",
+  "time": "노을",
   "characters": [
     "CHAR-001",
     "CHAR-002"
@@ -13,15 +14,15 @@
   "action_beat": "노을을 나란히 바라본다",
   "emotion": "잔잔한 두근거림",
   "camera": {
-    "shot": "two shot",
-    "angle": "eye level",
+    "shot": "two-shot",
+    "angle": "eye-level",
     "framing": "노을 속 둘",
     "focus": "마주보는 눈"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat black hair, casual shirt, standing close watching the sunset on a riverside walkway at sunset, orange and violet sky reflecting on the water",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, standing close watching the sunset on a riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, at sunset, orange and violet sky reflecting on the water",
     "external_generator": "",
     "external_model": ""
   },

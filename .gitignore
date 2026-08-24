@@ -13,6 +13,9 @@ images/raw/
 output/
 backups/
 
+# 실행 로그 (서버 로그·MakeFun 사용 대장 — 기기 로컬 기록)
+logs/
+
 # 개인 대화 기록 — 인물과 나눈 사적 대화는 저장소에 올리지 않는다
 project/story/chatlog.json
 project/story/talk_*.json

@@ -1,94 +1,155 @@
-# AI Webtoon Protocol (v5.1 — 웹 스튜디오)
+# AI 비주얼노벨 제작 스튜디오 (v5.x — 웹 스튜디오)
 
-Grok AI를 오케스트레이터로 사용하여 스토리부터 씬 설계, 외부 이미지 AI용 프롬프트, 검수, 비주얼 노벨형 감상본, 실제 사진 출력용 이미지까지 관리하는 반복 제작 프로토콜.
+스토리 → 장면 설계 → 이미지 프롬프트 → 이미지 생성 → 검수 → 비주얼 노벨 감상본 → 실물 인화까지,
+한 저장소에서 굴리는 개인 제작 파이프라인. 브라우저 하나로 쓰고, 폰에서도 그대로 쓴다.
 
-## 확정 워크플로우 (v5)
+## 지금 쓰는 엔진
+
+| 역할 | 무엇 | 비용 | 어디 |
+|---|---|---|---|
+| **스토리 · 장면 구성 · 이미지 프롬프트 · 인물 대화** | **로컬 LLM** (llama.cpp, OpenAI 호환 `http://127.0.0.1:8080/v1`) | **0원** | 내 PC (`c:\Users\USER\claude\local_llm`) |
+| **이미지 생성** | **MakeFun AI** (`tools/makefun_client.py`) | **유료 종량제** | `MAKEFUN_API_TOKEN` 환경변수 |
+| 그록(xAI) | **예비 경로** — grok.com 수동 복붙 또는 API | 구독/종량제 | `XAI_API_KEY` (선택) |
+
+창작 텍스트와 인물 대화는 **내 PC 를 벗어나지 않는다.** 외부로 나가는 건 이미지 생성 프롬프트뿐이다.
+엔진 교체는 `project/manifest.json` 의 `orchestrator` / `image_generator` 만 바꾸면 된다.
+
+> **이미지 생성은 호출 1회가 곧 과금이다.** 자동으로 돌리지 않는다 — 사람이 버튼을 누를 때만 생성한다.
+
+## 시작하기
+
+```powershell
+# 0) 환경 점검 (읽기 전용, 30초)
+python tools/doctor.py
+
+# 1) 로컬 LLM + 웹 스튜디오를 한 번에
+powershell -ExecutionPolicy Bypass -File start_studio.ps1
+
+#    폰에서도 쓰려면
+powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
+```
+
+스튜디오만 따로 띄우려면 `python tools/webapp.py` (기본 `http://127.0.0.1:8765/`).
+이미 떠 있는 서버는 `start_studio.ps1` 이 다시 켜지 않는다(모델 재적재 방지).
+요구사항: **Python 3.9+**. Pillow 는 인화 마스터·감상본 최적화에만 쓰인다(없어도 나머지는 동작).
+
+## 워크플로우
+
 | 단계 | 하는 일 | 어디서 | 담당 |
 |---|---|---|---|
-| 1 | 스토리라인 작성 | 웹페이지 [스토리] 탭 — Grok 과 대화 | 나 + Grok(API) |
-| 2 | VN 텍스트 + 이미지 프롬프트 구성 | [장면] 탭 — [스토리라인 → 장면 구성] 버튼 | Grok(API) |
-| 3 | 이미지 생성 | 외부 이미지 AI (수동, 레퍼런스 첨부) | 나 + 그림 AI |
-| 4 | 이미지 폴더 투입 | `images/raw/장면ID/` 에 넣고 [폴더 스캔]→선택→승인 도장 | 나 + 검사기 |
-| 5 | 감상 | [뷰어] 탭 — 비주얼 노벨 재생 | 나 |
+| 1 | 스토리라인 작성 | [스토리] 탭 — 로컬 LLM 과 대화 | 나 + 로컬 LLM |
+| 2 | VN 텍스트 + 장면 분해 | [장면] 탭 — [스토리라인 → 장면 구성] | 로컬 LLM |
+| 3 | 이미지 프롬프트 생성 | [장면] 탭 — 장면 카드의 프롬프트 버튼 | 로컬 LLM (앵커는 코드가 조립) |
+| 4 | 이미지 생성 | [장면] 탭 — MakeFun 생성 / 📤 업로드 / `images/raw/<장면ID>/` 폴더 스캔 | 나 + 이미지 AI |
+| 5 | 선택 · 승인 | [장면] 탭 — 후보 선택 → 승인 도장 | 나 + 자동 검사기 |
+| 6 | 감상 | [뷰어] · [갤러리] · [대화] 탭 | 나 |
+| 7 | 내보내기 | 단일 HTML 감상본 · PWA · 인화 마스터 | 도구 |
 
-## 웹 스튜디오 시작
-```bash
-# 키 설정 (console.x.ai 발급 — SuperGrok 구독과 별개)
-#   Windows cmd: set XAI_API_KEY=발급키   /  PowerShell: $env:XAI_API_KEY="발급키"
-# 모델명 기입: project/manifest.json → orchestrator.api.model (docs.x.ai 참고)
-python tools/webapp.py        # 브라우저 자동 오픈 (127.0.0.1 전용)
+내부 상태 흐름: `SCENE_PLAN → PROMPT → IMAGE → REVIEW_AUTO → REVIEW_HUMAN → APPROVED` (되돌리기 `REVISE`)
+검사기는 **상태에 맞는 항목만** 본다. `SCENE_PLAN` 장면은 이미지가 없어도 FAIL 이 아니다.
+
+## 화면
+
+**소설 만들기** — 스토리 / 장면 / 검사
+**감상** — 뷰어 / 갤러리 / 대화
+
+폰에서 쓰는 법(LAN 접속·이미지 업로드·홈 화면 추가)은 **[docs/PHONE_TUTORIAL.md](docs/PHONE_TUTORIAL.md)**.
+
+## 디렉터리
+
 ```
-키는 서버 환경변수에서만 쓰이고 **브라우저로는 절대 전달되지 않는다.** 키 없이 실행하면 뷰어·검사 탭은 그대로 쓸 수 있다. 요구사항: Python 3.9+.
-
-## 권장 흐름 (내부 상태)
-`BRIEF → STORY → CAST → SCENE_PLAN → PROMPT(Grok) → IMAGE(외부 AI) → REVIEW_AUTO → REVIEW_HUMAN → APPROVED → DELIVER`
-
-## 역할 분리
-- **Grok AI:** 스토리 분석, 연출 설계, 이미지 생성 프롬프트 제작
-- **외부 상용 이미지 AI:** 실제 이미지 생성
-- **후처리/편집 도구:** 대사, 말풍선, 장면 배열, 인쇄용 출력
-- **자동 검사기:** `tools/check_protocol.py` — SCORECARD A1~A7 자동 판정
-- **자동화 도구:** `webapp.py`(서버)+`studio.html`(화면) / `vn_compose.py`(장면 구성, 웹·CLI 공용) / `xai_client.py`(단일 API 경로) / `advance_scene.py` / `make_grok_input.py` / `selftest.py`(23종 자가진단)
-- **사람:** 최종 미적 판단 및 승인 (SCORECARD C 항목)
-
-## 디렉터리 구조
-```
-project/manifest.json        프로젝트 설정 + 캐릭터/장소/소품 기준정보 (단일 매니페스트)
-project/scenes/SCENE-XXX.json  장면 파일 1개 = Scene 1개 (파일명 = scene_id)
-images/raw/<scene_id>/       외부 AI가 생성한 후보 이미지 보관
-templates/                   위 파일들의 빈 템플릿
-examples/                    복사만 하면 검사기 PASS 가 나오는 데모
+project/manifest.json          프로젝트 설정 + 캐릭터/장소/소품 기준정보 (단일 매니페스트)
+project/scenes/SCENE-XXX.json  장면 파일 1개 = 장면 1개 (파일명 = scene_id)
+project/story/                 storyline.md · 대화 로그(개인 기록, git 제외)
+images/raw/<scene_id>/         후보 이미지 보관
+output/viewer/ · output/pwa/   감상본 · 설치형 번들
+output/print/<규격>/           인화 마스터 (TIFF + JPEG + spec_sheet.json)
+backups/                       project zip + sha256 체크섬
+templates/ · examples/         빈 템플릿 · 복사만 하면 PASS 나는 데모
+docs/                          운영 문서
 ```
 
-## 첫 실행 (5분 안에 초록불 보기)
-```bash
-# 0) 자가진단 — 파이프라인 전체(13개 시나리오)가 이 PC에서 도는지 확인
-python tools/selftest.py
+## 새 작품 시작
 
-# 1) 데모로 검사기가 도는지 먼저 확인
-cp examples/manifest.json project/manifest.json
-cp examples/scenes/SCENE-001.json project/scenes/
-python tools/check_protocol.py        # → RESULT: PASS
-
-# 2) 내 작품 시작: 데모를 지우고 템플릿으로 교체
-cp templates/manifest.json project/manifest.json
-# project/manifest.json 에 제목·캐릭터·장소 기준정보 채우기 (prompt_anchor 필수)
-# templates/scene.json 을 project/scenes/SCENE-001.json 으로 복사해 장면 작성
+```powershell
+copy templates\manifest.json project\manifest.json
+# manifest 에 제목·캐릭터·장소를 채운다 (prompt_anchor 는 필수 — 컷 간 일관성의 근거)
+# output.visual_style 에 작품 화풍을 적는다
 python tools/check_protocol.py
 ```
-Windows(cmd)는 `cp` 대신 `copy`, 경로 구분자는 `\` 를 사용하면 된다.
 
-## 장면 상태 값
-`SCENE_PLAN → PROMPT → IMAGE → REVIEW_AUTO → REVIEW_HUMAN → APPROVED` (실패 시 `REVISE`)
-검사기는 상태에 맞는 항목만 검사한다. 예: `SCENE_PLAN` 장면은 이미지가 없어도 FAIL 이 아니다.
+데모로 먼저 초록불을 보고 싶다면 `examples\manifest.json` · `examples\scenes\SCENE-001.json` 을 복사한다.
 
-## Grok 연동 모드 (중요)
-SuperGrok 구독과 xAI API 는 **별도 결제 트랙**이다. 구독에 API 크레딧이 포함되지 않는다.
+## CLI (웹과 같은 파일을 공유 — 터미널로도 동일 작업)
 
-| 모드 | 조건 | 비용 | 방법 |
-|---|---|---|---|
-| **수동 (기본)** | SuperGrok 구독만 | 추가 비용 0 | `make_grok_input.py` 출력 → grok.com 붙여넣기 → `set-prompt` |
-| **API (선택)** | console.x.ai 키 발급 | 토큰 종량제(프롬프트 생성 용도는 미미) | `python tools/grok_api.py SCENE-001` 한 줄로 조립→호출→저장→전이 |
-
-**키 보안 3원칙** — ① 키는 환경변수 `XAI_API_KEY` 로만 (`set`/`$env:`/`export`), 파일 저장 금지 ② 서드파티 CLI에 키 제공 금지(2026-07 유출 사고) ③ SuperGrok OAuth 우회 미사용(403 불안정). 검사기 A8 이 저장소 내 키 패턴을 자동 탐지한다.
-
-## CLI 치트시트 (웹 대신 터미널로도 동일 작업 가능 — 같은 파일을 공유)
 | 단계 | 명령 |
 |---|---|
+| 환경 점검 | `python tools/doctor.py` |
+| 장면 구성 | `python tools/vn_compose.py 10` (스토리라인 → 장면 10개) |
 | 장면 생성 | `python tools/advance_scene.py new` |
-| 계획 작성 | 장면 파일의 purpose/action/camera/dialogue 채우기 (유일한 창작 수작업) |
-| Grok 프롬프트 (수동) | `make_grok_input.py SCENE-001` → grok.com 붙여넣기 → `advance_scene.py set-prompt SCENE-001 --file grok_out.txt` |
-| Grok 프롬프트 (API) | `python tools/grok_api.py SCENE-001` (위 두 단계를 한 줄로) |
-| 이미지 생성 | 외부 AI에서 후보 1~4장 (레퍼런스 이미지 첨부 필수) |
-| 후보 등록+자동검사 | `python tools/advance_scene.py add-images SCENE-001 a.png b.png` |
-| 선택 | `python tools/advance_scene.py select SCENE-001 1` |
-| 승인·잠금 | `python tools/advance_scene.py approve SCENE-001` |
+| 프롬프트 (수동) | `python tools/make_grok_input.py SCENE-001` → 붙여넣기 → `advance_scene.py set-prompt SCENE-001 --file out.txt` |
+| 프롬프트 (그록 API) | `python tools/grok_api.py SCENE-001` |
+| **이미지 생성 (유료)** | `python tools/makefun_client.py SCENE-001 --n 2` — **호출 1회 = 과금** |
+| 후보 등록 + 자동검사 | `python tools/advance_scene.py add-images SCENE-001 a.png b.png` |
+| 선택 / 승인 | `python tools/advance_scene.py select SCENE-001 1` → `approve SCENE-001` |
+| 되돌리기 | `python tools/advance_scene.py revise SCENE-001 IMAGE --note "사유"` |
 | 진행 현황 | `python tools/advance_scene.py status` |
-| 인화 규격 판정 | `python tools/print_preflight.py` (선택 이미지가 실물 인화에 적합한지 규격별 DPI/크롭) |
-| 인화 마스터 굽기 | `python tools/print_export.py --size 5x7 --contact` (Pillow 필요, output/print/ 에 TIFF+JPEG) |
-| 연출 리듬 자문 | `python tools/scene_lint.py` (컷·감정·대사 리듬 경고 — PASS/FAIL 아님) |
-| 인물과 대화(로컬 LLM) | 서버: `local_llm/runtime/serve.ps1` → 스튜디오 [대화] 탭 / CLI `python tools/local_llm.py "지혜야 안녕"` |
-| 백업·무결성 | `python tools/backup_project.py snapshot` / `verify` (project zip + sha256, 비트로트 탐지) |
-| 자가진단(수정 후 회귀) | `python tools/selftest.py` |
+| 연출 리듬 자문 | `python tools/scene_lint.py` (경고만, PASS/FAIL 아님) |
+| 인물과 대화 | `python tools/local_llm.py "지혜야 안녕"` |
+| 감상본 내보내기 | `python tools/export_viewer.py` / `python tools/export_pwa.py` |
+| 인화 규격 판정 | `python tools/print_preflight.py` |
+| 인화 마스터 굽기 | `python tools/print_export.py --size 4x6 --contact` (Pillow 필요) |
+| 백업 · 무결성 | `python tools/backup_project.py snapshot` / `verify` |
+| 비밀값 스캔 | `python tools/secret_scan.py` |
+| 자가진단(회귀) | `python tools/selftest.py` (현재 53종 — 서버 포트를 쓰므로 스튜디오는 끄고 실행) |
 
-APPROVED 장면만 출력 패키지(DELIVERY.md)에 넣는다. 출력 기준은 개인 소장 인화 기본(긴 변 1024px, 매니페스트에서 조정).
+## 검사와 승인
+
+- **자동 검사기** `python tools/check_protocol.py` — SCORECARD **A1~A8** 판정
+  (스키마·ID 정합·해상도·화자·순서·프롬프트 앵커·검수 상태·키 유출).
+- **사람 시사** — SCORECARD C (캐릭터 일관성·연출 흐름·대사·몰입·인화 품질·화풍).
+  자동으로 대체할 수 없다. 승인 도장은 사람만 찍는다.
+- `protocol/SCORECARD.md` 와 `tools/check_protocol.py` 는 **에이전트가 수정할 수 없다.**
+  개정이 필요하면 사용자에게 제안만 한다(CLAUDE.md "채점표·검사기 개정 절차").
+
+APPROVED 장면만 감상본·인화 대상이 된다.
+
+## 키·토큰 보안 (3원칙)
+
+1. **환경변수 전용.** `MAKEFUN_API_TOKEN` · `XAI_API_KEY` 를 저장소의 어떤 파일에도 쓰지 않는다
+   (`.env` 포함 금지). 매니페스트에는 값이 아니라 변수 이름(`token_env`)만 적는다.
+2. **서드파티 CLI·에이전트에 제공 금지.** 근거: 2026-07 Grok Build CLI 가 `.env` 의 키를
+   평문으로 서버에 전송한 사고.
+3. **브라우저로 전달 금지.** 서버가 알려주는 건 "설정됨/미설정" 불리언뿐이다.
+
+검사기 **A8** 이 저장소 내 `xai-` 패턴을 판정하고, `python tools/secret_scan.py` 가
+MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해도 실제 값은 출력하지 않는다**).
+영구 등록 방법은 **[docs/ENV_SETUP.md](docs/ENV_SETUP.md)**.
+
+## 인화 (실물 출력)
+
+같은 장면 원본에서 감상본과 인화물이 함께 파생된다.
+매니페스트 기본 `min_long_edge_px: 1024` 는 화면 감상 기준이라 **엽서 인화에는 부족하다**
+(300DPI 에서 긴 변 약 3.4인치). 4×6 엽서에 1200×1800px, 5×7 에 1500×2250px 이 필요하다.
+`python tools/print_preflight.py` 로 컷별 판정 후 주문한다 — 실무 절차는
+**[docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md)**.
+
+## 문서
+
+| 문서 | 언제 |
+|---|---|
+| [docs/PHONE_TUTORIAL.md](docs/PHONE_TUTORIAL.md) | 폰에서 쓰고 싶을 때 (LAN 접속·업로드·홈 화면) |
+| [docs/ENV_SETUP.md](docs/ENV_SETUP.md) | 토큰을 영구 등록할 때, 재부팅 후 401 이 날 때 |
+| [docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md) | 실물 인화를 주문할 때 |
+| [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) | 감상본을 인터넷에 올릴까 고민될 때 |
+| [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md) | 뭔가 깨졌을 때, PC 를 새로 세팅할 때 |
+| [CLAUDE.md](CLAUDE.md) | 제작 프로토콜 원칙·금지 조항 |
+| [protocol/SCORECARD.md](protocol/SCORECARD.md) | 판정 기준 원문 (수정 금지) |
+| [BACKLOG.md](BACKLOG.md) · [NO_TOKEN_TASKS.md](NO_TOKEN_TASKS.md) | 다음에 할 일 |
+
+## 프라이버시
+
+인물과 나눈 대화(`project/story/chatlog.json`, `talk_*.json`)는 **git 에서 제외**된다.
+감상본 HTML 에도 포함되지 않는다 — 들어가는 건 제목·캐릭터 이름·대사·승인된 이미지다.
+그 파일 하나에 작품 전체가 들어 있으므로, 공개 호스팅 전에
+**[docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md)** 를 먼저 읽는다.

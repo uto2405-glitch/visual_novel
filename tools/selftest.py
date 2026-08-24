@@ -733,10 +733,68 @@ def main() -> int:
                     http_block = str(e)
             finally:
                 mk.MANIFEST = _mkm_bak
+            # 긴 변은 매니페스트 설정을 따른다(인화용 상향 시에도 깨지지 않게 하드코딩하지 않음)
+            want_edge = json.loads((box / "project" / "manifest.json").read_text(encoding="utf-8")) \
+                .get("output", {}).get("min_long_edge_px", 1024)
             w_mk, h_mk = mk._size_from_manifest()
-            check("T45 MakeFun: 무토큰 안내 · http 차단 · 2:3 규격(긴변 1024)",
+            check("T45 MakeFun: 무토큰 안내 · http 차단 · 2:3 규격(긴변=매니페스트 설정)",
                   "MAKEFUN_API_TOKEN" in tok_msg and "https" in http_block
-                  and max(w_mk, h_mk) == 1024 and mk._ext("https://x/y.jpg?a=1") == ".jpg")
+                  and max(w_mk, h_mk) >= want_edge and max(w_mk, h_mk) % 8 == 0
+                  and min(w_mk, h_mk) < max(w_mk, h_mk)   # 2:3 세로
+                  and mk._ext("https://x/y.jpg?a=1") == ".jpg")
+
+            # T46 — scene_id 경로 탈출 차단(웹): 정규식 밖 값은 전부 거부
+            bad_codes = []
+            for bad in ("../../templates/scene", "SCENE-001/../x", "scene-001", "SCENE-1"):
+                try:
+                    wapi("/api/register-images", {"scene_id": bad})
+                    bad_codes.append(200)
+                except urllib.error.HTTPError as e:
+                    bad_codes.append(e.code)
+            check("T46 scene_id 정규식 검증 — 경로 탈출·변형 전부 400",
+                  all(c == 400 for c in bad_codes), str(bad_codes))
+
+            # T47 — 즐겨찾기(인화 후보) 서버 저장 + /api/state 반영
+            stF, dF = wapi("/api/favorite", {"scene_id": "SCENE-001", "on": True})
+            _, stateF = wapi("/api/state")
+            _, dF2 = wapi("/api/favorite", {"scene_id": "SCENE-001", "on": False})
+            check("T47 즐겨찾기 저장·해제 + state 반영",
+                  stF == 200 and "SCENE-001" in dF.get("scene_ids", [])
+                  and "SCENE-001" in stateF.get("favorites", [])
+                  and "SCENE-001" not in dF2.get("scene_ids", []))
+
+            # T48 — /img 캐시: ETag 발급 + If-None-Match 재요청 시 304 (폰 데이터 절약)
+            img_rel = "raw/SCENE-001/phone.png"      # T42 에서 업로드한 파일
+            req_i = ur.Request(f"http://127.0.0.1:{web_port}/img/{img_rel}")
+            with opener.open(req_i, timeout=20) as r:
+                etag, body_len = r.headers.get("ETag", ""), len(r.read())
+            code304 = 0
+            try:
+                req2 = ur.Request(f"http://127.0.0.1:{web_port}/img/{img_rel}",
+                                  headers={"If-None-Match": etag})
+                with opener.open(req2, timeout=20) as r2:
+                    code304 = r2.status
+            except urllib.error.HTTPError as e:
+                code304 = e.code
+            check("T48 /img ETag 발급 + 재요청 304",
+                  bool(etag) and body_len > 0 and code304 == 304, f"etag={etag!r} code={code304}")
+
+            # T49 — 감상본 분기 재생: choices/branch/ending 이 런타임 코드와 함께 실린다
+            tc_txt = (box / "tools" / "export_viewer.py").read_text(encoding="utf-8")
+            check("T49 감상본에 분기 재생 런타임 포함(선택지·호감도·엔딩)",
+                  "choices" in tc_txt and "branch" in tc_txt
+                  and "affection" in tc_txt.lower() and "ending" in tc_txt)
+
+            # T50 — 비밀 스캔 보조 도구: 심은 키를 잡고 원문은 출력하지 않는다(마스킹)
+            spec_ss = importlib.util.spec_from_file_location("ss_box", str(box / "tools" / "secret_scan.py"))
+            ss = importlib.util.module_from_spec(spec_ss)
+            spec_ss.loader.exec_module(ss)
+            planted = "xai-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0"
+            hits = ss.scan_text(f'KEY = "{planted}"')
+            rendered = json.dumps(hits, ensure_ascii=False, default=str)
+            check("T50 secret_scan 탐지 + 원문 미노출(마스킹)",
+                  len(hits) >= 1 and planted not in rendered,
+                  f"hits={len(hits)}")
         finally:
             web.terminate()
             mock.shutdown()

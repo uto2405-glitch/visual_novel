@@ -14,13 +14,17 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "project" / "manifest.json"
+STORY_DIR = ROOT / "project" / "story"
 DEFAULT_URL = "http://127.0.0.1:8080/v1"
 TIMEOUT = 120
+TALK_WINDOW = 16   # 서버가 모델에 넘기는 최근 대화 수 — 그 밖의 맥락은 기억 요약으로 유지한다
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+_WEEKDAYS = "월화수목금토일"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -105,12 +109,177 @@ def _load_manifest() -> dict:
         return {}
 
 
+def _strip_meta_sections(md: str) -> str:
+    """'제작 노트'·'표기 규약' 같은 메타 절을 걷어낸다 — 인물은 제작 지시를 알면 안 된다."""
+    out, skip_level = [], 0
+    for line in md.splitlines():
+        s = line.lstrip()
+        if s.startswith("#"):
+            level = len(s) - len(s.lstrip("#"))
+            if skip_level and level <= skip_level:
+                skip_level = 0
+            if not skip_level and ("제작" in s or "규약" in s):
+                skip_level = level
+        if not skip_level:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def _clip(text: str, limit: int) -> str:
+    """줄 경계에서 자른다 — 프롬프트에 문장이 반쯤 잘린 채 들어가지 않게."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    return (cut[:cut.rfind("\n")] if "\n" in cut else cut).rstrip()
+
+
 def _storyline() -> str:
-    p = ROOT / "project" / "story" / "storyline.md"
     try:
-        return p.read_text(encoding="utf-8").strip()
+        return _strip_meta_sections((STORY_DIR / "storyline.md").read_text(encoding="utf-8"))
     except OSError:
         return ""
+
+
+def _section(md: str, key: str) -> str:
+    """제목에 key 가 든 절의 본문(하위 절 포함)을 뽑는다."""
+    out, level = [], 0
+    for line in md.splitlines():
+        s = line.lstrip()
+        if s.startswith("#"):
+            head = len(s) - len(s.lstrip("#"))
+            if level and head <= level:      # 다음 인물 절에서 종료
+                break
+            if not level and key in s:
+                level = head
+                continue
+        if level:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def _character_bible(cid: str, name: str = "") -> str:
+    """캐릭터 바이블에서 해당 인물의 절만 뽑는다(취향·기념일·기억). 없으면 빈 문자열.
+
+    id 로 먼저 찾는다 — 이름('나' 같은 한 글자)이 다른 제목에 우연히 걸리는 것을 막는다.
+    """
+    try:
+        md = _strip_meta_sections((STORY_DIR / "character_bible.md").read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+    for key in (cid, name):
+        if key and (found := _section(md, key)):
+            return found
+    return ""
+
+
+def _now_block(now: datetime | None = None) -> str:
+    """현재 시각·요일 — 시간대에 맞는 인사와 반응을 하게 한다."""
+    now = now or datetime.now()
+    h = now.hour
+    if h < 5:
+        part = "새벽"
+    elif h < 11:
+        part = "아침"
+    elif h < 14:
+        part = "점심때"
+    elif h < 18:
+        part = "오후"
+    elif h < 21:
+        part = "저녁"
+    else:
+        part = "밤"
+    return (f"\n[지금] {now:%Y년 %m월 %d일} {_WEEKDAYS[now.weekday()]}요일 {now:%H시 %M분}, {part}이야.\n"
+            "- 지금 시간대에 맞게 인사하고 반응해(새벽이면 왜 안 자냐고, 아침이면 잘 잤냐고 묻는 식).\n"
+            "- 시각을 그대로 읊지 말고 말 속에 자연스럽게 녹여.\n")
+
+
+# ------------------------------------------------------------- 장기 기억(요약)
+def _talk_path(cid: str) -> Path:
+    return STORY_DIR / f"talk_{cid}.json"
+
+
+def _memory_path(cid: str) -> Path:
+    return STORY_DIR / f"memory_{cid}.json"
+
+
+def _talk_messages(cid: str) -> list:
+    try:
+        data = json.loads(_talk_path(cid).read_text(encoding="utf-8"))
+        msgs = data.get("messages", []) if isinstance(data, dict) else []
+    except (OSError, ValueError):
+        return []
+    return [m for m in msgs if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+
+
+def _load_memory(cid: str) -> dict:
+    try:
+        d = json.loads(_memory_path(cid).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_memory_summary(cid: str, summary: str, covered: int = 0) -> bool:
+    """기억 요약 저장. 실패해도 대화는 계속되어야 하므로 조용히 False."""
+    try:
+        STORY_DIR.mkdir(parents=True, exist_ok=True)
+        _memory_path(cid).write_text(
+            json.dumps({"summary": summary.strip(), "covered": int(covered)},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def memory_digest(cid: str, window: int = TALK_WINDOW, limit: int = 8) -> str:
+    """최근 window 개 창 밖으로 밀려난 대화를 짧은 기억으로 되살린다.
+
+    여기서는 LLM 을 호출하지 않는다 — 서버가 꺼져 있어도 페르소나는 만들어져야 한다.
+    저장된 요약(memory_<cid>.json)이 있으면 먼저 쓰고, 그 뒤 대화는 발췌로 잇는다.
+    """
+    msgs = _talk_messages(cid)
+    old = msgs[:-window] if len(msgs) > window else []
+    if not old:
+        return ""
+    mem = _load_memory(cid)
+    summary = str(mem.get("summary", "")).strip()
+    covered = int(mem.get("covered", 0)) if isinstance(mem.get("covered"), int) else 0
+    parts = [summary] if summary else []
+    for m in old[max(covered, 0):][-limit:]:
+        text = " ".join(str(m.get("content", "")).split())
+        if len(text) < 2:
+            continue
+        parts.append(f"- {'상대' if m.get('role') == 'user' else '나'}: {text[:60]}")
+    if not parts:
+        return ""
+    return (f"\n[지난 대화 기억] 최근 대화창 밖의 일이지만 너는 기억하고 있어 (이전 대화 {len(old)}개):\n"
+            + "\n".join(parts) +
+            "\n- 먼저 꺼내 나열하지 말고, 이야기가 자연스럽게 닿을 때만 언급해.\n")
+
+
+def refresh_memory(cid: str | None = None, window: int = TALK_WINDOW) -> bool:
+    """창 밖 대화를 로컬 LLM 으로 요약해 저장한다. 서버가 꺼져 있으면 조용히 False."""
+    try:
+        if not cid:
+            mf = _load_manifest()
+            talk = mf.get("talk", {}) if isinstance(mf.get("talk"), dict) else {}
+            chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
+            cid = talk.get("character_id") or (chars[0].get("character_id") if chars else "")
+        if not cid:
+            return False
+        msgs = _talk_messages(cid)
+        old = msgs[:-window] if len(msgs) > window else []
+        if len(old) < 4:
+            return False
+        body = "\n".join(f"{'상대' if m.get('role') == 'user' else '나'}: "
+                         f"{str(m.get('content', ''))[:200]}" for m in old)
+        out = chat([{"role": "user", "content":
+                     "다음은 연인 사이의 지난 대화야. 앞으로의 대화에서 기억해야 할 사실"
+                     "(약속·취향·사건·감정)만 한국어 3문장 이내로 요약해. 설명이나 머리말 없이 요약만 써라.\n\n"
+                     + body[-6000:]}], temperature=0.2, max_tokens=220)
+        return save_memory_summary(cid, out, covered=len(old))
+    except Exception:
+        return False   # 요약은 부가 기능 — 실패가 대화를 막아서는 안 된다
 
 
 def _load_scenes() -> list:
@@ -201,8 +370,12 @@ def persona_prompt(character_id: str | None = None) -> tuple[str, dict]:
     traits = ", ".join(str(prof.get(k, "")) for k in ("age", "gender_presentation", "hair", "eyes", "wardrobe")
                        if prof.get(k))
     props = ", ".join(prof.get("signature_props", []) or [])
+    personality = str(prof.get("personality", "") or "").strip()
+    speech = str(prof.get("speech_style", "") or "").strip()
     story = _storyline()
-    story_line = f"\n[함께한 이야기]\n{story[:600]}" if story else ""
+    story_line = f"\n[함께한 이야기]\n{_clip(story, 1600)}\n" if story else ""
+    bible = _character_bible(cid, name)
+    bible_line = f"\n[너에 대한 기록 — 전부 실제 네 기억이야]\n{_clip(bible, 1800)}\n" if bible else ""
 
     album = album_list()
     if album:
@@ -221,13 +394,15 @@ def persona_prompt(character_id: str | None = None) -> tuple[str, dict]:
     sys = (
         f"너는 '{name}'라는 인물이야. 지금부터 끝까지 '{name}' 본인으로서 1인칭으로 자연스럽게 대화해.\n"
         f"[너의 모습] {traits}" + (f" / 아끼는 것: {props}" if props else "") + "\n"
-        f"[관계] 상대는 너의 {relationship}. 편하고 다정한 반말로, 실제 연인처럼 대화해.\n"
+        + (f"[너의 성격] {personality}\n" if personality else "")
+        + f"[관계] 상대는 너의 {relationship}. 편하고 다정한 반말로, 실제 연인처럼 대화해.\n"
         "[말투 규칙]\n"
-        "- 한국어로, 1~3문장의 짧고 자연스러운 구어체. 이모티콘은 가끔만.\n"
+        + (f"- {speech}\n" if speech else "")
+        + "- 한국어로, 1~3문장의 짧고 자연스러운 구어체. 이모티콘은 가끔만.\n"
         "- 너는 사람이야. 'AI', '언어모델', '도울 수 있어' 같은 표현 절대 금지.\n"
         "- 설명하거나 나열하지 말고, 감정과 리액션이 있는 진짜 대화를 해.\n"
         "- 가끔 먼저 질문하거나 장난도 치면서 대화를 이어가.\n"
-        + story_line + album_block
+        + _now_block() + bible_line + story_line + memory_digest(cid) + album_block
     )
     meta_album = {a["scene_id"]: {"rel": a["rel"], "label": a["label"]} for a in album}
     return sys, {"character_id": cid, "name": name, "album": meta_album}
@@ -242,6 +417,10 @@ def main() -> int:
         print("  → C:\\Users\\USER\\claude\\local_llm\\runtime\\serve.ps1 로 서버를 켜세요.")
         return 1
     print(f"  모델: {', '.join(st['models']) or '(미표시)'}")
+    if len(sys.argv) > 1 and sys.argv[1] == "--memory":   # 지난 대화 요약 갱신(장기 기억)
+        ok = refresh_memory(sys.argv[2] if len(sys.argv) > 2 else None)
+        print("기억 요약을 갱신했습니다." if ok else "요약할 지난 대화가 없거나 요약에 실패했습니다.")
+        return 0
     if len(sys.argv) > 1:
         sysmsg, meta = persona_prompt()
         reply = chat([{"role": "system", "content": sysmsg},

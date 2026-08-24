@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>웹툰 스튜디오</title>
 <style>
 :root{--bg:#241C15;--panel:#2E251C;--panel2:#372D22;--line:#453828;--ink:#EDE4D3;
@@ -119,6 +119,7 @@ border:none;background:rgba(18,13,9,.6);color:#8b7d68;font-size:15px;cursor:poin
 #affMeter{background:rgba(196,61,43,.22);border-color:var(--seal);color:#F2C0B6;font-weight:700}
 #choices{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;
 display:flex;flex-direction:column;gap:12px;width:min(560px,86%)}
+#choices[hidden]{display:none}   /* ID 선택자가 UA 의 [hidden] 을 이기므로 명시 필요 */
 #choices button{background:rgba(24,18,12,.94);color:var(--ink);border:1px solid var(--jade);
 border-radius:12px;padding:14px 18px;font:inherit;font-size:15px;cursor:pointer;text-align:left;
 box-shadow:0 8px 24px -10px rgba(0,0,0,.7)}
@@ -171,6 +172,83 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
  #vnScenes,#vnLog{inset:6% 5%}
 }
 @media(max-width:720px) and (orientation:landscape){#chatlog{height:62vh}#dlgText{max-height:40vh}}
+/* ---- 51 · 응답 대기 타이핑 인디케이터 ---- */
+.typing{display:inline-flex;gap:6px;align-items:center;height:22px}
+.typing i{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.3}
+@media(prefers-reduced-motion:no-preference){
+ .typing i{animation:tdot 1.15s infinite ease-in-out}
+ .typing i:nth-child(2){animation-delay:.16s}
+ .typing i:nth-child(3){animation-delay:.32s}}
+@keyframes tdot{0%,65%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-4px)}}
+/* ---- 67 · 선택지 호감도 변화 연출 ---- */
+#affFloat{position:absolute;left:50%;top:46%;z-index:5;pointer-events:none;font-size:26px;
+ font-weight:800;transform:translate(-50%,-50%);text-shadow:0 2px 12px rgba(0,0,0,.65)}
+#affFloat.up{color:#FF8FA3}
+#affFloat.down{color:#8FBEE0}
+@media(prefers-reduced-motion:no-preference){
+ #affFloat.go{animation:affpop 1.15s ease-out forwards}
+ #affMeter.bump{animation:affbump .42s ease-out}}
+@keyframes affpop{0%{opacity:0;transform:translate(-50%,-10%) scale(.75)}
+ 22%{opacity:1;transform:translate(-50%,-60%) scale(1.14)}
+ 100%{opacity:0;transform:translate(-50%,-150%) scale(1)}}
+@keyframes affbump{0%,100%{transform:scale(1)}45%{transform:scale(1.16)}}
+/* ---- 68 · 엔딩 카드 ---- */
+#endCard{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;
+ align-items:center;justify-content:center;gap:14px;text-align:center;padding:26px;
+ background:radial-gradient(120% 90% at 50% 45%,rgba(20,15,10,.74),rgba(6,5,4,.96))}
+#endCard .ttl{font-size:12px;letter-spacing:.45em;color:var(--jade)}
+#endCard .nm{font-size:clamp(20px,5vw,30px);font-weight:800;letter-spacing:-.01em;
+ max-width:min(680px,92%);word-break:keep-all}
+#endCard .sub{color:var(--sub);font-size:13px}
+#endCard .row{justify-content:center;margin-top:6px}
+@media(prefers-reduced-motion:no-preference){
+ #endCard{animation:endin .9s ease-out}
+ #endCard .nm{animation:endup .9s ease-out}}
+@keyframes endin{from{opacity:0}to{opacity:1}}
+@keyframes endup{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+/* ---- 69 · 재생 진행률 바 ---- */
+#stageProgBar{position:absolute;left:0;right:0;top:0;height:3px;z-index:3;
+ background:rgba(255,255,255,.09);pointer-events:none;transition:opacity .2s ease}
+#stageProgBar i{display:block;height:100%;width:0;background:var(--jade)}
+@media(prefers-reduced-motion:no-preference){#stageProgBar i{transition:width .28s ease}}
+#stage.uihidden #stageProgBar{opacity:0}
+/* ---- 70 · 장면 이동 썸네일 + 읽음 표시 ---- */
+.sceneItem{align-items:center}
+.sceneItem .th,.sceneItem .thx{width:56px;height:42px;border-radius:5px;flex-shrink:0}
+.sceneItem .th{object-fit:cover;border:1px solid var(--line);background:var(--bg)}
+.sceneItem .thx{border:1px dashed var(--line)}
+.sceneItem .tx{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sceneItem .rd{flex-shrink:0;font-size:11px;color:var(--jade)}
+.sceneItem .rd.no{color:var(--sub);opacity:.55}
+.sceneItem.here{border-color:var(--jade);background:var(--line)}
+/* ---- 72 · 갤러리 라이트박스 ---- */
+#lightbox{position:fixed;inset:0;z-index:12;background:rgba(6,5,4,.95);
+ display:flex;align-items:center;justify-content:center;padding:20px}
+#lightbox img{max-width:100%;max-height:76vh;object-fit:contain;border-radius:10px}
+#lbCap{position:absolute;left:0;right:0;text-align:center;color:var(--sub);font-size:12.5px;
+ padding:0 18px;bottom:calc(56px + env(safe-area-inset-bottom))}
+#lbBar{position:absolute;left:0;right:0;display:flex;gap:8px;justify-content:center;
+ bottom:calc(12px + env(safe-area-inset-bottom))}
+#lbClose{position:absolute;top:calc(12px + env(safe-area-inset-top));
+ right:calc(14px + env(safe-area-inset-right))}
+.galcard .play{position:absolute;top:6px;left:6px;width:30px;height:30px;border-radius:50%;
+ border:none;background:rgba(18,13,9,.6);color:var(--jade);font-size:13px;cursor:pointer;
+ line-height:30px;padding:0}
+/* ---- 90 · LAN 접속 QR ---- */
+#qrBox{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px}
+#qrCanvas{background:#fff;border-radius:8px;image-rendering:pixelated}
+#lanAddr{font-size:clamp(15px,3.4vw,20px);font-weight:800;word-break:break-all}
+/* ---- 88 · safe-area(노치·홈바) — 대사창/버튼이 가려지지 않게 (마지막에 두어 우선) ---- */
+body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
+#dlg{bottom:calc(26px + env(safe-area-inset-bottom))}
+#dlg.top{top:calc(70px + env(safe-area-inset-top))}
+#stageBar{top:calc(12px + env(safe-area-inset-top));right:calc(14px + env(safe-area-inset-right))}
+#choices{padding-bottom:env(safe-area-inset-bottom)}
+.scrollview .topbar{padding-top:calc(10px + env(safe-area-inset-top))}
+.scrollview .cuts{padding-bottom:calc(44px + env(safe-area-inset-bottom))}
+@media(max-width:720px){
+ #dlg{bottom:calc(14px + env(safe-area-inset-bottom))}
+ #dlg.top{top:calc(58px + env(safe-area-inset-top))}}
 </style></head><body>
 <header><h1>웹툰 스튜디오</h1><span class="chip" id="chipTitle"></span>
 <span class="chip" id="chipKey"></span><span class="chip" id="chipModel"></span></header>
@@ -272,8 +350,29 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <button class="btn" id="btnPlay">처음부터 감상</button>
 <button class="btn ghost" id="btnResume" hidden>이어보기</button>
 <button class="btn ghost" id="btnScrollView">세로 스크롤로 읽기</button>
-<button class="btn ghost" id="btnExportViewer">감상본 내보내기 (HTML)</button></div>
+<button class="btn ghost" id="btnExportViewer">감상본 내보내기 (HTML)</button>
+<button class="btn ghost" id="btnExportPwa">📱 PWA 내보내기</button></div>
 <p class="small" id="exportViewerMsg" style="margin-top:8px"></p>
+
+<details class="card" id="viewerExport" style="margin-top:12px">
+<summary class="small">감상본 내보내기 옵션 · 범위와 화질</summary>
+<div class="row" style="margin-top:10px">
+<label class="small"><input type="checkbox" id="evAll"> 승인 안 된 장면도 포함</label>
+최대 변 <input type="number" id="evMaxEdge" value="1600" min="480" max="4096" step="80" style="width:88px">px
+화질 <input type="number" id="evQuality" value="85" min="40" max="100" step="5" style="width:72px"></div>
+<p class="small" style="margin-top:6px">최대 변·화질을 올리면 그림이 선명해지고 파일이 커집니다(폰 소장용은 1600 / 85 권장).
+이 값은 [감상본 내보내기]와 [PWA 내보내기]에 함께 쓰입니다.</p>
+</details>
+
+<details class="card" id="lanShare">
+<summary class="small">📱 폰에서 접속 · 주소와 QR 코드</summary>
+<p class="small" style="margin:8px 0">서버를 <b>--lan</b> 옵션으로 켠 뒤, 같은 와이파이의 폰 카메라로 QR 을 비추면 이 스튜디오가 열립니다.</p>
+<div class="row"><span class="small">주소</span>
+<select id="lanPick" style="flex:1;min-width:180px" hidden></select>
+<button class="btn ghost" id="btnLanCopy">주소 복사</button></div>
+<div id="qrBox"><canvas id="qrCanvas" width="180" height="180" aria-label="접속 주소 QR 코드"></canvas>
+<div><div id="lanAddr"></div><p class="small" id="qrMsg" style="margin-top:4px"></p></div></div>
+</details>
 </section>
 
 <section id="tab-talk">
@@ -285,7 +384,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
  <img id="vnCG" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
   object-position:center 22%;opacity:0;transition:opacity .7s">
  <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,8,20,0) 40%,rgba(10,8,20,.42) 68%,rgba(8,6,18,.86) 100%);pointer-events:none"></div>
- <button id="vnLogBtn" class="btn ghost" style="position:absolute;top:10px;right:10px;z-index:4">기록</button>
+ <button id="talkLogBtn" class="btn ghost" style="position:absolute;top:10px;right:10px;z-index:4">기록</button>
  <div style="position:absolute;left:3%;right:3%;bottom:3%;z-index:3">
   <div id="vnName" style="display:inline-block;background:linear-gradient(135deg,#ff7eb3,#b86bff);
    color:#fff;font-weight:700;padding:4px 16px;border-radius:10px 10px 0 10px;font-size:14px;
@@ -294,23 +393,31 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
    color:#f6f0ff;border-radius:0 12px 12px 12px;padding:14px 16px;min-height:86px;line-height:1.75;
    white-space:pre-wrap;font-size:15px"></div>
  </div>
- <div id="vnLog" hidden style="position:absolute;inset:0;background:rgba(9,7,17,.94);overflow-y:auto;
+ <div id="talkLog" hidden style="position:absolute;inset:0;background:rgba(9,7,17,.94);overflow-y:auto;
   padding:16px;z-index:5;display:flex;flex-direction:column;gap:10px;cursor:default"></div>
 </div>
 <div class="row" style="margin-top:10px">
 <textarea id="talkInput" rows="2" placeholder="지혜에게 말을 걸어보세요 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
 <button class="btn" id="btnTalk">전송</button>
+<button class="btn ghost" id="btnTalkShot">📷 이 순간을 사진으로</button>
 <button class="btn ghost" id="btnTalkClear">처음부터</button></div>
-<p class="small" style="margin-top:6px">사진을 보여주면 배경 CG 로 바뀝니다 · [기록] = 지난 대화 · 대화창 클릭 = 출력 즉시 완성.
-서버: <b>local_llm/runtime/serve.ps1</b></p>
+<p class="small" id="talkMsg" style="margin-top:6px"></p>
+<p class="small" style="margin-top:6px">사진을 보여주면 배경 CG 로 바뀝니다 · [기록] = 지난 대화 · 대화창 클릭 = 출력 즉시 완성 ·
+[📷 이 순간을 사진으로] = 지금 대화를 새 장면으로 남기기(이미지는 나중에 [장면] 탭에서 생성).
+대화는 서버에 저장되어 다음에 이어집니다. 서버: <b>local_llm/runtime/serve.ps1</b></p>
 </section>
 
 <section id="tab-gallery">
 <div class="eyebrow">회상 · CG 갤러리</div>
-<p class="small" style="margin-bottom:10px">승인된 장면을 모아 봅니다. 썸네일을 누르면 <b>그 장면부터 감상</b>,
+<p class="small" style="margin-bottom:10px">승인된 장면을 모아 봅니다. 썸네일을 누르면 <b>크게 보기</b>,
+<b>▶</b> 버튼(또는 더블클릭)이면 <b>그 장면부터 감상</b>,
 ★ 로 명장면을 모으면 그대로 <b>인화 후보</b>가 됩니다.</p>
 <div class="row" style="margin-bottom:12px">
-<label class="small"><input type="checkbox" id="galFavOnly"> 즐겨찾기만</label>
+<label class="small"><input type="checkbox" id="galFavOnly"> 즐겨찾기만 보기</label>
+<select id="favPrintSize" style="width:auto">
+<option value="4x6">엽서 4×6</option><option value="5x7" selected>5×7</option>
+<option value="8x10">8×10</option><option value="A5">A5</option><option value="A4">A4</option></select>
+<button class="btn ghost" id="btnFavPrint">★ 즐겨찾기만 인화</button>
 <span class="small" id="galMsg"></span></div>
 <div id="galGrid" class="galgrid"></div>
 </section>
@@ -329,13 +436,24 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 
 <div id="scrollView" class="scrollview" hidden>
 <div class="topbar"><b id="svTitle"></b>
-<button class="vnbtn" id="btnSvClose">닫기 (Esc)</button></div>
+<span class="row" style="gap:6px"><button class="vnbtn" id="btnSvTop">맨 위로</button>
+<button class="vnbtn" id="btnSvClose">닫기 (Esc)</button></span></div>
 <div class="cuts" id="svCuts"></div></div>
+
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="장면 크게 보기" hidden>
+<img id="lbImg" alt="">
+<div id="lbCap" class="small"></div>
+<div id="lbBar"><button class="vnbtn" id="lbPrev">◀ 이전</button>
+<button class="vnbtn" id="lbPlay">이 장면부터 감상</button>
+<button class="vnbtn" id="lbNext">다음 ▶</button></div>
+<button class="vnbtn" id="lbClose">닫기 (Esc)</button></div>
 
 <div id="stage" role="dialog" aria-modal="true" aria-label="비주얼 노벨 뷰어" tabindex="-1" aria-hidden="true">
 <div id="stageImg"></div>
 <div id="cinemaFx" class="vnfx" hidden><div class="lb top"></div><div class="lb bot"></div></div>
 <div id="stageClick"></div>
+<div id="stageProgBar"><i></i></div>
+<div id="affFloat" hidden aria-hidden="true"></div>
 <div id="stageBar"><span class="chip" id="stageProg"></span>
 <span class="chip" id="affMeter" hidden></span>
 <button class="vnbtn" id="btnAuto" title="자동 진행 (A)">자동</button>
@@ -368,6 +486,13 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <div id="vnScenes" class="vnpanel" role="dialog" aria-modal="true" aria-label="장면 이동" hidden><h3>장면 이동</h3>
 <div id="vnScenesInner"></div>
 <button class="vnbtn" id="btnScenesClose" style="align-self:flex-end">닫기</button></div>
+<div id="endCard" role="dialog" aria-modal="true" aria-label="엔딩" hidden>
+<div class="ttl">ENDING</div>
+<div class="nm" id="endName"></div>
+<div class="sub" id="endSub"></div>
+<div class="row"><button class="vnbtn" id="btnEndRestart">처음부터</button>
+<button class="vnbtn" id="btnEndGallery">갤러리</button>
+<button class="vnbtn" id="btnEndClose">닫기</button></div></div>
 <div id="srLine" class="sr-only" aria-live="polite" role="status"></div>
 </div>
 
@@ -391,7 +516,7 @@ async function refresh(){S=await api("/api/state");
  $("chipModel").textContent="이미지: MakeFun "+(S.mf_token?"연결됨":"토큰 미설정");
  $("chipModel").className="chip "+(S.mf_token?"ok":"bad");
  if(!$("storyline").value)$("storyline").value=S.storyline||"";
- renderChat();renderScenes();renderGallery()}
+ syncFav();syncResume();renderChat();renderScenes();renderGallery();renderLan()}
 function renderChat(){const box=$("chatlog");box.replaceChildren();
  for(const m of S.chat)box.appendChild(el("div","msg "+m.role,m.content));
  box.scrollTop=box.scrollHeight}
@@ -568,6 +693,25 @@ $("btnContact").onclick=async()=>{$("exportMsg").textContent="컨택트시트 �
   $("exportMsg").textContent=d.contact?"컨택트시트 저장: output/print/contact_sheet.png":"대상 없음";
  }catch(e){$("exportMsg").textContent="실패: "+e.message}};
 
+// 생성 진행 조회 — 서버가 /api/gen-status 를 지원할 때만 상황을 보여주고, 없으면 조용히 멈춘다.
+function pollGen(sid,msg){let live=true;
+ const tick=async()=>{if(!live)return;
+  try{const s=await api("/api/gen-status",{scene_id:sid});
+   if(!live)return;
+   if(s&&s.message)msg.textContent=s.message;
+   if(s&&s.running===false){live=false;return}}
+  catch(e){live=false;return}   // 미지원 서버 → 폴링 중단(기존 동작 그대로)
+  setTimeout(tick,4000)};
+ setTimeout(tick,4000);
+ return ()=>{live=false}}
+async function pollGenUntilDone(sid,msg){
+ for(let i=0;i<180;i++){                       // 최대 약 12분
+  await new Promise(r=>setTimeout(r,4000));
+  try{const s=await api("/api/gen-status",{scene_id:sid});
+   if(s&&s.message)msg.textContent=s.message;
+   if(!s||s.running===false)return}
+  catch(e){return}}}
+
 function sceneCard(sc){
  const card=el("div","card");
  const head=el("div","row");
@@ -635,9 +779,12 @@ function sceneCard(sc){
   const bgi=el("button","btn","🎨 이미지 생성");
   bgi.title="MakeFun AI 로 이미지를 생성해 자동 등록합니다 (1~3분)";
   bgi.onclick=async()=>{bgi.disabled=true;msg.textContent="MakeFun 생성 중… (1~3분)";
+   const stop=pollGen(sc.scene_id,msg);   // 서버가 진행 조회를 지원하면 상황을 보여준다
    try{const d=await api("/api/gen-image",{scene_id:sc.scene_id,n:1});
-    msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;await refresh()}
-   catch(e){msg.textContent="실패: "+e.message;bgi.disabled=false}};
+    if(d&&d.running){await pollGenUntilDone(sc.scene_id,msg);stop();
+     msg.textContent="생성 완료 — 후보를 확인하세요";await refresh();return}
+    stop();msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;await refresh()}
+   catch(e){stop();msg.textContent="실패: "+e.message;bgi.disabled=false}};
   act.appendChild(bgi)}
  if(sc.prompt){const bcp=el("button","btn ghost","🖼 프롬프트 복사");
   bcp.title="이 프롬프트를 외부 이미지 AI 에 붙여넣을 수도 있습니다";
@@ -701,72 +848,186 @@ function sceneCard(sc){
  return card}
 function renderScenes(){const box=$("sceneList");box.replaceChildren();
  for(const sc of S.scenes)box.appendChild(sceneCard(sc))}
-// ---- 회상 갤러리 + 즐겨찾기 ----
+// ---- 회상 갤러리 + 즐겨찾기(71) + 라이트박스(72) ----
+// 즐겨찾기는 서버(project/favorites.json)가 정본이고, 서버가 없거나 실패하면 localStorage 로 폴백한다.
+let favSet=new Set(),favRemote=false;
+function syncFav(){
+ if(Array.isArray(S.favorites)){favSet=new Set(S.favorites);favRemote=true;saveFavLocal(favSet)}
+ else if(!favRemote)favSet=loadFavLocal()}
+function favNote(){return "즐겨찾기 "+favSet.size+"개 (인화 후보)"+(favRemote?"":" · 이 브라우저에만 저장됨")}
+async function toggleFav(id){
+ if(favSet.has(id))favSet.delete(id);else favSet.add(id);
+ const on=favSet.has(id);
+ saveFavLocal(favSet);$("galMsg").textContent=favNote();renderGallery();
+ try{const d=await api("/api/favorite",{scene_id:id,on:on});
+  if(d&&Array.isArray(d.scene_ids)){favSet=new Set(d.scene_ids);favRemote=true;
+   saveFavLocal(favSet);$("galMsg").textContent=favNote();renderGallery()}}
+ catch(e){favRemote=false;$("galMsg").textContent=favNote()}}
+function galList(){const favOnly=$("galFavOnly").checked;
+ return S.scenes.filter(s=>s.status==="APPROVED"&&(!favOnly||favSet.has(s.scene_id)))}
 function renderGallery(){const grid=$("galGrid");if(!grid)return;grid.replaceChildren();
- const fav=loadFav(),favOnly=$("galFavOnly").checked;
- const list=S.scenes.filter(s=>s.status==="APPROVED"&&(!favOnly||fav.has(s.scene_id)));
+ const favOnly=$("galFavOnly").checked,list=galList();
  if(!list.length){grid.appendChild(el("p","small",favOnly?"즐겨찾기한 장면이 없습니다.":"승인된 장면이 아직 없습니다 — 장면을 승인하면 여기 모입니다."));return}
- for(const sc of list){const card=el("div","galcard");
-  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;card.appendChild(im)}
+ list.forEach((sc,i)=>{const card=el("div","galcard");
+  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;im.loading="lazy";card.appendChild(im)}
   else card.appendChild(el("div","empty",sc.purpose||sc.scene_id));
   card.appendChild(el("div","cap",(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id)));
-  card.onclick=()=>playFrom(sc.scene_id);
-  const star=el("button","fav"+(fav.has(sc.scene_id)?" on":""),"★");
+  card.onclick=()=>openLightbox(i);            // 72: 클릭 = 크게 보기
+  card.ondblclick=()=>playFrom(sc.scene_id);   // 기존 동작(그 장면부터 감상) 유지
+  const play=el("button","play","▶");
+  play.title="이 장면부터 감상";play.setAttribute("aria-label","이 장면부터 감상");
+  play.onclick=e=>{e.stopPropagation();playFrom(sc.scene_id)};
+  card.appendChild(play);
+  const star=el("button","fav"+(favSet.has(sc.scene_id)?" on":""),"★");
   star.setAttribute("aria-label","즐겨찾기(인화 후보)");star.title="즐겨찾기(인화 후보)";
-  star.onclick=(e)=>{e.stopPropagation();const f=loadFav();
-   if(f.has(sc.scene_id))f.delete(sc.scene_id);else f.add(sc.scene_id);saveFav(f);
-   $("galMsg").textContent="즐겨찾기 "+f.size+"개 (인화 후보)";renderGallery()};
-  card.appendChild(star);grid.appendChild(card)}}
-async function playFrom(sceneId){await refresh();
+  star.onclick=e=>{e.stopPropagation();toggleFav(sc.scene_id)};
+  card.appendChild(star);grid.appendChild(card)})}
+async function playFrom(sceneId){closeLightbox();await refresh();
  const idx=S.scenes.findIndex(s=>s.scene_id===sceneId);   // refresh 후 재검색 — stale 인덱스 방지
  if(idx<0){alert("장면을 찾을 수 없습니다.");return}
  startPlayback(false,idx)}
 $("galFavOnly").onchange=renderGallery;
+// 즐겨찾기만 인화 — 서버가 only_ids/favorites_only 를 받아 대상 장면을 제한한다
+$("btnFavPrint").onclick=async()=>{
+ if(!favSet.size){$("galMsg").textContent="먼저 ★ 로 인화할 장면을 골라주세요.";return}
+ $("galMsg").textContent="즐겨찾기 "+favSet.size+"장 인화 마스터 굽는 중…";
+ try{const d=await api("/api/export",{size:$("favPrintSize").value,
+   favorites_only:true,only_ids:[...favSet]});
+  $("galMsg").textContent=(d.count||0)+"장 → "+(d.dir||"(없음)")+(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")}
+ catch(e){$("galMsg").textContent="실패: "+e.message}};
+
+let lbList=[],lbIdx=-1;
+function openLightbox(i){lbList=galList();lbIdx=i;
+ if(lbIdx<0||lbIdx>=lbList.length)return;
+ const sc=lbList[lbIdx],box=$("lightbox"),im=$("lbImg");
+ if(sc.image_url){im.hidden=false;im.src=sc.image_url;im.alt=sc.purpose||sc.scene_id}
+ else{im.hidden=true;im.removeAttribute("src")}
+ $("lbCap").textContent=(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id)+"  ·  "+sc.scene_id
+  +(sc.image_url?"":"  (이미지 없음)");
+ $("lbPrev").disabled=lbIdx<=0;$("lbNext").disabled=lbIdx>=lbList.length-1;
+ box.hidden=false;$("lbClose").focus()}
+function closeLightbox(){$("lightbox").hidden=true;lbIdx=-1}
+function lbMove(step){if(lbIdx<0)return;const n=lbIdx+step;
+ if(n>=0&&n<lbList.length)openLightbox(n)}
+$("lbClose").onclick=closeLightbox;
+$("lbPrev").onclick=e=>{e.stopPropagation();lbMove(-1)};
+$("lbNext").onclick=e=>{e.stopPropagation();lbMove(1)};
+$("lbPlay").onclick=e=>{e.stopPropagation();const sc=lbList[lbIdx];if(sc)playFrom(sc.scene_id)};
+$("lightbox").onclick=e=>{if(e.target===$("lightbox")||e.target===$("lbImg"))closeLightbox()};
+document.addEventListener("keydown",e=>{if($("lightbox").hidden)return;
+ if(e.key==="Escape"){e.preventDefault();closeLightbox()}
+ else if(e.key==="ArrowLeft")lbMove(-1);
+ else if(e.key==="ArrowRight")lbMove(1)});
 
 // ---- 인물과 대화 (로컬 LLM · 미연시 창) ----
-let talkChat=[],vnTimer=null,vnFull="";
+let talkChat=[],vnTimer=null,vnFull="",talkWaiting=false,talkLoaded=false;
 function vnHeroine(){return (S&&S.characters&&S.characters[0]&&S.characters[0].name)||"이지혜"}
+function vnCharId(){return (S&&S.characters&&S.characters[0]&&S.characters[0].id)||""}
 function vnDefaultCG(){const s=(S&&S.scenes||[]).find(x=>x.image_url);return s?s.image_url:""}
 function vnSetCG(url){const im=$("vnCG");if(!url){im.style.opacity=0;return}
  if(im.src!==url)im.src=url;im.style.opacity=1}
+// 57 · 타자기 속도는 뷰어 설정(VN.textSpeed)을 그대로 쓴다 — 0 이면 즉시 표시
 function vnType(text){if(vnTimer){clearInterval(vnTimer);vnTimer=null}
- vnFull=text;const box=$("vnText");box.textContent="";let i=0;
- vnTimer=setInterval(()=>{i++;box.textContent=text.slice(0,i);
-  if(i>=text.length){clearInterval(vnTimer);vnTimer=null}},22)}
+ vnFull=text;const box=$("vnText");box.textContent="";
+ if(REDUCE||VN.textSpeed<=0){box.textContent=text;return}
+ const chars=[...text];let i=0;   // 코드포인트 단위(이모지 안전)
+ vnTimer=setInterval(()=>{i++;box.textContent=chars.slice(0,i).join("");
+  if(i>=chars.length){clearInterval(vnTimer);vnTimer=null}},Math.max(6,VN.textSpeed))}
 function vnDone(){if(vnTimer){clearInterval(vnTimer);vnTimer=null;$("vnText").textContent=vnFull}}
+// 51 · 응답 대기 인디케이터(점 3개)
+function vnTypingOn(){const box=$("vnText");box.replaceChildren();
+ const w=el("span","typing");w.setAttribute("aria-label","답장을 쓰는 중");
+ for(let i=0;i<3;i++)w.appendChild(el("i"));
+ box.appendChild(w)}
 function renderTalk(){
  $("vnName").textContent=vnHeroine();
  let cg=vnDefaultCG();
  for(const m of talkChat)if(m.photos&&m.photos.length)cg=m.photos[m.photos.length-1].url;
  vnSetCG(cg);
  const last=talkChat[talkChat.length-1];
- if(!last)$("vnText").textContent="(말을 걸어보세요…)";
+ if(talkWaiting)vnTypingOn();
+ else if(!last)$("vnText").textContent="(말을 걸어보세요…)";
  else if(last.role==="user")$("vnText").textContent="…";
+ else if(!vnTimer)$("vnText").textContent=last.content;   // 타자기 중이면 건드리지 않는다
  // 백로그
- const log=$("vnLog");log.replaceChildren();
+ const log=$("talkLog");log.replaceChildren();
  for(const m of talkChat){const b=el("div","msg "+m.role,(m.role==="user"?"나: ":vnHeroine()+": ")+m.content);
   for(const p of (m.photos||[])){const im=el("img");im.src=p.url;im.alt=p.caption||"";
    im.style.cssText="max-width:60%;border-radius:10px;margin-top:8px;display:block";b.appendChild(im)}
   log.appendChild(b)}
  log.scrollTop=log.scrollHeight}
+// 49 · 서버에 저장된 대화 이력을 불러와 이어서 대화한다.
+// 상태/상태조회 응답에 이력이 실려 오면 그것을, 없으면 /api/talk-history 를, 그것도 없으면 조용히 빈 상태.
+function pickMsgs(o){if(!o||typeof o!=="object")return null;
+ for(const k of ["talk_messages","talk_history","talk","messages","history"]){
+  const v=o[k];
+  if(Array.isArray(v))return v;
+  if(v&&typeof v==="object"&&Array.isArray(v.messages))return v.messages}
+ return null}
+async function restoreTalk(status){
+ if(talkLoaded)return;talkLoaded=true;
+ let msgs=pickMsgs(S)||pickMsgs(status);
+ if(!msgs){
+  const cid=vnCharId();
+  try{msgs=pickMsgs(await api("/api/talk-history",cid?{character_id:cid}:{}))}
+  catch(e){msgs=null}}   // 서버가 이 경로를 아직 지원하지 않으면 빈 상태로 시작
+ if(!Array.isArray(msgs)||!msgs.length)return;
+ const restored=[];
+ for(const m of msgs){
+  if(!m||typeof m!=="object")continue;
+  if(m.role!=="user"&&m.role!=="assistant")continue;
+  restored.push({role:m.role,content:String(m.content==null?"":m.content),
+   photos:Array.isArray(m.photos)?m.photos:[]})}
+ if(!restored.length)return;
+ talkChat=restored;renderTalk();
+ $("talkMsg").textContent="지난 대화 "+restored.length+"줄을 불러왔습니다 — 이어서 이야기하세요."}
 async function talkStatus(){const c=$("talkStatus");
  renderTalk();
- try{const d=await api("/api/talk-status",{});
-  if(d.up){c.textContent="로컬 LLM 연결됨";c.className="chip ok"}
+ let st=null;
+ try{st=await api("/api/talk-status",{});
+  if(st.up){c.textContent="로컬 LLM 연결됨";c.className="chip ok"}
   else{c.textContent="로컬 LLM 꺼짐 — serve.ps1 실행 필요";c.className="chip bad"}}
- catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}}
-async function talkSend(){const t=$("talkInput").value.trim();if(!t)return;
- $("talkInput").value="";talkChat.push({role:"user",content:t});renderTalk();
+ catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}
+ await restoreTalk(st)}
+// 50 · 전송 중에는 입력창·전송 버튼을 잠가 중복 전송을 막는다
+function talkLock(on){talkWaiting=on;
+ $("talkInput").disabled=on;$("btnTalk").disabled=on;$("btnTalkShot").disabled=on;
+ $("btnTalk").textContent=on?"전송 중…":"전송"}
+async function talkSend(){if(talkWaiting)return;
+ const t=$("talkInput").value.trim();if(!t)return;
+ $("talkInput").value="";talkChat.push({role:"user",content:t});
+ talkLock(true);renderTalk();vnTypingOn();
  const send=talkChat.map(m=>({role:m.role,content:m.content}));   // 모델엔 텍스트만
  try{const d=await api("/api/talk",{messages:send});
   talkChat.push({role:"assistant",content:d.reply,photos:d.photos||[]});
-  renderTalk();vnType(d.reply)}
- catch(e){$("vnText").textContent="(대화 실패) "+e.message}}
+  talkLock(false);renderTalk();vnType(d.reply)}
+ catch(e){talkLock(false);$("vnText").textContent="(대화 실패) "+e.message}
+ $("talkInput").focus()}
 $("btnTalk").onclick=talkSend;
-$("btnTalkClear").onclick=()=>{talkChat=[];$("vnLog").hidden=true;renderTalk()};
-$("vnTalk").onclick=e=>{if(e.target.id==="vnLogBtn"||!$("vnLog").hidden)return;vnDone()};
-$("vnLogBtn").onclick=e=>{e.stopPropagation();const l=$("vnLog");l.hidden=!l.hidden;if(!l.hidden)renderTalk()};
-$("vnLog").onclick=e=>{e.stopPropagation();$("vnLog").hidden=true};
+// 56 · 오터치로 대화 전체가 날아가지 않게 확인 단계를 둔다
+$("btnTalkClear").onclick=()=>{
+ if(talkWaiting)return;
+ if(talkChat.length&&!confirm("지금까지의 대화 "+talkChat.length+"줄을 지우고 처음부터 시작할까요?\n(이 화면에서는 되돌릴 수 없습니다)"))return;
+ talkChat=[];$("talkLog").hidden=true;$("talkMsg").textContent="처음부터 시작합니다.";
+ vnDone();renderTalk();$("talkInput").focus()};
+// 58 · 지금 이 대화를 장면으로 남긴다 (이미지 생성은 하지 않는다 — [장면] 탭에서 따로)
+$("btnTalkShot").onclick=async()=>{
+ if(talkWaiting)return;
+ if(!talkChat.length){$("talkMsg").textContent="먼저 대화를 나눠보세요 — 남길 순간이 있어야 합니다.";return}
+ const b=$("btnTalkShot");b.disabled=true;$("talkMsg").textContent="이 순간을 장면으로 옮기는 중…";
+ try{const d=await api("/api/talk-to-scene",
+   {character_id:vnCharId(),messages:talkChat.map(m=>({role:m.role,content:m.content}))});
+  const id=(d&&(d.scene_id||d.created||d.id))||"";
+  $("talkMsg").textContent="새 장면이 만들어졌습니다"+(id?" — "+id:"")
+   +" · [장면] 탭에서 프롬프트를 확인하고 [🎨 이미지 생성]을 누르세요. (이미지는 아직 만들지 않았습니다)";
+  await refresh()}
+ catch(e){$("talkMsg").textContent=/not found/i.test(e.message)
+   ?"이 서버는 아직 [이 순간을 사진으로] 를 지원하지 않습니다 — 서버를 최신으로 올린 뒤 다시 시도하세요."
+   :"실패: "+e.message}
+ b.disabled=false};
+$("vnTalk").onclick=e=>{if(e.target.id==="talkLogBtn"||!$("talkLog").hidden)return;vnDone()};
+$("talkLogBtn").onclick=e=>{e.stopPropagation();const l=$("talkLog");l.hidden=!l.hidden;if(!l.hidden)renderTalk()};
+$("talkLog").onclick=e=>{e.stopPropagation();$("talkLog").hidden=true};
 $("talkInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();talkSend()}});
 
 // ---- 세로 스크롤 웹툰 리딩 + 감상본 내보내기 ----
@@ -775,28 +1036,99 @@ function openScrollView(){const c=$("svCuts");c.replaceChildren();
  const list=S.scenes.filter(s=>s.image_url||(s.dialogue||[]).length);
  if(!list.length){alert("표시할 장면이 없습니다.");return}
  for(const sc of list){
-  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;im.loading="lazy";c.appendChild(im)}
+  const blk=el("div","cut");blk.dataset.sid=sc.scene_id;   // 82: 위치 복원의 기준점
+  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;im.loading="lazy";blk.appendChild(im)}
   for(const d of (sc.dialogue||[])){const say=el("div","say");
    if(d.speaker_id){const b=el("b",null,charName(d.speaker_id)+"  ");
     b.style.color=charColor(d.speaker_id)||"var(--jade)";
     say.appendChild(b);say.appendChild(el("span",null,d.text||""))}
    else say.appendChild(el("span","nar",d.text||""));
-   c.appendChild(say)}}
- $("scrollView").hidden=false}
+   blk.appendChild(say)}
+  c.appendChild(blk)}
+ $("scrollView").hidden=false;svRestore()}
+// 82 · 세로 스크롤 리딩의 읽던 위치 저장·복원.
+// 이미지가 lazy 로 늦게 실려 높이가 변하므로 픽셀이 아니라 "어느 장면 블록의 어디쯤"으로 기억한다.
+const svKey=()=>"vn:scroll:"+(S.title||"_");
+let svTimer=null;
+function svSave(){const v=$("scrollView");if(v.hidden)return;
+ const y=v.scrollTop;let sid="",off=y;
+ for(const blk of $("svCuts").children){
+  if(blk.offsetTop<=y+4){sid=blk.dataset.sid;off=y-blk.offsetTop}else break}
+ try{localStorage.setItem(svKey(),JSON.stringify({sid,off,y}))}catch(e){}}
+function svRestore(){let p=null;
+ try{p=JSON.parse(localStorage.getItem(svKey())||"null")}catch(e){p=null}
+ if(!p)return;
+ const v=$("scrollView");
+ const go=()=>{if(v.hidden)return;
+  if(p.sid){const b=[...$("svCuts").children].find(x=>x.dataset.sid===p.sid);
+   if(b){v.scrollTop=b.offsetTop+(p.off||0);return}}
+  v.scrollTop=p.y||0};
+ go();setTimeout(go,160);setTimeout(go,700);setTimeout(go,1800)}
+$("scrollView").addEventListener("scroll",()=>{clearTimeout(svTimer);svTimer=setTimeout(svSave,250)},{passive:true});
+function closeScrollView(){svSave();$("scrollView").hidden=true}
 $("btnScrollView").onclick=async()=>{await refresh();openScrollView()};
-$("btnSvClose").onclick=()=>{$("scrollView").hidden=true};
-document.addEventListener("keydown",e=>{if(!$("scrollView").hidden&&e.key==="Escape")$("scrollView").hidden=true});
+$("btnSvClose").onclick=closeScrollView;
+$("btnSvTop").onclick=()=>{$("scrollView").scrollTop=0;svSave()};
+document.addEventListener("keydown",e=>{if(!$("scrollView").hidden&&e.key==="Escape")closeScrollView()});
+// 63 · 내보내기 옵션(범위·최대 변·화질)을 UI 에서 그대로 서버로 전달
+function exportOpts(){return {all:$("evAll").checked,
+ max_edge:Math.max(480,Math.min(4096,+$("evMaxEdge").value||1600)),
+ quality:Math.max(40,Math.min(100,+$("evQuality").value||85))}}
 $("btnExportViewer").onclick=async()=>{$("exportViewerMsg").textContent="내보내는 중… (이미지 내장)";
- try{const d=await api("/api/export-viewer",{});
+ try{const d=await api("/api/export-viewer",exportOpts());
   $("exportViewerMsg").textContent=d.file+" ("+d.mb+"MB) — 이 파일 하나로 폰에서도 재생됩니다"}
  catch(e){$("exportViewerMsg").textContent="실패: "+e.message}};
+// 86 · PWA 내보내기 — 서버가 아직 지원하지 않으면 CLI 안내만
+$("btnExportPwa").onclick=async()=>{$("exportViewerMsg").textContent="PWA 내보내는 중…";
+ try{const d=await api("/api/export-pwa",exportOpts());
+  $("exportViewerMsg").textContent=(d.dir||d.file||"완료")
+   +" — 폰 브라우저로 열고 [홈 화면에 추가] 하면 앱처럼 씁니다"+(d.mb?" ("+d.mb+"MB)":"")}
+ catch(e){$("exportViewerMsg").textContent=/not found/i.test(e.message)
+   ?"이 서버는 아직 PWA 내보내기를 지원하지 않습니다 — 터미널에서: python tools/export_pwa.py"
+   :"실패: "+e.message}};
 
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
- document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));
+// ---- 90 · LAN 접속 주소 + QR (외부 라이브러리 없이 직접 생성) ----
+function lanCandidates(){const out=[],port=location.port?(":"+location.port):"";
+ const add=u=>{u=String(u||"").trim();if(u&&out.indexOf(u)<0)out.push(u)};
+ for(const k of ["lan_urls","lan_addresses"])if(Array.isArray(S[k]))for(const u of S[k])add(u);
+ for(const k of ["lan_ips","lan"])if(Array.isArray(S[k]))for(const ip of S[k])add("http://"+ip+port);
+ add(location.origin);
+ return out}
+function renderLan(){const pick=$("lanPick");if(!pick)return;
+ const list=lanCandidates(),prev=pick.value;
+ pick.replaceChildren();
+ for(const u of list){const o=el("option",null,u);o.value=u;pick.appendChild(o)}
+ pick.hidden=list.length<2;
+ pick.value=(list.indexOf(prev)>=0)?prev:(list[0]||"");
+ drawQR(pick.value)}
+function drawQR(text){const cv=$("qrCanvas"),msg=$("qrMsg"),addr=$("lanAddr");
+ if(!cv||!addr)return;
+ addr.textContent=text||"(주소 없음)";
+ let mods=null;
+ try{mods=qrEncode(text)}catch(e){mods=null}
+ const ctx=cv.getContext?cv.getContext("2d"):null;
+ if(!ctx||!mods){cv.hidden=true;
+  msg.textContent="QR 을 만들 수 없습니다 — 위 주소를 폰 브라우저에 직접 입력하세요.";return}
+ cv.hidden=false;
+ const n=mods.length,q=4,total=n+q*2,scale=Math.max(3,Math.floor(220/total)),px=total*scale;
+ cv.width=px;cv.height=px;
+ ctx.fillStyle="#fff";ctx.fillRect(0,0,px,px);ctx.fillStyle="#000";
+ for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(mods[r][c])ctx.fillRect((c+q)*scale,(r+q)*scale,scale,scale);
+ msg.textContent="폰 카메라로 이 QR 을 비추세요."}
+$("lanPick").onchange=e=>drawQR(e.target.value);
+$("btnLanCopy").onclick=async()=>{const b=$("btnLanCopy");
+ try{await navigator.clipboard.writeText($("lanAddr").textContent||"");
+  b.textContent="복사됨";setTimeout(()=>{b.textContent="주소 복사"},1300)}
+ catch(e){b.textContent="복사 실패 — 직접 입력하세요"}};
+
+function selectTab(name){const sec=$("tab-"+name);if(!sec)return;
+ document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.tab===name));
  document.querySelectorAll("section").forEach(x=>x.classList.remove("on"));
- b.classList.add("on");$("tab-"+b.dataset.tab).classList.add("on");
- if(b.dataset.tab==="gallery")renderGallery();
- if(b.dataset.tab==="talk")talkStatus()});
+ sec.classList.add("on");
+ if(name==="gallery")renderGallery();
+ if(name==="talk")talkStatus();
+ if(name==="viewer"){syncResume();renderLan()}}
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab));
 $("btnCheck").onclick=async()=>{const d=await api("/api/check",{});
  $("checkOut").textContent=d.output};
 $("btnLint").onclick=async()=>{const o=$("lintOut");o.hidden=false;o.textContent="점검 중…";
@@ -809,6 +1141,8 @@ let affection=30,awaitingChoice=false;   // 분기 엔진(연애 시뮬 등)
 let revealing=false,revealTimer=null,fullText="",autoTimer=null;
 let autoOn=false,skipOn=false;
 let history=[],historyKeys=new Set();
+let navStack=[];        // 66: 방문 히스토리 스택(분기 경로 역추적)
+let wakeLock=null;      // 89: 자동 재생 중 화면 꺼짐 방지
 const VN={textSpeed:26,autoDelay:1500,fs:17,skipAll:false,cinema:false};
 const REDUCE=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const NAME_COLORS=["#5FB39A","#D9A441","#C77DBB","#6FA8DC","#E07A5F","#84C18B","#B58BE0","#E0A458"];
@@ -834,7 +1168,12 @@ function loadVN(){try{const s=JSON.parse(localStorage.getItem("vn:settings")||"{
  if(typeof s.cinema==="boolean")VN.cinema=s.cinema}catch(e){}applyFs()}
 function saveVN(){try{localStorage.setItem("vn:settings",JSON.stringify(VN))}catch(e){}applyFs()}
 const posKey=()=>"vn:pos:"+(S.title||"_");
-function savePos(){try{localStorage.setItem(posKey(),JSON.stringify({vi,di,aff:affection}))}catch(e){}}
+// 66: 분기 경로를 되짚기 위해 방문 스택도 함께 저장한다
+function savePos(){try{localStorage.setItem(posKey(),
+ JSON.stringify({vi,di,aff:affection,stack:navStack.slice(-300)}))}catch(e){}
+ syncResume()}
+// 65: 감상 종료·재개 여부가 바뀌면 즉시 [이어보기] 버튼 표시를 갱신 (새로고침 불필요)
+function syncResume(){const b=$("btnResume");if(b)b.hidden=!loadPos()}
 // ---- 분기 엔진 ----
 const affMax=()=>(S.dating&&S.dating.max)||100;
 const clampAff=v=>Math.max(0,Math.min(affMax(),v));
@@ -846,24 +1185,41 @@ function nextIndex(sc){
   for(const b of sc.branch){if(affection>=(b.min||0)){const i=idxOfScene(b.goto);if(i>=0)return i}}
   return -1}
  return vi+1<S.scenes.length?vi+1:-1}
-function goToIndex(idx){const before=vi;vi=idx;di=0;ended=false;
+function goToIndex(idx){const before=vi;
+ if(idx!==before)navStack.push(before);   // 66: 온 길을 기억 — ← 가 분기 경로를 거꾸로 따라간다
+ vi=idx;di=0;ended=false;hideEndCard();
  if(vi!==before)renderImage();showLine()}
 function showChoices(sc){awaitingChoice=true;clearTimeout(autoTimer);
  const box=$("choices");box.replaceChildren();
  sc.choices.forEach(c=>{const b=el("button",null,c.text);b.onclick=()=>pickChoice(c);box.appendChild(b)});
  box.hidden=false;$("dlg").style.opacity=".3"}
-function pickChoice(c){awaitingChoice=false;$("choices").hidden=true;$("dlg").style.opacity="";
+function pickChoice(c){awaitingChoice=false;
+ $("choices").hidden=true;$("choices").replaceChildren();$("dlg").style.opacity="";
+ const before=affection;
  affection=clampAff(affection+(c.affection||0));updateAff();savePos();
+ affFeedback(affection-before);           // 67: 선택의 결과를 눈으로 보여준다
  const nx=c.goto?idxOfScene(c.goto):(vi+1<S.scenes.length?vi+1:-1);
  if(nx<0){endPlayback();return}goToIndex(nx)}
+// 67 · 호감도 변화 피드백 (+♥ / −♥) — 애니메이션은 prefers-reduced-motion 을 존중
+let affTimer=null;
+function affFeedback(delta){const f=$("affFloat");if(!f||!delta)return;
+ f.textContent=(delta>0?"+♥ ":"−♥ ")+Math.abs(delta);
+ f.className=delta>0?"up":"down";f.hidden=false;
+ if(!REDUCE){void f.offsetWidth;f.classList.add("go")}   // 연속 선택 시 애니메이션 재시작
+ clearTimeout(affTimer);
+ affTimer=setTimeout(()=>{f.hidden=true;f.classList.remove("go")},REDUCE?900:1200);
+ const m=$("affMeter");
+ if(m&&!m.hidden&&!REDUCE){m.classList.remove("bump");void m.offsetWidth;m.classList.add("bump");
+  setTimeout(()=>m.classList.remove("bump"),460)}
+ $("srLine").textContent=(delta>0?"호감도 "+delta+" 올라감":"호감도 "+Math.abs(delta)+" 내려감")}
 function loadPos(){try{return JSON.parse(localStorage.getItem(posKey())||"null")}catch(e){return null}}
-function clearPos(){try{localStorage.removeItem(posKey())}catch(e){}}
+function clearPos(){try{localStorage.removeItem(posKey())}catch(e){}syncResume()}
 const histKey=()=>"vn:hist:"+(S.title||"_");
 function saveHistory(){try{localStorage.setItem(histKey(),JSON.stringify(history.slice(-500)))}catch(e){}}
 function loadHistory(){try{const h=JSON.parse(localStorage.getItem(histKey())||"[]");return Array.isArray(h)?h:[]}catch(e){return []}}
 const favKey=()=>"vn:fav:"+(S.title||"_");
-function loadFav(){try{return new Set(JSON.parse(localStorage.getItem(favKey())||"[]"))}catch(e){return new Set()}}
-function saveFav(set){try{localStorage.setItem(favKey(),JSON.stringify([...set]))}catch(e){}}
+function loadFavLocal(){try{return new Set(JSON.parse(localStorage.getItem(favKey())||"[]"))}catch(e){return new Set()}}
+function saveFavLocal(set){try{localStorage.setItem(favKey(),JSON.stringify([...set]))}catch(e){}}
 function applyCinema(){const fx=$("cinemaFx");if(fx)fx.hidden=!VN.cinema}
 
 // 이미지: 크로스페이드 + 다음 장면 프리로드
@@ -896,9 +1252,17 @@ function onShown(){clearTimeout(autoTimer);
  if(skipOn){autoTimer=setTimeout(()=>{if(!panelOpen())advance(1)},45);return}
  if(autoOn){autoTimer=setTimeout(()=>{if(!panelOpen())advance(1)},VN.autoDelay+fullText.length*22)}}
 
+// 69 · 얇은 진행률 바 — 지금 어디쯤인지 감각을 준다
+function updateProgBar(){const bar=$("stageProgBar");if(!bar)return;
+ const fill=bar.firstElementChild;if(!fill)return;
+ const total=S.scenes.length||1,dl=dlen(S.scenes[vi])||1;
+ const p=ended?1:Math.max(0,Math.min(1,(vi+(di+1)/dl)/total));
+ fill.style.width=(p*100).toFixed(2)+"%"}
+
 function showLine(){const sc=S.scenes[vi];if(!sc)return;
  const dl=dlen(sc);
  $("stageProg").textContent=(vi+1)+" / "+S.scenes.length+(dl>1?"  ·  "+(di+1)+"/"+dl:"");
+ updateProgBar();
  const wasSeen=markSeen();
  if(skipOn&&!wasSeen&&!VN.skipAll)setSkip(false);   // 스킵: 안 읽은 대사에 닿으면 자동 정지
  const line=(sc.dialogue||[])[di],dlg=$("dlg"),name=$("dlgName");
@@ -929,18 +1293,39 @@ function advance(step){
   goToIndex(nx);return}
  else{
   if(di>0){di--;showLine();return}
+  // 66: 스택이 있으면 실제로 지나온 장면으로 — 분기 뒤 ← 가 엉뚱한 장면으로 가지 않게
+  if(navStack.length){vi=navStack.pop();di=dlen(S.scenes[vi])-1;renderImage();showLine();return}
   if(vi>0){vi--;di=dlen(S.scenes[vi])-1;renderImage();showLine()}}}
 
-function endPlayback(){ended=true;clearTimeout(autoTimer);clearInterval(revealTimer);
+function endPlayback(){const last=S.scenes[vi];
+ ended=true;clearTimeout(autoTimer);clearInterval(revealTimer);
  setAuto(false);setSkip(false);const dlg=$("dlg");dlg.classList.remove("top");dlg.classList.add("narration");
  $("dlgName").style.display="none";
- $("dlgText").textContent="— 끝 —"+(S.title?"\n\n『"+S.title+"』":"")+"\n\n(클릭하면 닫힙니다)";
- $("stageProg").textContent=S.scenes.length+" / "+S.scenes.length;clearPos()}
+ $("dlgText").textContent="— 끝 —"+(S.title?"\n\n『"+S.title+"』":"");
+ $("stageProg").textContent=S.scenes.length+" / "+S.scenes.length;
+ updateProgBar();clearPos();showEndCard(last)}
+
+// 68 · 엔딩 카드 — 여운을 두고 [처음부터]·[갤러리] 로 이어지게
+function showEndCard(sc){const c=$("endCard");if(!c)return;
+ const nm=(sc&&sc.ending&&sc.purpose)?sc.purpose:(S.title?"『"+S.title+"』":"— 끝 —");
+ $("endName").textContent=nm;
+ const parts=[];
+ if(S.dating)parts.push("호감도 ♥ "+affection+" / "+affMax());
+ parts.push("장면 "+S.scenes.length+"개 감상 완료");
+ $("endSub").textContent=parts.join("   ·   ");
+ c.hidden=false;releaseWake();
+ $("srLine").textContent="엔딩 — "+nm;
+ const b=$("btnEndRestart");if(b&&b.focus)b.focus()}
+function hideEndCard(){const c=$("endCard");if(c)c.hidden=true}
+$("btnEndRestart").onclick=()=>{hideEndCard();clearPos();startPlayback(false)};
+$("btnEndGallery").onclick=()=>{hideEndCard();exitStage();selectTab("gallery")};
+$("btnEndClose").onclick=()=>{hideEndCard();exitStage()};
 
 function exitStage(){clearTimeout(autoTimer);clearInterval(revealTimer);
  awaitingChoice=false;$("choices").hidden=true;$("dlg").style.opacity="";
+ hideEndCard();releaseWake();
  $("stage").classList.remove("on");$("stage").setAttribute("aria-hidden","true");
- bgNodes().forEach(n=>{n.inert=false});
+ bgNodes().forEach(n=>{n.inert=false});syncResume();
  if(_returnFocus&&_returnFocus.focus)_returnFocus.focus()}
 
 // 패널(기록/설정)
@@ -950,7 +1335,9 @@ function syncExpanded(){$("btnLog").setAttribute("aria-expanded",!$("vnLog").hid
  $("btnScenes").setAttribute("aria-expanded",!$("vnScenes").hidden)}
 function closePanels(){$("vnLog").hidden=true;$("vnSettings").hidden=true;$("vnScenes").hidden=true;
  syncExpanded();if((autoOn||skipOn)&&!revealing&&!ended)onShown()}   // 패널 닫으면 자동/스킵 재개
-function jumpTo(v,d){ended=false;const before=vi;vi=v;di=d;
+function jumpTo(v,d){ended=false;hideEndCard();const before=vi;
+ if(v!==before)navStack.push(before);   // 66: 기록·장면이동으로 건너뛴 것도 되짚을 수 있게
+ vi=v;di=d;
  $("vnLog").hidden=true;$("vnScenes").hidden=true;syncExpanded();
  if(vi!==before)renderImage();showLine()}
 function renderLog(){const box=$("vnLogInner");box.replaceChildren();
@@ -962,25 +1349,51 @@ function renderLog(){const box=$("vnLogInner");box.replaceChildren();
   box.appendChild(row)}
  box.scrollTop=box.scrollHeight}
 function toggleLog(){const wasOpen=!$("vnLog").hidden;closePanels();if(!wasOpen){renderLog();$("vnLog").hidden=false;syncExpanded();$("btnLogClose").focus()}}
+// 70 · 장면 이동 패널: 썸네일 + 읽음 표시
+function sceneRead(i){const dl=dlen(S.scenes[i]);
+ for(let d=0;d<dl;d++)if(seen.has(i+":"+d))return true;
+ return false}
 function renderSceneJump(){const box=$("vnScenesInner");box.replaceChildren();
- S.scenes.forEach((sc,i)=>{const it=el("button","sceneItem");
+ let here=null;
+ S.scenes.forEach((sc,i)=>{const it=el("button","sceneItem"+(i===vi?" here":""));
   it.appendChild(el("span","n",String(sc.scene_order||i+1)));
+  if(sc.image_url){const im=el("img","th");im.src=sc.image_url;im.alt="";im.loading="lazy";it.appendChild(im)}
+  else it.appendChild(el("span","thx"));
   const first=(sc.dialogue||[])[0];
-  it.appendChild(el("span",null,sc.purpose||(first&&first.text)||sc.scene_id));
-  it.onclick=()=>jumpTo(i,0);box.appendChild(it)})}
+  it.appendChild(el("span","tx",sc.purpose||(first&&first.text)||sc.scene_id));
+  const rd=sceneRead(i);
+  it.appendChild(el("span","rd"+(rd?"":" no"),i===vi?"● 지금":(rd?"읽음":"새 장면")));
+  it.onclick=()=>jumpTo(i,0);
+  if(i===vi)here=it;
+  box.appendChild(it)});
+ if(here&&here.scrollIntoView)here.scrollIntoView({block:"center"})}
 function toggleScenes(){const wasOpen=!$("vnScenes").hidden;closePanels();
  if(!wasOpen){renderSceneJump();$("vnScenes").hidden=false;syncExpanded();$("btnScenesClose").focus()}}
 function toggleSettings(){const wasOpen=!$("vnSettings").hidden;closePanels();
  if(!wasOpen){syncSettings();$("vnSettings").hidden=false;syncExpanded();$("btnSetClose").focus()}}
 
+// 89 · 자동 재생 중 화면 꺼짐 방지 (지원 브라우저만, 실패는 무시)
+function requestWake(){
+ if(wakeLock||!navigator.wakeLock||!navigator.wakeLock.request)return;
+ try{navigator.wakeLock.request("screen").then(l=>{wakeLock=l;
+   l.addEventListener("release",()=>{wakeLock=null})},()=>{wakeLock=null})}
+ catch(e){wakeLock=null}}
+function releaseWake(){if(!wakeLock)return;
+ try{wakeLock.release()}catch(e){}
+ wakeLock=null}
+document.addEventListener("visibilitychange",()=>{   // 탭 복귀 시 잠금이 풀려 있으면 다시 요청
+ if(document.visibilityState==="visible"&&(autoOn||skipOn)&&$("stage").classList.contains("on"))requestWake()});
+
 // 자동/스킵 모드
 function setAuto(on){autoOn=on;if(on)skipOn=false;
  $("btnAuto").classList.toggle("on",autoOn);$("btnSkip").classList.remove("on");
  $("btnAuto").setAttribute("aria-pressed",autoOn);$("btnSkip").setAttribute("aria-pressed",false);
+ if(autoOn)requestWake();else if(!skipOn)releaseWake();
  if(autoOn&&!revealing)onShown();else if(!autoOn)clearTimeout(autoTimer)}
 function setSkip(on){skipOn=on;if(on)autoOn=false;
  $("btnSkip").classList.toggle("on",skipOn);$("btnAuto").classList.remove("on");
  $("btnSkip").setAttribute("aria-pressed",skipOn);$("btnAuto").setAttribute("aria-pressed",false);
+ if(skipOn)requestWake();else if(!autoOn)releaseWake();
  if(skipOn){if(revealing)completeText();else onShown()}else clearTimeout(autoTimer)}
 
 // 설정 슬라이더
@@ -1000,11 +1413,13 @@ let _returnFocus=null;
 const bgNodes=()=>[...document.querySelectorAll("body > *")].filter(n=>n.id!=="stage");
 function setUiHidden(h){$("stage").classList.toggle("uihidden",h);$("stageBar").inert=h}
 function startPlayback(resume,at){if(!S.scenes.length){alert("장면이 없습니다. 먼저 장면을 구성하세요.");return}
- loadSeen();ended=false;applyCinema();
+ loadSeen();ended=false;applyCinema();hideEndCard();closeLightbox();
  const pos=resume?loadPos():null;
  if(pos){history=loadHistory();historyKeys=new Set(history.map(h=>h.vi+":"+h.di))}
  else{history=[];historyKeys=new Set();saveHistory()}
- if(typeof at==="number"&&at>=0&&at<S.scenes.length){vi=at;di=0}   // 갤러리: 그 장면부터
+ navStack=(pos&&Array.isArray(pos.stack))   // 66: 이어보기면 지나온 분기 경로도 복원
+  ?pos.stack.filter(n=>Number.isInteger(n)&&n>=0&&n<S.scenes.length):[];
+ if(typeof at==="number"&&at>=0&&at<S.scenes.length){vi=at;di=0;navStack=[]}   // 갤러리: 그 장면부터
  else{vi=pos&&pos.vi<S.scenes.length?pos.vi:0;di=pos&&pos.di<dlen(S.scenes[vi])?pos.di:0}
  affection=(pos&&typeof pos.aff==="number")?pos.aff
   :((S.dating&&typeof S.dating.start_affection==="number")?S.dating.start_affection:30);
@@ -1045,6 +1460,8 @@ $("stageClick").addEventListener("touchend",e=>{const t=e.changedTouches[0],dx=t
  else if(Math.abs(dx)<14&&Math.abs(dy)<14)advance(1)},{passive:true});
 
 document.addEventListener("keydown",e=>{if(!$("stage").classList.contains("on"))return;
+ // 엔딩 카드가 떠 있으면 버튼으로만 진행 — Space/Enter 가 카드를 지나쳐 닫아버리지 않게
+ if(!$("endCard").hidden){if(e.key==="Escape"){hideEndCard();exitStage()}return}
  if(e.key==="Escape"){if(panelOpen())closePanels();else if($("stage").classList.contains("uihidden"))setUiHidden(false);else exitStage();return}
  if(e.key==="ArrowLeft"){advance(-1);return}
  if(e.key===" "||e.key==="ArrowRight"||e.key==="Enter"){e.preventDefault();advance(1);return}
@@ -1056,6 +1473,98 @@ document.addEventListener("keydown",e=>{if(!$("stage").classList.contains("on"))
  else if(e.key==="Control"&&!skipOn)setSkip(true)});
 document.addEventListener("keyup",e=>{if(e.key==="Control"&&skipOn)setSkip(false)});
 
-loadVN();
-refresh().then(()=>{if(loadPos())$("btnResume").hidden=false});
+// ---- QR 생성기 (byte 모드 · EC=L · 버전 1~5) ----
+// 외부 라이브러리 반입 금지 규약 때문에 직접 구현했다. 버전 5(106바이트)면 LAN 주소에 충분하다.
+const QR_ECW={1:7,2:10,3:15,4:20,5:26};      // 버전별 EC 코드워드 수(L, 1블록)
+const QR_DCW={1:19,2:34,3:55,4:80,5:108};    // 버전별 데이터 코드워드 수
+const QR_ALIGN={1:0,2:18,3:22,4:26,5:30};    // 정렬 패턴 중심(0=없음)
+const GEXP=new Array(512),GLOG=new Array(256);
+(function(){let x=1;for(let i=0;i<255;i++){GEXP[i]=x;GLOG[x]=i;x<<=1;if(x&0x100)x^=0x11d}
+ for(let i=255;i<512;i++)GEXP[i]=GEXP[i-255]})();
+const gmul=(a,b)=>(a&&b)?GEXP[GLOG[a]+GLOG[b]]:0;
+function qrGen(n){let g=[1];
+ for(let i=0;i<n;i++){const ng=new Array(g.length+1).fill(0);
+  for(let j=0;j<g.length;j++){ng[j]^=g[j];ng[j+1]^=gmul(g[j],GEXP[i])}
+  g=ng}
+ return g}
+function qrRS(data,n){const g=qrGen(n),res=new Array(n).fill(0);
+ for(const d of data){const f=d^res[0];res.shift();res.push(0);
+  for(let j=0;j<n;j++)res[j]^=gmul(g[j+1],f)}
+ return res}
+function qrFormat(mask){const v=8|mask;   // EC=L(01) + 마스크 3비트 → BCH(15,5)
+ let d=v<<10;
+ for(let i=4;i>=0;i--)if(d&(1<<(i+10)))d^=0x537<<i;
+ return ((v<<10)|d)^0x5412}
+const QR_MASK=[(r,c)=>(r+c)%2===0,(r,c)=>r%2===0,(r,c)=>c%3===0,(r,c)=>(r+c)%3===0,
+ (r,c)=>(Math.floor(r/2)+Math.floor(c/3))%2===0,(r,c)=>((r*c)%2+(r*c)%3)===0,
+ (r,c)=>(((r*c)%2+(r*c)%3)%2)===0,(r,c)=>(((r+c)%2+(r*c)%3)%2)===0];
+function qrPenalty(m){const n=m.length;let p=0;
+ const runs=line=>{let s=1;
+  for(let i=1;i<n;i++){if(line[i]===line[i-1])s++;else{if(s>=5)p+=3+(s-5);s=1}}
+  if(s>=5)p+=3+(s-5)};
+ const pat=line=>{const s=line.join("");let idx=-1;
+  while((idx=s.indexOf("10111010000",idx+1))>=0)p+=40;
+  idx=-1;
+  while((idx=s.indexOf("00001011101",idx+1))>=0)p+=40};
+ for(let r=0;r<n;r++){runs(m[r]);pat(m[r])}
+ for(let c=0;c<n;c++){const col=[];for(let r=0;r<n;r++)col.push(m[r][c]);runs(col);pat(col)}
+ for(let r=0;r<n-1;r++)for(let c=0;c<n-1;c++){const v=m[r][c];
+  if(v===m[r][c+1]&&v===m[r+1][c]&&v===m[r+1][c+1])p+=3}
+ let dark=0;for(let r=0;r<n;r++)for(let c=0;c<n;c++)dark+=m[r][c];
+ return p+10*Math.floor(Math.abs(dark*100/(n*n)-50)/5)}
+function qrEncode(text){
+ const bytes=Array.from(new TextEncoder().encode(String(text||"")));
+ let ver=0;
+ for(let v=1;v<=5;v++)if(bytes.length+2<=QR_DCW[v]){ver=v;break}
+ if(!ver)throw new Error("주소가 너무 깁니다");
+ const bits=[],push=(val,n)=>{for(let i=n-1;i>=0;i--)bits.push((val>>i)&1)};
+ push(4,4);push(bytes.length,8);for(const b of bytes)push(b,8);   // byte 모드
+ const cap=QR_DCW[ver]*8;
+ while(bits.length<cap&&bits.length%8!==0)bits.push(0);           // 종단자 + 바이트 정렬
+ const dw=[];
+ for(let i=0;i<bits.length;i+=8){let v=0;for(let j=0;j<8;j++)v=(v<<1)|bits[i+j];dw.push(v)}
+ const pad=[0xEC,0x11];let pi=0;
+ while(dw.length<QR_DCW[ver])dw.push(pad[pi++%2]);
+ const all=dw.concat(qrRS(dw,QR_ECW[ver]));
+ const size=17+4*ver,m=[],fn=[];
+ for(let i=0;i<size;i++){m.push(new Array(size).fill(0));fn.push(new Array(size).fill(0))}
+ const setF=(r,c,v)=>{if(r<0||c<0||r>=size||c>=size)return;m[r][c]=v;fn[r][c]=1};
+ const finder=(r0,c0)=>{for(let r=-1;r<=7;r++)for(let c=-1;c<=7;c++){
+  const inside=r>=0&&r<=6&&c>=0&&c<=6;let v=0;
+  if(inside){const d=Math.max(Math.abs(r-3),Math.abs(c-3));v=d===2?0:1}
+  setF(r0+r,c0+c,v)}};
+ finder(0,0);finder(0,size-7);finder(size-7,0);
+ for(let i=8;i<size-8;i++){setF(6,i,i%2===0?1:0);setF(i,6,i%2===0?1:0)}
+ if(QR_ALIGN[ver]){const a=QR_ALIGN[ver];
+  for(let r=-2;r<=2;r++)for(let c=-2;c<=2;c++){
+   const d=Math.max(Math.abs(r),Math.abs(c));setF(a+r,a+c,d===1?0:1)}}
+ setF(size-8,8,1);   // 다크 모듈
+ for(let i=0;i<=8;i++){if(!fn[8][i])setF(8,i,0);if(!fn[i][8])setF(i,8,0)}
+ for(let i=0;i<8;i++){if(!fn[8][size-1-i])setF(8,size-1-i,0);if(!fn[size-1-i][8])setF(size-1-i,8,0)}
+ const dbits=[];for(const b of all)for(let i=7;i>=0;i--)dbits.push((b>>i)&1);
+ let bi=0,up=true;
+ for(let col=size-1;col>0;col-=2){
+  if(col===6)col--;   // 세로 타이밍 열은 건너뛴다
+  for(let k=0;k<size;k++){const row=up?size-1-k:k;
+   for(let s=0;s<2;s++){const cc=col-s;
+    if(fn[row][cc])continue;
+    m[row][cc]=bi<dbits.length?dbits[bi]:0;bi++}}
+  up=!up}
+ let best=null,bestP=Infinity;
+ for(let mk=0;mk<8;mk++){
+  const t=m.map(r=>r.slice());
+  for(let r=0;r<size;r++)for(let c=0;c<size;c++)if(!fn[r][c]&&QR_MASK[mk](r,c))t[r][c]^=1;
+  const f=qrFormat(mk),gb=i=>(f>>i)&1;
+  for(let i=0;i<=5;i++)t[8][i]=gb(i);
+  t[8][7]=gb(6);t[8][8]=gb(7);t[7][8]=gb(8);
+  for(let i=9;i<15;i++)t[14-i][8]=gb(i);
+  for(let i=0;i<8;i++)t[size-1-i][8]=gb(i);
+  for(let i=8;i<15;i++)t[8][size-15+i]=gb(i);
+  t[size-8][8]=1;
+  const p=qrPenalty(t);
+  if(p<bestP){bestP=p;best=t}}
+ return best}
+
+loadVN();syncResume();renderLan();
+refresh().catch(e=>{$("chipTitle").textContent="상태 불러오기 실패";$("chipTitle").className="chip bad"});
 </script></body></html>

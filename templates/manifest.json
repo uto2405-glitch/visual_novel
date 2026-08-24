@@ -3,24 +3,35 @@
   "title": "",
   "language": "ko-KR",
   "orchestrator": {
-    "provider": "Grok (SuperGrok 구독)",
-    "mode": "api",
+    "provider": "로컬 LLM (llama.cpp · OpenAI 호환 서버)",
+    "mode": "local",
     "api": {
-      "base_url": "https://api.x.ai/v1",
-      "model": "grok-4.6",
-      "key_env": "XAI_API_KEY",
-      "note": "SuperGrok 구독과 별개. console.x.ai 키 발급 후 mode 를 api 로 변경"
+      "base_url": "http://127.0.0.1:8080/v1",
+      "model": "local-qwen",
+      "key_env": "",
+      "note": "스토리·장면구성·프롬프트 담당. 로컬이라 키 불필요·무료. 그록으로 바꾸려면 mode 를 api 로 두고 base_url=https://api.x.ai/v1, key_env=XAI_API_KEY 로 기입"
     }
   },
   "image_generator": {
-    "provider": "TBD",
-    "model": "TBD"
+    "provider": "MakeFun AI",
+    "model": "a2e",
+    "api": {
+      "base_url": "https://makefun.ai",
+      "token_env": "MAKEFUN_API_TOKEN"
+    },
+    "note": "토큰은 환경변수로만 주입한다. 이 파일에 값을 적지 않는다."
   },
   "output": {
     "mode": "visual_novel_scene_cards",
     "print_ready": true,
-    "aspect_ratio": "TBD",
-    "min_long_edge_px": 1024
+    "aspect_ratio": "2:3",
+    "min_long_edge_px": 1024,
+    "visual_style": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art"
+  },
+  "talk": {
+    "character_id": "CHAR-001",
+    "relationship": "",
+    "base_url": "http://127.0.0.1:8080/v1"
   },
   "workflow": {
     "human_gates": [

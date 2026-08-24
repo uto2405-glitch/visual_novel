@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""환경 종합 점검 — "왜 안 되지?" 를 30초 안에 좁혀준다.
+
+파이썬·의존성·환경변수·로컬 LLM·디스크·프로젝트 구조를 한 번에 훑고, 항목마다
+무엇을 하면 되는지 한국어로 알려준다. **읽기 전용** — 어떤 파일도 만들거나 고치지 않고,
+과금되는 이미지 생성 API 는 호출하지 않는다(토큰이 있는지 여부만 본다).
+
+사용법:
+  python tools/doctor.py            # 전체 점검
+  python tools/doctor.py --json     # 기계 판독용
+
+종료코드: 0 = 치명 문제 없음(경고는 있을 수 있음) / 1 = 고쳐야 할 문제 있음
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import sys
+import urllib.parse
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools"
+MANIFEST = ROOT / "project" / "manifest.json"
+SCENES = ROOT / "project" / "scenes"
+
+OK, WARN, ERR = "OK", "경고", "문제"
+_results: list = []
+
+
+def _console_guard() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        enc = (getattr(stream, "encoding", "") or "").lower()
+        if enc not in ("utf-8", "utf8"):
+            try:
+                stream.reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
+_console_guard()
+
+
+def add(section: str, name: str, level: str, detail: str, fix: str = "") -> None:
+    _results.append({"section": section, "name": name, "level": level,
+                     "detail": detail, "fix": fix})
+
+
+# ------------------------------------------------------------------ 1. 실행 환경
+def check_python() -> None:
+    v = sys.version_info
+    ver = f"{v.major}.{v.minor}.{v.micro}"
+    if (v.major, v.minor) >= (3, 9):
+        add("실행 환경", "파이썬 버전", OK, f"{ver} ({sys.executable})")
+    else:
+        add("실행 환경", "파이썬 버전", ERR, f"{ver} — 3.9 이상이 필요합니다",
+            "python.org 에서 3.9+ 를 설치한 뒤 다시 실행하세요.")
+
+
+def check_pillow() -> None:
+    try:
+        from PIL import Image  # noqa: F401
+        try:
+            from PIL import __version__ as pv
+        except ImportError:
+            pv = getattr(Image, "__version__", "?")
+        add("실행 환경", "Pillow(인화·감상본 최적화)", OK, f"설치됨 {pv}")
+    except ImportError:
+        add("실행 환경", "Pillow(인화·감상본 최적화)", WARN,
+            "없음 — 감상·검사·생성은 그대로 되지만 인화 마스터 굽기(print_export)는 막힙니다",
+            "python -m pip install Pillow")
+
+
+def check_tools() -> None:
+    need = ["webapp.py", "studio.html", "advance_scene.py", "check_protocol.py",
+            "vn_compose.py", "local_llm.py", "makefun_client.py", "print_preflight.py",
+            "print_export.py", "export_viewer.py", "export_pwa.py", "backup_project.py",
+            "secret_scan.py", "selftest.py"]
+    missing = [n for n in need if not (TOOLS / n).exists()]
+    if missing:
+        add("실행 환경", "도구 파일", ERR, "누락: " + ", ".join(missing),
+            "패키지를 다시 받거나 백업에서 복원하세요 (docs/RECOVERY_RUNBOOK.md).")
+    else:
+        add("실행 환경", "도구 파일", OK, f"{len(need)}개 모두 있음")
+
+
+def check_disk() -> None:
+    try:
+        usage = shutil.disk_usage(str(ROOT))
+    except OSError as exc:
+        add("실행 환경", "디스크 여유", WARN, f"확인 실패: {exc}")
+        return
+    free_gb = usage.free / (1024 ** 3)
+    detail = f"{free_gb:.1f}GB 남음"
+    if free_gb < 1:
+        add("실행 환경", "디스크 여유", ERR, detail + " — 이미지·백업 저장이 실패할 수 있습니다",
+            "backups/ 의 오래된 스냅샷이나 output/ 을 정리하세요.")
+    elif free_gb < 5:
+        add("실행 환경", "디스크 여유", WARN, detail + " — 감상본·인화 마스터는 수백 MB 를 씁니다")
+    else:
+        add("실행 환경", "디스크 여유", OK, detail)
+
+
+# ------------------------------------------------------------------ 2. 환경변수
+def _env_state(name: str) -> tuple[bool, int]:
+    v = os.environ.get(name, "").strip()
+    return bool(v), len(v)
+
+
+def check_env() -> None:
+    """설정 여부와 길이만 본다 — 값은 어떤 경우에도 출력하지 않는다."""
+    mf_set, mf_len = _env_state("MAKEFUN_API_TOKEN")
+    if mf_set:
+        add("환경변수", "MAKEFUN_API_TOKEN(이미지 생성)", OK, f"설정됨 (길이 {mf_len}자, 값 비표시)")
+    else:
+        add("환경변수", "MAKEFUN_API_TOKEN(이미지 생성)", WARN,
+            "미설정 — 이미지 생성만 막히고 나머지 기능은 정상입니다",
+            "docs/ENV_SETUP.md 의 setx 절차로 영구 등록하세요.")
+
+    xai_set, xai_len = _env_state("XAI_API_KEY")
+    if xai_set:
+        add("환경변수", "XAI_API_KEY(그록 예비 경로)", OK, f"설정됨 (길이 {xai_len}자, 값 비표시)")
+    else:
+        add("환경변수", "XAI_API_KEY(그록 예비 경로)", OK,
+            "미설정 — 현재 오케스트레이터는 로컬 LLM 이라 필요 없습니다")
+
+    url = os.environ.get("LOCAL_LLM_URL", "").strip()
+    if url:
+        p = urllib.parse.urlparse(url)
+        add("환경변수", "LOCAL_LLM_URL", OK, f"{p.scheme}://{p.netloc} (매니페스트 talk.base_url 보다 우선)")
+    else:
+        add("환경변수", "LOCAL_LLM_URL", OK, "미설정 — 매니페스트 talk.base_url 또는 기본값을 씁니다")
+
+
+# ------------------------------------------------------------------ 3. 로컬 LLM
+def check_local_llm() -> None:
+    sys.path.insert(0, str(TOOLS))
+    try:
+        import local_llm
+    except Exception as exc:
+        add("로컬 LLM", "모듈 로드", ERR, f"tools/local_llm.py 를 불러올 수 없습니다: {exc}")
+        return
+    st = local_llm.status()
+    if st.get("up"):
+        models = ", ".join(m for m in st.get("models", []) if m) or "(모델명 미표시)"
+        add("로컬 LLM", "서버 응답", OK, f"{st['url']} · 모델 {models}")
+    else:
+        add("로컬 LLM", "서버 응답", WARN,
+            f"{st.get('url')} 에 응답 없음 — 스토리·프롬프트·대화 탭이 막힙니다",
+            "start_studio.ps1 로 함께 켜거나, "
+            "powershell -File c:\\Users\\USER\\claude\\local_llm\\runtime\\serve.ps1 을 실행하세요.")
+
+
+# ------------------------------------------------------------------ 4. 프로젝트 구조
+def _load(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), ""
+    except (ValueError, OSError) as exc:
+        return None, str(exc)
+
+
+def check_project() -> None:
+    if not MANIFEST.exists():
+        add("프로젝트", "매니페스트", ERR, "project/manifest.json 이 없습니다",
+            "templates/manifest.json 을 project/manifest.json 으로 복사해 시작하세요.")
+        return
+    mf, err = _load(MANIFEST)
+    if not isinstance(mf, dict):
+        add("프로젝트", "매니페스트", ERR, f"JSON 을 읽을 수 없습니다: {err}",
+            "backups/ 의 최신 스냅샷에서 복원하세요 (docs/RECOVERY_RUNBOOK.md).")
+        return
+
+    title = str(mf.get("title", "")).strip()
+    add("프로젝트", "매니페스트", OK if title else WARN,
+        f"제목 '{title}'" if title else "제목이 비어 있습니다 (템플릿 상태)")
+
+    chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
+    no_anchor = [c.get("character_id", "?") for c in chars if not str(c.get("prompt_anchor", "")).strip()]
+    if not chars:
+        add("프로젝트", "캐릭터 기준정보", WARN, "캐릭터가 없습니다")
+    elif no_anchor:
+        add("프로젝트", "캐릭터 기준정보", WARN,
+            f"{len(chars)}명 중 prompt_anchor 없음: {', '.join(no_anchor)}",
+            "앵커가 없으면 검사기 A6 와 컷 간 얼굴 일관성이 무너집니다.")
+    else:
+        add("프로젝트", "캐릭터 기준정보", OK, f"{len(chars)}명 · 앵커 모두 있음")
+
+    no_ref = [c.get("character_id", "?") for c in chars if not c.get("reference_images")]
+    if chars:
+        add("프로젝트", "레퍼런스 이미지", WARN if no_ref else OK,
+            f"reference_images 비어 있음: {', '.join(no_ref)}" if no_ref else "모든 캐릭터에 등록됨",
+            "캐릭터 시트를 만들어 등록하면 컷 간 얼굴이 안정됩니다." if no_ref else "")
+
+    style = str(mf.get("output", {}).get("visual_style", "")).strip()
+    add("프로젝트", "화풍(output.visual_style)", OK if style else WARN,
+        style[:60] if style else "미지정 — 코드 기본 화풍이 쓰입니다")
+
+    check_scenes()
+
+
+def check_scenes() -> None:
+    if not SCENES.exists():
+        add("프로젝트", "장면 폴더", ERR, "project/scenes/ 가 없습니다",
+            "폴더를 만들고 templates/scene.json 으로 첫 장면을 작성하세요.")
+        return
+    files = sorted(SCENES.glob("SCENE-*.json"))
+    if not files:
+        add("프로젝트", "장면", WARN, "장면 파일이 없습니다 — 스토리라인부터 시작하세요")
+        return
+
+    broken, mismatch, orders, status_count, missing_img = [], [], [], {}, []
+    for f in files:
+        sc, err = _load(f)
+        if not isinstance(sc, dict):
+            broken.append(f.name)
+            continue
+        if sc.get("scene_id") != f.stem:
+            mismatch.append(f.name)
+        order = sc.get("scene_order")
+        if isinstance(order, int):
+            orders.append(order)
+        st = str(sc.get("status", "?"))
+        status_count[st] = status_count.get(st, 0) + 1
+        sel = str(sc.get("assets", {}).get("selected_image", "") or "").strip()
+        if sel and not (ROOT / sel).exists():
+            missing_img.append(f"{f.stem}→{sel}")
+
+    add("프로젝트", "장면 수", OK, f"{len(files)}개 · " +
+        " / ".join(f"{k} {v}" for k, v in sorted(status_count.items())))
+
+    if broken:
+        add("프로젝트", "장면 JSON 무결성", ERR, "읽을 수 없는 파일: " + ", ".join(broken),
+            "backups/ 스냅샷에서 해당 파일만 복원하세요.")
+    else:
+        add("프로젝트", "장면 JSON 무결성", OK, "모두 정상 JSON")
+
+    if mismatch:
+        add("프로젝트", "파일명=scene_id", ERR, "불일치: " + ", ".join(mismatch),
+            "파일명과 scene_id 를 일치시키세요 (검사기 A2).")
+    else:
+        add("프로젝트", "파일명=scene_id", OK, "모두 일치")
+
+    if orders:
+        expected = list(range(1, len(orders) + 1))
+        if sorted(orders) != expected:
+            add("프로젝트", "scene_order 연속성", ERR,
+                f"1..{len(orders)} 연속이 아닙니다 (현재 {sorted(orders)})",
+                "검사기 A5 가 FAIL 합니다. 번호를 1부터 빈틈없이 다시 매기세요.")
+        else:
+            add("프로젝트", "scene_order 연속성", OK, f"1..{len(orders)} 연속")
+
+    if missing_img:
+        add("프로젝트", "선택 이미지 존재", ERR, "원본 없음: " + ", ".join(missing_img),
+            "images/ 를 백업에서 복원하거나 해당 장면을 revise 하세요.")
+    else:
+        add("프로젝트", "선택 이미지 존재", OK, "선택된 이미지 원본이 모두 있습니다")
+
+
+def check_backups() -> None:
+    b = ROOT / "backups"
+    snaps = sorted(b.glob("manifest_*.json")) if b.exists() else []
+    if not snaps:
+        add("백업", "스냅샷", WARN, "백업이 없습니다",
+            "python tools/backup_project.py snapshot 을 한 번 실행해 두세요.")
+    else:
+        add("백업", "스냅샷", OK, f"{len(snaps)}개 · 최신 {snaps[-1].stem.replace('manifest_', '')}")
+
+
+# ------------------------------------------------------------------ 출력
+def run_all() -> None:
+    check_python()
+    check_pillow()
+    check_tools()
+    check_disk()
+    check_env()
+    check_local_llm()
+    check_project()
+    check_backups()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="환경 종합 점검 (읽기 전용)")
+    ap.add_argument("--json", action="store_true", help="JSON 으로 출력")
+    args = ap.parse_args()
+
+    run_all()
+    errors = sum(1 for r in _results if r["level"] == ERR)
+    warns = sum(1 for r in _results if r["level"] == WARN)
+
+    if args.json:
+        print(json.dumps({"errors": errors, "warnings": warns, "results": _results},
+                         ensure_ascii=False, indent=2))
+        return 1 if errors else 0
+
+    mark = {OK: "OK  ", WARN: "!   ", ERR: "✗   "}
+    print("=" * 62)
+    print("환경 점검 (doctor) — 읽기 전용 진단")
+    print("=" * 62)
+    section = None
+    for r in _results:
+        if r["section"] != section:
+            section = r["section"]
+            print(f"\n[{section}]")
+        print(f"  {mark[r['level']]}{r['name']}: {r['detail']}")
+        if r["fix"] and r["level"] != OK:
+            print(f"        → {r['fix']}")
+    print("\n" + "-" * 62)
+    if errors:
+        print(f"문제 {errors}건 · 경고 {warns}건 — 위의 → 안내부터 처리하세요.")
+    elif warns:
+        print(f"치명 문제 없음 · 경고 {warns}건 (기능은 동작합니다).")
+    else:
+        print("모두 정상입니다.")
+    print("비밀값 점검은 별도: python tools/secret_scan.py")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

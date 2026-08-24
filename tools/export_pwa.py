@@ -9,11 +9,15 @@ output/pwa/ 에 index.html + manifest.webmanifest + sw.js + 아이콘을 생성�
 사용법:
   python tools/export_pwa.py            # 승인 장면
   python tools/export_pwa.py --all
+  python tools/export_pwa.py --icon-from-cut            # 대표 컷으로 앱 아이콘 생성(Pillow 필요)
+  python tools/export_pwa.py --icon-from-cut --icon-scene SCENE-004
 읽기: project/·images/.  쓰기: output/pwa/ 만.  표준 라이브러리(+선택 Pillow).
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import struct
 import sys
 import zlib
@@ -44,7 +48,7 @@ MANIFEST = """{
 }
 """
 
-SW = """// 오프라인 캐시(cache-first). 재배포 시 CACHE 버전만 올리면 갱신.
+SW = """// 오프라인 캐시(cache-first). CACHE 는 번들 내용의 sha256 — 내용이 바뀐 재배포에서만 갱신된다.
 const CACHE = "vn-__VER__";
 const ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", e => {
@@ -93,20 +97,80 @@ def _icon(path: Path, size: int) -> None:
                      + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
 
 
-def export(include_all: bool, max_edge: int, quality: int) -> Path:
-    data, html = ev.build_html(include_all, max_edge, quality)
+def _pick_cut(data: dict, scene_id: str | None):
+    """아이콘으로 쓸 대표 컷의 data URI. 지정이 없으면 표지 커버와 같은 컷."""
+    scenes = data.get("scenes") or []
+    if scene_id:
+        for s in scenes:
+            if s.get("id") == scene_id and s.get("img"):
+                return s["img"]
+        return None
+    cover = data.get("cover")
+    if isinstance(cover, int) and 0 <= cover < len(scenes) and scenes[cover].get("img"):
+        return scenes[cover]["img"]
+    for s in scenes:
+        if s.get("img"):
+            return s["img"]
+    return None
+
+
+def _square_image(data_uri: str):
+    """data URI → 정사각 중앙 크롭 이미지. Pillow 가 없거나 실패하면 None(기본 아이콘 폴백)."""
+    try:
+        from PIL import Image
+        import io
+    except ImportError:
+        return None
+    try:
+        raw = base64.b64decode(data_uri.split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as im:
+            im.load()
+            img = im.convert("RGB")
+        w, h = img.size
+        e = min(w, h)
+        # 인물이 위쪽에 오는 세로 컷이 많아 중앙보다 조금 위를 잡는다
+        top = max(0, int((h - e) * 0.32))
+        return img.crop(((w - e) // 2, top, (w - e) // 2 + e, top + e))
+    except Exception:
+        return None
+
+
+def _icon_from_cut(img, path: Path, size: int) -> bool:
+    try:
+        from PIL import Image
+        out = img.resize((size, size), Image.LANCZOS)
+        out.save(path, format="PNG", optimize=True)
+        return True
+    except Exception:
+        return False
+
+
+def export(include_all: bool, max_edge: int, quality: int,
+           cover_id: str | None = None, font_spec: str | None = None,
+           icon_from_cut: bool = False, icon_scene: str | None = None) -> Path:
+    data, html = ev.build_html(include_all, max_edge, quality, cover_id, font_spec)
     html = html.replace("</head>", HEAD_INJECT + "</head>", 1)
     html = html.replace("</body>", SW_REG + "</body>", 1)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "index.html").write_text(html, encoding="utf-8")
     title = data["title"]
     short = (title[:12]) or "VN"
-    (OUT / "manifest.webmanifest").write_text(
-        MANIFEST.replace("__TITLE__", title).replace("__SHORT__", short), encoding="utf-8")
-    ver = str(abs(hash(html)) % 100000)  # 내용 바뀌면 캐시 버전 변경
-    (OUT / "sw.js").write_text(SW.replace("__VER__", ver), encoding="utf-8")
-    _icon(OUT / "icon-192.png", 192)
-    _icon(OUT / "icon-512.png", 512)
+    webmanifest = MANIFEST.replace("__TITLE__", title).replace("__SHORT__", short)
+    (OUT / "manifest.webmanifest").write_text(webmanifest, encoding="utf-8")
+
+    cut = _square_image(_pick_cut(data, icon_scene) or "") if icon_from_cut else None
+    for size in (192, 512):
+        p = OUT / f"icon-{size}.png"
+        if not (cut is not None and _icon_from_cut(cut, p, size)):
+            _icon(p, size)   # Pillow 없음·컷 없음 → 기존 기본 아이콘
+
+    # 캐시 버전은 번들 내용의 sha256 — 내용이 같으면 재실행해도 그대로(불필요한 재캐시 방지)
+    h = hashlib.sha256()
+    h.update(html.encode("utf-8"))
+    h.update(webmanifest.encode("utf-8"))
+    for size in (192, 512):
+        h.update((OUT / f"icon-{size}.png").read_bytes())
+    (OUT / "sw.js").write_text(SW.replace("__VER__", h.hexdigest()[:12]), encoding="utf-8")
     return OUT
 
 
@@ -115,15 +179,28 @@ def main() -> int:
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--max-edge", type=int, default=1600)
     ap.add_argument("--quality", type=int, default=85)
+    ap.add_argument("--cover", metavar="SCENE-ID", help="표지 커버 CG 로 쓸 장면")
+    ap.add_argument("--embed-font", nargs="?", const="auto", metavar="PATH",
+                    help="한글 폰트 임베드(기본 꺼짐)")
+    ap.add_argument("--icon-from-cut", action="store_true",
+                    help="앱 아이콘을 대표 승인 컷으로 생성(Pillow 없으면 기본 아이콘)")
+    ap.add_argument("--icon-scene", metavar="SCENE-ID", help="아이콘에 쓸 장면(기본: 표지 컷)")
     args = ap.parse_args()
     try:
-        out = export(args.all, args.max_edge, args.quality)
+        out = export(args.all, args.max_edge, args.quality, args.cover, args.embed_font,
+                     args.icon_from_cut, args.icon_scene)
     except RuntimeError as exc:
         print(f"오류: {exc}")
         return 1
     total = sum(f.stat().st_size for f in out.glob("*"))
     print(f"PWA 번들 생성: {out.relative_to(ROOT).as_posix()}/ ({total / 1_000_000:.2f} MB)")
     print("  index.html · manifest.webmanifest · sw.js · icon-192/512.png")
+    if args.icon_from_cut:
+        try:
+            import PIL  # noqa: F401
+            print("  아이콘: 대표 컷 중앙 크롭으로 생성")
+        except ImportError:
+            print("  아이콘: Pillow 가 없어 기본 아이콘으로 폴백 (pip install pillow)")
     print("다음: 이 폴더를 정적 호스팅 → 폰에서 '홈 화면에 추가' 또는 PWABuilder.com 으로 APK 생성.")
     return 0
 

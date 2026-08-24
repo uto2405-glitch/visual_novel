@@ -1,0 +1,58 @@
+{
+  "scene_id": "SCENE-011",
+  "scene_order": 11,
+  "episode": 3,
+  "status": "SCENE_PLAN",
+  "location_id": "LOC-003",
+  "time": "노을",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "오해가 풀리고 한 걸음의 간격이 사라진다 (호감 엔딩)",
+  "action_beat": "지혜가 먼저 웃으며 팔짱을 낀다",
+  "emotion": "안도와 설렘",
+  "camera": {
+    "shot": "close-up",
+    "angle": "eye-level",
+    "framing": "맞닿은 팔과 웃음 짓는 옆얼굴",
+    "focus": "풀어진 표정"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "다음엔 늦으면 문자라도 해. 걱정했단 말이야.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "응. 다신 안 늦을게.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-001",
+      "text": "…그럼 오늘 건, 없던 걸로 해줄게.",
+      "placement": "bottom"
+    }
+  ],
+  "ending": true,
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

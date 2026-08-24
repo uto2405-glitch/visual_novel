@@ -1,0 +1,53 @@
+{
+  "scene_id": "SCENE-012",
+  "scene_order": 12,
+  "episode": 3,
+  "status": "SCENE_PLAN",
+  "location_id": "LOC-003",
+  "time": "노을",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "끝내 한마디를 꺼내지 못한 채 하루가 저문다 (여운 엔딩)",
+  "action_beat": "지혜가 짧게 손을 흔들고 먼저 돌아선다",
+  "emotion": "서먹함",
+  "camera": {
+    "shot": "wide",
+    "angle": "eye-level",
+    "framing": "혼자 남은 자리와 멀어지는 뒷모습",
+    "focus": "내려간 어깨"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "오늘은… 그냥 여기서 헤어지자. 잘 가.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(붙잡지 못한 한마디가, 오래 남았다.)",
+      "placement": "bottom"
+    }
+  ],
+  "ending": true,
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

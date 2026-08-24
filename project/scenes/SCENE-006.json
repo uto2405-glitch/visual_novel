@@ -1,9 +1,10 @@
 {
   "scene_id": "SCENE-006",
   "scene_order": 6,
+  "episode": 1,
   "status": "APPROVED",
   "location_id": "LOC-003",
-  "time": "해질녘",
+  "time": "노을",
   "characters": [
     "CHAR-001",
     "CHAR-002"
@@ -14,14 +15,14 @@
   "emotion": "따뜻한 여운",
   "camera": {
     "shot": "close-up",
-    "angle": "eye level",
+    "angle": "eye-level",
     "framing": "내민 손과 미소",
     "focus": "지혜의 미소"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, close-up, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings reaching out her hand with a bright warm smile toward 18-year-old Korean boy, neat black hair, casual shirt on a riverside walkway at sunset, orange and violet sky reflecting on the water",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, close-up, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings reaching out her hand with a bright warm smile toward 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt on a riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, at sunset, orange and violet sky reflecting on the water",
     "external_generator": "",
     "external_model": ""
   },

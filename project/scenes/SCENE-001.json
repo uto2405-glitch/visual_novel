@@ -1,6 +1,7 @@
 {
   "scene_id": "SCENE-001",
   "scene_order": 1,
+  "episode": 1,
   "status": "APPROVED",
   "location_id": "LOC-001",
   "time": "오후",
@@ -14,14 +15,14 @@
   "emotion": "설렘",
   "camera": {
     "shot": "medium",
-    "angle": "eye level",
+    "angle": "eye-level",
     "framing": "창가 지혜",
     "focus": "지혜의 미소"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving brightly at a window seat in a cozy warm wood-toned cafe near a school, afternoon sunlight through the window, seen over the shoulder of 18-year-old Korean boy, neat black hair, casual shirt",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving brightly at a window seat in a cozy warm wood-toned cafe near a school, afternoon sunlight through the window, seen over the shoulder of 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt",
     "external_generator": "",
     "external_model": ""
   },

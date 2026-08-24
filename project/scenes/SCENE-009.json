@@ -1,0 +1,69 @@
+{
+  "scene_id": "SCENE-009",
+  "scene_order": 9,
+  "episode": 3,
+  "status": "SCENE_PLAN",
+  "location_id": "LOC-001",
+  "time": "오후",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "약속에 늦은 나를 기다리던 지혜가 서운함을 감춘 채 먼저 일어선다 (오해의 시작)",
+  "action_beat": "지혜가 식어버린 잔을 밀어 놓고 가방을 든다",
+  "emotion": "서운함",
+  "camera": {
+    "shot": "medium",
+    "angle": "eye-level",
+    "framing": "테이블을 사이에 둔 두 사람",
+    "focus": "식은 잔과 돌아간 시선"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "…아니야, 괜찮아. 나도 방금 왔는걸.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(괜찮다고 할 때가, 제일 안 괜찮은 거였는데.)",
+      "placement": "bottom"
+    }
+  ],
+  "choices": [
+    {
+      "text": "늦은 이유를 솔직하게 말한다",
+      "affection": 8,
+      "goto": "SCENE-010"
+    },
+    {
+      "text": "말없이 지혜의 손목을 붙잡는다",
+      "affection": 5,
+      "goto": "SCENE-010"
+    },
+    {
+      "text": "장난으로 얼버무린다",
+      "affection": -4,
+      "goto": "SCENE-010"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

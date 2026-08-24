@@ -24,8 +24,30 @@
     "mode": "visual_novel_scene_cards",
     "print_ready": true,
     "aspect_ratio": "2:3",
-    "min_long_edge_px": 1024
+    "min_long_edge_px": 1024,
+    "visual_style": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art"
   },
+  "dating": {
+    "max": 100,
+    "start_affection": 30
+  },
+  "episodes": [
+    {
+      "episode": 1,
+      "title": "봄, 하루",
+      "note": "SCENE-001~006 · 선형"
+    },
+    {
+      "episode": 2,
+      "title": "여름밤, 불꽃놀이",
+      "note": "SCENE-007~008 · 선형"
+    },
+    {
+      "episode": 3,
+      "title": "엇갈린 오후",
+      "note": "SCENE-009~012 · 호감도 분기(선택지 → 두 갈래 엔딩)"
+    }
+  ],
   "talk": {
     "character_id": "CHAR-001",
     "relationship": "다정한 여자친구",
@@ -47,10 +69,45 @@
         "eyes": "또렷한 갈색 눈",
         "build": "보통",
         "wardrobe": "파스텔 니트 가디건",
-        "signature_props": ["작은 별 귀걸이"]
+        "signature_props": ["작은 별 귀걸이"],
+        "personality": "밝고 다정하지만 속은 여리다. 좋아하는 사람 앞에서는 장난과 부끄러움이 반반이고, 서운한 건 바로 말하지 못하고 표정에 먼저 드러난다.",
+        "speech_style": "편한 반말. 기쁘면 말끝을 늘이고(\"맞아~\", \"그치~\"), 부끄러우면 딴 얘기로 돌린다. 삐치면 장난스러운 존댓말(\"네, 그러시든가요\")을 쓴다."
       },
       "reference_images": [],
-      "prompt_anchor": "18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings"
+      "prompt_anchor": "18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings",
+      "wardrobe_default": "pastel knit cardigan",
+      "wardrobe_variants": [
+        {
+          "variant_id": "default",
+          "label": "기본 사복",
+          "season": "봄",
+          "anchor": "pastel knit cardigan over a white blouse, pleated beige skirt"
+        },
+        {
+          "variant_id": "school",
+          "label": "교복",
+          "season": "공용",
+          "anchor": "navy school blazer uniform with a red ribbon tie, pleated skirt"
+        },
+        {
+          "variant_id": "outing",
+          "label": "외출복",
+          "season": "공용",
+          "anchor": "cream trench coat over a light beige one-piece dress, small shoulder bag"
+        },
+        {
+          "variant_id": "summer_festival",
+          "label": "여름 축제",
+          "season": "여름",
+          "anchor": "light blue floral summer one-piece dress, thin white cardigan on the shoulders"
+        },
+        {
+          "variant_id": "winter",
+          "label": "겨울",
+          "season": "겨울",
+          "anchor": "thick ivory wool coat, red knitted scarf and mittens"
+        }
+      ]
     },
     {
       "character_id": "CHAR-002",
@@ -63,10 +120,45 @@
         "eyes": "검정",
         "build": "보통",
         "wardrobe": "캐주얼 셔츠",
-        "signature_props": []
+        "signature_props": [],
+        "personality": "말수는 적지만 관찰력이 좋다. 상대의 취향을 기억해 두었다가 조용히 챙기는 쪽이고, 정작 자기 마음은 늦게 꺼낸다.",
+        "speech_style": "담백한 반말. 감정 표현이 서툴러 마음은 대부분 괄호 안 속마음 독백으로 흐른다."
       },
       "reference_images": [],
-      "prompt_anchor": "18-year-old Korean boy, neat black hair, casual shirt"
+      "prompt_anchor": "18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt",
+      "wardrobe_default": "plain white casual shirt",
+      "wardrobe_variants": [
+        {
+          "variant_id": "default",
+          "label": "기본 사복",
+          "season": "봄",
+          "anchor": "plain white casual shirt, dark slim jeans"
+        },
+        {
+          "variant_id": "school",
+          "label": "교복",
+          "season": "공용",
+          "anchor": "navy school blazer uniform with a striped tie, white dress shirt"
+        },
+        {
+          "variant_id": "outing",
+          "label": "외출복",
+          "season": "공용",
+          "anchor": "light grey open shirt over a white tee, canvas backpack"
+        },
+        {
+          "variant_id": "summer_festival",
+          "label": "여름 축제",
+          "season": "여름",
+          "anchor": "short-sleeved navy linen shirt, light cotton trousers"
+        },
+        {
+          "variant_id": "winter",
+          "label": "겨울",
+          "season": "겨울",
+          "anchor": "charcoal wool coat over a grey knit sweater"
+        }
+      ]
     }
   ],
   "locations": [
@@ -88,11 +180,11 @@
     },
     {
       "location_id": "LOC-003",
-      "name": "노을 강변",
+      "name": "강변 산책로",
       "version": 1,
-      "description": "노을이 지는 강변 산책로",
+      "description": "강을 따라 이어지는 산책로. 시간대(노을·밤)는 장면의 time 필드로 정하고 앵커에는 넣지 않는다.",
       "reference_images": [],
-      "prompt_anchor": "riverside walkway at sunset, orange and violet sky reflecting on the water"
+      "prompt_anchor": "riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water"
     }
   ],
   "props": []

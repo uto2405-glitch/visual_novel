@@ -11,6 +11,7 @@
   python tools/print_preflight.py --all           # 상태 무관, selected_image 있는 전부
   python tools/print_preflight.py --dpi 300        # 목표 DPI(기본 300)
 
+판독 지원: PNG / JPEG / WEBP / TIFF (헤더만 읽는다 — 전체 로드·Pillow 불필요)
 읽기 전용. project/·images/ 를 변경하지 않는다. 표준 라이브러리만 사용.
 """
 from __future__ import annotations
@@ -19,19 +20,30 @@ import argparse
 import json
 import struct
 import sys
+import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "project" / "manifest.json"
 SCENES = ROOT / "project" / "scenes"
 
-# (이름, 짧은 변 in, 긴 변 in) — 개인 소장 인화 기본 규격
+MM_PER_IN = 25.4
+
+# (이름, 짧은 변 in, 긴 변 in) — 개인 소장 인화 기본 규격.
+# 순서 주의: 회귀 테스트가 rows[0] 을 엽서 4×6 으로 보므로 새 규격은 뒤에 덧붙인다.
 PRINT_SIZES = [
     ("엽서 4×6", 4.0, 6.0),
     ("5×7", 5.0, 7.0),
     ("8×10", 8.0, 10.0),
     ("A5", 5.83, 8.27),
     ("A4", 8.27, 11.69),
+    ("3×5", 3.5, 5.0),          # 89×127mm, 한국 인화소 최소 사진 규격
+]
+# 소형 굿즈 규격 — 표에는 보여주되 '인화 가능' 판정에는 넣지 않는다
+# (엽서보다 작아 거의 항상 통과해서, 통과시키면 판정이 무의미해진다)
+SMALL_SIZES = [
+    ("포토카드 55×85mm", 55.0 / MM_PER_IN, 85.0 / MM_PER_IN),
+    ("명함 50×90mm", 50.0 / MM_PER_IN, 90.0 / MM_PER_IN),
 ]
 DPI_GOOD = 300   # 사진 인화 권장
 DPI_OK = 240     # 근거리 감상 허용 하한
@@ -51,8 +63,39 @@ _console_guard()
 
 
 # ------------------------------------------------------------- 이미지 크기 판독
+def _tiff_size(f, head):
+    """클래식 TIFF 의 첫 IFD 에서 ImageWidth(256)/ImageLength(257) 만 읽는다."""
+    bo = "<" if head[:2] == b"II" else ">"
+    if struct.unpack(bo + "H", head[2:4])[0] != 42:
+        return None                       # BigTIFF(43) 등 변종은 미지원 → 수동 확인
+    f.seek(struct.unpack(bo + "I", head[4:8])[0])
+    raw = f.read(2)
+    if len(raw) < 2:
+        return None
+    w = h = None
+    for _ in range(min(struct.unpack(bo + "H", raw)[0], 256)):
+        e = f.read(12)
+        if len(e) < 12:
+            break
+        tag, typ = struct.unpack(bo + "HH", e[:4])
+        if tag in (256, 257):
+            if typ == 3:                  # SHORT (값이 앞 2바이트에 채워진다)
+                val = struct.unpack(bo + "H", e[8:10])[0]
+            elif typ == 4:                # LONG
+                val = struct.unpack(bo + "I", e[8:12])[0]
+            else:
+                continue
+            if tag == 256:
+                w = val
+            else:
+                h = val
+            if w and h:
+                break
+    return (int(w), int(h)) if w and h else None
+
+
 def image_size(path: Path):
-    """(width, height) 또는 None. PNG/JPEG/WEBP 헤더만 읽는다(전체 로드 없음)."""
+    """(width, height) 또는 None. PNG/JPEG/WEBP/TIFF 헤더만 읽는다(전체 로드 없음)."""
     try:
         with open(path, "rb") as f:
             head = f.read(32)
@@ -103,7 +146,10 @@ def image_size(path: Path):
                     w = (bits & 0x3FFF) + 1
                     h = ((bits >> 14) & 0x3FFF) + 1
                     return w, h
-    except OSError:
+            # TIFF (인화 마스터 형식 — 후보로 허용하므로 판독도 지원)
+            if head[:4] in (b"II\x2a\x00", b"MM\x00\x2a"):
+                return _tiff_size(f, head)
+    except (OSError, struct.error):
         return None
     return None
 
@@ -134,22 +180,28 @@ def grade(dpi: float, target: int) -> str:
     return "업스케일필요"
 
 
+def _row(name: str, s_in: float, l_in: float, px_w: int, px_h: int, target: int) -> dict:
+    dpi, crop = fill_dpi(px_w, px_h, s_in, l_in)
+    dpi = round(dpi)                           # 표시 DPI 와 판정을 일치시킨다
+    return {"size": name, "dpi": dpi, "crop_pct": crop, "grade": grade(dpi, target),
+            "short_in": s_in, "long_in": l_in,
+            "mm": [round(s_in * MM_PER_IN), round(l_in * MM_PER_IN)]}
+
+
 def preflight_image(px_w: int, px_h: int, target: int = DPI_GOOD) -> dict:
     """이미지 픽셀 → 규격별 판정 + 목표DPI 만족 최대 크기 + 요약."""
     rows, best, best_area = [], None, -1.0
     for name, s_in, l_in in PRINT_SIZES:
-        dpi, crop = fill_dpi(px_w, px_h, s_in, l_in)
-        dpi = round(dpi)                       # 표시 DPI 와 판정을 일치시킨다
-        g = grade(dpi, target)
-        rows.append({"size": name, "dpi": dpi, "crop_pct": crop, "grade": g,
-                     "short_in": s_in, "long_in": l_in})
+        r = _row(name, s_in, l_in, px_w, px_h, target)
+        rows.append(r)
         area = s_in * l_in                     # 통과 규격 중 '물리 면적 최대'를 최대 규격으로
-        if dpi >= target and area > best_area:
+        if r["dpi"] >= target and area > best_area:
             best, best_area = name, area
+    small = [_row(n, s, l, px_w, px_h, target) for n, s, l in SMALL_SIZES]
     # 목표DPI 로 이 이미지가 낼 수 있는 긴 변 인치
     long_px = max(px_w, px_h)
     max_long_in = round(long_px / target, 2)
-    return {"px": [px_w, px_h], "target_dpi": target, "rows": rows,
+    return {"px": [px_w, px_h], "target_dpi": target, "rows": rows, "small_rows": small,
             "max_size_at_target": best, "max_long_in_at_target": max_long_in,
             "printable": best is not None}
 
@@ -190,6 +242,20 @@ def collect(scene_filter: str | None, include_all: bool):
     return out
 
 
+def _pad(s: str, width: int) -> str:
+    """한글은 콘솔에서 두 칸을 먹으므로 표시폭 기준으로 채운다."""
+    w = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+    return s + " " * max(0, width - w)
+
+
+def _row_line(r: dict) -> str:
+    """규격 1줄 표시 — 인치 이름 옆에 mm 를 같이 보여 인화소 주문서와 맞춘다."""
+    mark = {"좋음": "OK ", "보통": "~  ", "업스케일필요": "✗  "}[r["grade"]]
+    mm = f"({r['mm'][0]}×{r['mm'][1]}mm)"
+    crop = f" · 크롭 {r['crop_pct']}%" if r["crop_pct"] > 1 else ""
+    return f"{mark}{_pad(r['size'], 18)}{_pad(mm, 14)}{r['dpi']:>4}DPI  {r['grade']}{crop}"
+
+
 def report(target: int, scene_filter: str | None, include_all: bool) -> int:
     mf = load(MANIFEST)
     min_edge = mf.get("output", {}).get("min_long_edge_px", 1024)
@@ -225,10 +291,10 @@ def report(target: int, scene_filter: str | None, include_all: bool) -> int:
         pf = preflight_image(size[0], size[1], target)
         print(f"{size[0]}×{size[1]}px  →  {target}DPI 최대: "
               f"{pf['max_size_at_target'] or '(엽서 미만)'}  (긴 변 {pf['max_long_in_at_target']}인치)")
-        for r in pf["rows"]:
-            mark = {"좋음": "OK ", "보통": "~  ", "업스케일필요": "✗  "}[r["grade"]]
-            crop = f" · 크롭 {r['crop_pct']}%" if r["crop_pct"] > 1 else ""
-            print(f"     {mark}{r['size']:<8} {r['dpi']:>4}DPI  {r['grade']}{crop}")
+        for r in sorted(pf["rows"], key=lambda r: r["short_in"] * r["long_in"]):
+            print("     " + _row_line(r))
+        for r in pf["small_rows"]:             # 굿즈 규격은 판정 밖 참고용
+            print("     ·  " + _row_line(r))
         if not pf["printable"]:
             worst = max(worst, 1)
         print()

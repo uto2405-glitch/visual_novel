@@ -1,0 +1,62 @@
+{
+  "scene_id": "SCENE-010",
+  "scene_order": 10,
+  "episode": 3,
+  "status": "SCENE_PLAN",
+  "location_id": "LOC-003",
+  "time": "노을",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "말이 끊긴 채 강변까지 걸어온다 — 여기서 하루의 결이 갈린다 (분기점)",
+  "action_beat": "두 사람 사이에 한 걸음의 간격이 남아 있다",
+  "emotion": "어색한 침묵",
+  "camera": {
+    "shot": "wide",
+    "angle": "eye-level",
+    "framing": "한 걸음 떨어져 걷는 두 사람",
+    "focus": "좁혀지지 않는 간격"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "…오늘 나, 좀 이상했지.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(뭐라고 말해야 할지, 아직도 모르겠다.)",
+      "placement": "bottom"
+    }
+  ],
+  "branch": [
+    {
+      "min": 35,
+      "goto": "SCENE-011"
+    },
+    {
+      "min": 0,
+      "goto": "SCENE-012"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

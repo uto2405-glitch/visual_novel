@@ -1,6 +1,7 @@
 {
   "scene_id": "SCENE-007",
   "scene_order": 7,
+  "episode": 2,
   "status": "APPROVED",
   "location_id": "LOC-003",
   "time": "밤",
@@ -14,19 +15,27 @@
   "emotion": "설렘",
   "camera": {
     "shot": "medium",
-    "angle": "eye-level"
+    "angle": "eye-level",
+    "framing": "불꽃을 올려다보는 두 사람의 상반신",
+    "focus": "소매를 잡은 지혜의 손과 올려다보는 옆얼굴"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, Wisely looks up at the fireworks while gently holding my sleeve., with 18-year-old Korean boy, neat black hair, casual shirt, riverside walkway at sunset, orange and violet sky reflecting on the water, night",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, looking up at the fireworks while lightly holding his sleeve, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, at night, summer fireworks blooming in the deep blue night sky, festival lights reflecting on the water",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
       "speaker_id": "CHAR-001",
-      "text": "…예쁘다. 내년에도 같이 보자?"
+      "text": "…예쁘다. 내년에도 같이 보자?",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(불꽃보다, 옆에서 올려다보는 얼굴이 더 눈에 들어왔다.)",
+      "placement": "bottom"
     }
   ],
   "assets": {
