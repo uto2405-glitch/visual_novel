@@ -707,6 +707,36 @@ def main() -> int:
             noreq_ok = len(p4) == 0
             check("T44 앨범 사진(태그 파싱·없음 억제·키워드 폴백·요청아님)",
                   tag_ok and neg_ok and fb_ok and noreq_ok)
+
+            # T45 — MakeFun 이미지 생성 클라이언트: 토큰 안내·https 강제·규격 계산
+            spec_mk = importlib.util.spec_from_file_location("mk_box", str(box / "tools" / "makefun_client.py"))
+            mk = importlib.util.module_from_spec(spec_mk)
+            spec_mk.loader.exec_module(mk)
+            _tok_bak = os.environ.pop("MAKEFUN_API_TOKEN", None)
+            tok_msg = ""
+            try:
+                mk.token()
+            except RuntimeError as e:
+                tok_msg = str(e)
+            if _tok_bak is not None:
+                os.environ["MAKEFUN_API_TOKEN"] = _tok_bak
+            http_block = ""
+            _mkm_bak = mk.MANIFEST
+            try:
+                bad_mf = box / "mk_bad_manifest.json"
+                bad_mf.write_text(json.dumps({"image_generator": {"api": {"base_url": "http://evil.example"}}}),
+                                  encoding="utf-8")
+                mk.MANIFEST = bad_mf
+                try:
+                    mk.base_url()
+                except RuntimeError as e:
+                    http_block = str(e)
+            finally:
+                mk.MANIFEST = _mkm_bak
+            w_mk, h_mk = mk._size_from_manifest()
+            check("T45 MakeFun: 무토큰 안내 · http 차단 · 2:3 규격(긴변 1024)",
+                  "MAKEFUN_API_TOKEN" in tok_msg and "https" in http_block
+                  and max(w_mk, h_mk) == 1024 and mk._ext("https://x/y.jpg?a=1") == ".jpg")
         finally:
             web.terminate()
             mock.shutdown()

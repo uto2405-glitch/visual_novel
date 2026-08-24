@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import advance_scene as adv  # noqa: E402
 import local_llm  # noqa: E402
 import make_grok_input  # noqa: E402
+import makefun_client  # noqa: E402
 import print_preflight  # noqa: E402
 import scene_lint  # noqa: E402
 import vn_compose  # noqa: E402
@@ -119,9 +120,12 @@ def state() -> dict:
     if mf and isinstance(mf.get("orchestrator"), dict):
         model = mf["orchestrator"].get("api", {}).get("model", "")
     dating = (mf or {}).get("dating") if isinstance((mf or {}).get("dating"), dict) else None
+    orch_local = str(((mf or {}).get("orchestrator", {}) or {}).get("mode", "")) == "local"
     return {"manifest": bool(mf), "title": (mf or {}).get("title", ""),
             "dating": dating,
             "key_set": xai_client.key_set(), "model": model,
+            "orch_local": orch_local,
+            "mf_token": bool(os.environ.get(makefun_client.TOKEN_ENV, "").strip()),
             "characters": [{"id": c.get("character_id"), "name": c.get("name", "")}
                            for c in (mf or {}).get("characters", [])],
             "scenes": scenes, "storyline": storyline, "chat": chat}
@@ -131,7 +135,7 @@ def do_chat(messages: list[dict]) -> str:
     sys_msg = {"role": "system",
                "content": "너는 비주얼 노벨/웹툰 스토리 기획 파트너다. 한국어로 간결하고 구체적으로 답한다."}
     window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
-    reply = xai_client.chat([sys_msg] + window)
+    reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000)
     with adv.WRITE_LOCK:
         STORY_DIR.mkdir(parents=True, exist_ok=True)
         (STORY_DIR / "chatlog.json").write_text(
@@ -148,13 +152,15 @@ def _require_scene(sid) -> Path:
 
 
 def set_scene_prompt(sid: str, text: str) -> dict:
-    """수동 모드: grok.com 에서 받은 이미지 프롬프트 출력을 장면에 저장 → 상태 PROMPT + 자동 검사."""
+    """이미지 프롬프트를 장면에 저장 → 상태 PROMPT + 자동 검사. (로컬 LLM 생성/수동 붙여넣기 공용)"""
     text = (text or "").strip()
     if not text:
-        raise RuntimeError("붙여넣은 Grok 출력이 비어 있습니다.")
+        raise RuntimeError("이미지 프롬프트가 비어 있습니다.")
     path = _require_scene(sid)
     with adv.WRITE_LOCK:
         sc = adv.load(path)
+        if sc.get("status") == "APPROVED":
+            raise RuntimeError("APPROVED 장면은 프롬프트를 바꿀 수 없습니다. 먼저 revise 하세요.")
         sc.setdefault("prompt", {})["grok_output"] = text
         sc["status"] = "PROMPT"
         adv.save(path, sc)
@@ -307,6 +313,58 @@ def r_lint(b):
     return scene_lint.lint_scenes()
 
 
+_TIME_EN = {"밤": "night", "낮": "daytime", "아침": "morning", "저녁": "evening",
+            "노을": "sunset", "새벽": "dawn", "오후": "afternoon"}
+
+
+def r_gen_prompt(b):
+    """로컬 LLM 으로 장면 이미지 프롬프트 생성 (그록 대체) → 저장 + 자동 검사.
+
+    앵커(인물/장소 원문)는 코드가 조립해 A6 를 보장하고, LLM 은 동작·구도 문장만 만든다.
+    """
+    sid = b.get("scene_id")
+    _require_scene(sid)
+    sc = adv.load(adv.scene_path(sid))
+    mf = json.loads((ROOT / "project" / "manifest.json").read_text(encoding="utf-8"))
+    chars = {c.get("character_id"): c for c in mf.get("characters", [])}
+    locs = {l.get("location_id"): l for l in mf.get("locations", [])}
+    ask = ("아래 장면을 그림으로 그릴 때의 '동작과 구도'만 영어 한 문장(20단어 이내)으로 써라. "
+           "인물 외모나 장소 묘사는 쓰지 마라. 설명 없이 그 문장만 출력하라.\n"
+           f"목적: {sc.get('purpose', '')}\n동작: {sc.get('action_beat', '')}\n"
+           f"감정: {sc.get('emotion', '')}\n시간: {sc.get('time', '')}")
+    action = local_llm.chat([{"role": "user", "content": ask}], temperature=0.4, max_tokens=120)
+    action = " ".join(action.strip().splitlines()).strip().strip('"')[:220]
+    cam = sc.get("camera", {}) if isinstance(sc.get("camera"), dict) else {}
+    parts = ["bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3",
+             f"{cam.get('shot', 'medium')} shot"]
+    ids = [c for c in sc.get("characters", []) if c in chars]
+    if ids:
+        parts.append(chars[ids[0]].get("prompt_anchor", ""))
+    parts.append(action)
+    for cid in ids[1:]:
+        parts.append("with " + chars[cid].get("prompt_anchor", ""))
+    if sc.get("location_id") in locs:
+        parts.append(locs[sc["location_id"]].get("prompt_anchor", ""))
+    t = str(sc.get("time", "")).strip()
+    if t:
+        parts.append(_TIME_EN.get(t, t))
+    return set_scene_prompt(sid, ", ".join(p.strip() for p in parts if p and p.strip()))
+
+
+def r_gen_image(b):
+    """MakeFun AI 로 장면 이미지 생성 → images/raw/<scene>/ 저장 + 자동 등록·검사."""
+    sid = b.get("scene_id")
+    _require_scene(sid)
+    sc = adv.load(adv.scene_path(sid))
+    if sc.get("status") == "APPROVED":
+        raise RuntimeError("APPROVED 장면입니다. 다시 생성하려면 먼저 revise 하세요.")
+    n = max(1, min(int(b.get("n", 1) or 1), 4))
+    files = makefun_client.generate_for_scene(sid, n=n)
+    reg = register_images(sid)
+    reg["generated"] = [f.name for f in files]
+    return reg
+
+
 def r_talk_status(b):
     return local_llm.status()
 
@@ -391,6 +449,7 @@ POST_ROUTES = {
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/upload-image": r_upload_image,
     "/api/talk": r_talk, "/api/talk-status": r_talk_status,
+    "/api/gen-prompt": r_gen_prompt, "/api/gen-image": r_gen_image,
 }
 
 

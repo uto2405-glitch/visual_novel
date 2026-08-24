@@ -3,18 +3,22 @@
   "title": "두근두근 연애 시뮬레이터",
   "language": "ko-KR",
   "orchestrator": {
-    "provider": "Grok (SuperGrok 구독 · 수동 복붙)",
-    "mode": "manual",
+    "provider": "로컬 LLM (llama.cpp · Qwen)",
+    "mode": "local",
     "api": {
-      "base_url": "https://api.x.ai/v1",
-      "model": "grok-4.6",
-      "key_env": "XAI_API_KEY",
-      "note": "수동 모드 — grok.com 복붙으로 운용(크레딧 0)"
+      "base_url": "http://127.0.0.1:8080/v1",
+      "model": "local-qwen",
+      "key_env": "",
+      "note": "그록 대체 — 내 PC 로컬 LLM(무료·프라이버시). 수동 붙여넣기 경로도 유지"
     }
   },
   "image_generator": {
-    "provider": "TBD (외부 이미지 AI)",
-    "model": "TBD"
+    "provider": "MakeFun AI",
+    "model": "a2e",
+    "api": {
+      "base_url": "https://makefun.ai",
+      "token_env": "MAKEFUN_API_TOKEN"
+    }
   },
   "output": {
     "mode": "visual_novel_scene_cards",

@@ -187,8 +187,10 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 </nav>
 
 <section id="tab-story" class="on">
-<div class="eyebrow">1 · GROK 과 스토리 만들기</div>
+<div class="eyebrow">1 · 로컬 LLM 과 스토리 만들기</div>
 <div class="grid"><div>
+<p class="small" style="margin-bottom:6px">내 PC 의 로컬 LLM 과 대화하며 이야기를 만듭니다 (무료 · 원고가 밖으로 안 나감).
+좋은 아이디어가 나오면 오른쪽 스토리라인에 정리하세요.</p>
 <div id="chatlog"></div>
 <div class="row" style="margin-top:10px">
 <textarea id="chatInput" rows="2" placeholder="이야기 아이디어를 적고 Enter (줄바꿈: Shift+Enter)"></textarea>
@@ -201,7 +203,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <button class="btn" id="btnSaveStory">스토리라인 저장</button></div>
 <p class="small" id="storyMsg" style="margin-top:6px"></p>
 <details style="margin-top:12px">
-<summary class="small">그록 프롬프트 틀 (한글) — 복사해서 grok.com 에 붙여넣기</summary>
+<summary class="small">외부 챗 AI 프롬프트 틀 (예비) — 로컬 LLM 대신 grok.com 등에 붙여넣을 때</summary>
 <div class="row" style="margin-top:8px">
 <select id="frameSel" style="flex:1"></select>
 <button class="btn ghost" id="btnFrameCopy">복사</button>
@@ -214,18 +216,18 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 </section>
 
 <section id="tab-scenes">
-<div class="eyebrow">2 · 장면 구성  →  3 · 외부 AI 생성(수동)  →  4 · 폴더 등록·승인</div>
+<div class="eyebrow">2 · 장면 구성(로컬 LLM)  →  3 · 이미지 자동 생성(MakeFun)  →  4 · 선택·승인</div>
 <div class="card"><div class="row">
 장면 수 <input type="number" id="composeCount" value="10" min="1" max="30" style="width:70px">
 <label class="small"><input type="checkbox" id="composeForce"> 기존 장면 백업 후 재구성</label>
 <button class="btn" id="btnCompose">스토리라인 → 장면 구성</button>
 <span class="small" id="composeMsg"></span></div>
-<p class="small" style="margin-top:8px">이미지 프롬프트를 복사해 외부 이미지 AI(레퍼런스 이미지 첨부)로 생성한 뒤,
-결과 파일을 <b>images/raw/장면ID/</b> 폴더에 넣고 [폴더 스캔]을 누르세요.</p></div>
+<p class="small" style="margin-top:8px">장면 구성은 <b>로컬 LLM</b>이, 이미지는 각 장면의 <b>[🎨 이미지 생성]</b> 버튼이
+<b>MakeFun AI</b> 로 자동 생성해 등록까지 해줍니다. 파일을 직접 넣는 [폴더 스캔]·[📤 업로드] 경로도 그대로 씁니다.</p></div>
 
-<details class="card" id="manualCompose" open>
-<summary class="small">수동 모드 · API 크레딧 없이 grok.com 복붙으로 장면 구성 (기본 경로)</summary>
-<p class="small" style="margin:8px 0">SuperGrok 구독만 있고 API 크레딧이 없을 때 이 경로를 쓰세요. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
+<details class="card" id="manualCompose">
+<summary class="small">수동 모드 · 다른 AI(그록 등) 복붙으로 장면 구성 (예비 경로)</summary>
+<p class="small" style="margin:8px 0">로컬 LLM 없이 외부 챗 AI 로 만들 때 이 경로를 쓰세요. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
 <div class="row">
 <span class="small">① 지시문 생성 → grok.com 에 붙여넣기</span>
 <button class="btn ghost" id="btnComposeInput">지시문 생성</button>
@@ -274,17 +276,32 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 </section>
 
 <section id="tab-talk">
-<div class="eyebrow">인물과 대화 · 로컬 LLM</div>
-<p class="small" style="margin-bottom:8px">작품의 인물과 실제로 대화합니다. 로컬 LLM(내 PC) 을 쓰므로 원고가 밖으로 나가지 않습니다.
+<div class="eyebrow">인물과 대화 · 미연시 모드</div>
+<p class="small" style="margin-bottom:8px">작품의 인물과 실제 연애 시뮬레이션처럼 대화합니다. 로컬 LLM(내 PC) — 대화가 밖으로 나가지 않습니다.
 <span id="talkStatus" class="chip">확인 중…</span></p>
-<div id="talklog" style="height:52vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);
-border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px"></div>
+<div id="vnTalk" style="position:relative;border-radius:14px;overflow:hidden;background:#141021;
+ min-height:56vh;border:1px solid var(--line);cursor:pointer">
+ <img id="vnCG" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  object-position:center 22%;opacity:0;transition:opacity .7s">
+ <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,8,20,0) 40%,rgba(10,8,20,.42) 68%,rgba(8,6,18,.86) 100%);pointer-events:none"></div>
+ <button id="vnLogBtn" class="btn ghost" style="position:absolute;top:10px;right:10px;z-index:4">기록</button>
+ <div style="position:absolute;left:3%;right:3%;bottom:3%;z-index:3">
+  <div id="vnName" style="display:inline-block;background:linear-gradient(135deg,#ff7eb3,#b86bff);
+   color:#fff;font-weight:700;padding:4px 16px;border-radius:10px 10px 0 10px;font-size:14px;
+   letter-spacing:.4px;box-shadow:0 2px 8px rgba(0,0,0,.35)">이지혜</div>
+  <div id="vnText" style="background:rgba(18,13,32,.86);border:1px solid rgba(255,255,255,.14);
+   color:#f6f0ff;border-radius:0 12px 12px 12px;padding:14px 16px;min-height:86px;line-height:1.75;
+   white-space:pre-wrap;font-size:15px"></div>
+ </div>
+ <div id="vnLog" hidden style="position:absolute;inset:0;background:rgba(9,7,17,.94);overflow-y:auto;
+  padding:16px;z-index:5;display:flex;flex-direction:column;gap:10px;cursor:default"></div>
+</div>
 <div class="row" style="margin-top:10px">
-<textarea id="talkInput" rows="2" placeholder="인물에게 말을 걸어보세요 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+<textarea id="talkInput" rows="2" placeholder="지혜에게 말을 걸어보세요 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
 <button class="btn" id="btnTalk">전송</button>
-<button class="btn ghost" id="btnTalkClear">대화 비우기</button></div>
-<p class="small" style="margin-top:6px">서버 켜기: <b>local_llm/runtime/serve.ps1</b> · 품질↑는 9B/35B 모델로 교체
-(<b>serve.ps1 -Model "models\Qwen3.5-9B-Q4_K_M.gguf"</b>).</p>
+<button class="btn ghost" id="btnTalkClear">처음부터</button></div>
+<p class="small" style="margin-top:6px">사진을 보여주면 배경 CG 로 바뀝니다 · [기록] = 지난 대화 · 대화창 클릭 = 출력 즉시 완성.
+서버: <b>local_llm/runtime/serve.ps1</b></p>
 </section>
 
 <section id="tab-gallery">
@@ -367,10 +384,11 @@ async function api(path,body){const r=await fetch(path,body?{method:"POST",
  const d=await r.json();if(!r.ok)throw new Error(d.error||"오류");return d}
 async function refresh(){S=await api("/api/state");
  $("chipTitle").textContent=S.title||"제목 미정";
- $("chipKey").textContent="API 키 "+(S.key_set?"연결됨":"미설정");
- $("chipKey").className="chip "+(S.key_set?"ok":"bad");
- $("chipModel").textContent="모델 "+(S.model&&S.model!=="TBD"?S.model:"미지정");
- $("chipModel").className="chip "+(S.model&&S.model!=="TBD"?"ok":"bad");
+ if(S.orch_local){$("chipKey").textContent="스토리: 로컬 LLM";$("chipKey").className="chip ok"}
+ else{$("chipKey").textContent="API 키 "+(S.key_set?"연결됨":"미설정");
+  $("chipKey").className="chip "+(S.key_set?"ok":"bad")}
+ $("chipModel").textContent="이미지: MakeFun "+(S.mf_token?"연결됨":"토큰 미설정");
+ $("chipModel").className="chip "+(S.mf_token?"ok":"bad");
  if(!$("storyline").value)$("storyline").value=S.storyline||"";
  renderChat();renderScenes();renderGallery()}
 function renderChat(){const box=$("chatlog");box.replaceChildren();
@@ -599,10 +617,26 @@ function sceneCard(sc){
 
  const act=el("div","row");act.style.marginTop="8px";
  const msg=el("span","small");
- if(sc.prompt){const bcp=el("button","btn ghost","🖼 이미지 프롬프트 복사");
-  bcp.title="이 프롬프트를 외부 이미지 AI 에 붙여넣으세요";
+ if(sc.status!=="APPROVED"&&!sc.prompt){
+  const bgp=el("button","btn","🤖 프롬프트 생성");
+  bgp.title="로컬 LLM 이 이 장면의 이미지 프롬프트를 만듭니다";
+  bgp.onclick=async()=>{bgp.disabled=true;msg.textContent="로컬 LLM 프롬프트 생성 중…";
+   try{const d=await api("/api/gen-prompt",{scene_id:sc.scene_id});
+    msg.textContent=d.checker_pass?"프롬프트 생성 · 검사 통과":"생성됨 · 경고: "+d.fails;await refresh()}
+   catch(e){msg.textContent="실패: "+e.message;bgp.disabled=false}};
+  act.appendChild(bgp)}
+ if(sc.status!=="APPROVED"&&sc.prompt){
+  const bgi=el("button","btn","🎨 이미지 생성");
+  bgi.title="MakeFun AI 로 이미지를 생성해 자동 등록합니다 (1~3분)";
+  bgi.onclick=async()=>{bgi.disabled=true;msg.textContent="MakeFun 생성 중… (1~3분)";
+   try{const d=await api("/api/gen-image",{scene_id:sc.scene_id,n:1});
+    msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;await refresh()}
+   catch(e){msg.textContent="실패: "+e.message;bgi.disabled=false}};
+  act.appendChild(bgi)}
+ if(sc.prompt){const bcp=el("button","btn ghost","🖼 프롬프트 복사");
+  bcp.title="이 프롬프트를 외부 이미지 AI 에 붙여넣을 수도 있습니다";
   bcp.onclick=async()=>{try{await navigator.clipboard.writeText(sc.prompt);
-    bcp.textContent="복사됨 ✓";setTimeout(()=>{bcp.textContent="🖼 이미지 프롬프트 복사"},1300)}
+    bcp.textContent="복사됨 ✓";setTimeout(()=>{bcp.textContent="🖼 프롬프트 복사"},1300)}
    catch(e){bcp.textContent="복사 실패"}};
   act.appendChild(bcp)}
  const btnScan=el("button","btn ghost","폴더 스캔");
@@ -683,29 +717,50 @@ async function playFrom(sceneId){await refresh();
  startPlayback(false,idx)}
 $("galFavOnly").onchange=renderGallery;
 
-// ---- 인물과 대화 (로컬 LLM) ----
-let talkChat=[];
-function renderTalk(){const box=$("talklog");box.replaceChildren();
- for(const m of talkChat){const b=el("div","msg "+m.role,m.content);
+// ---- 인물과 대화 (로컬 LLM · 미연시 창) ----
+let talkChat=[],vnTimer=null,vnFull="";
+function vnHeroine(){return (S&&S.characters&&S.characters[0]&&S.characters[0].name)||"이지혜"}
+function vnDefaultCG(){const s=(S&&S.scenes||[]).find(x=>x.image_url);return s?s.image_url:""}
+function vnSetCG(url){const im=$("vnCG");if(!url){im.style.opacity=0;return}
+ if(im.src!==url)im.src=url;im.style.opacity=1}
+function vnType(text){if(vnTimer){clearInterval(vnTimer);vnTimer=null}
+ vnFull=text;const box=$("vnText");box.textContent="";let i=0;
+ vnTimer=setInterval(()=>{i++;box.textContent=text.slice(0,i);
+  if(i>=text.length){clearInterval(vnTimer);vnTimer=null}},22)}
+function vnDone(){if(vnTimer){clearInterval(vnTimer);vnTimer=null;$("vnText").textContent=vnFull}}
+function renderTalk(){
+ $("vnName").textContent=vnHeroine();
+ let cg=vnDefaultCG();
+ for(const m of talkChat)if(m.photos&&m.photos.length)cg=m.photos[m.photos.length-1].url;
+ vnSetCG(cg);
+ const last=talkChat[talkChat.length-1];
+ if(!last)$("vnText").textContent="(말을 걸어보세요…)";
+ else if(last.role==="user")$("vnText").textContent="…";
+ // 백로그
+ const log=$("vnLog");log.replaceChildren();
+ for(const m of talkChat){const b=el("div","msg "+m.role,(m.role==="user"?"나: ":vnHeroine()+": ")+m.content);
   for(const p of (m.photos||[])){const im=el("img");im.src=p.url;im.alt=p.caption||"";
-   im.title=p.caption||"";im.style.cssText="max-width:72%;border-radius:10px;margin-top:8px;display:block;border:1px solid var(--line)";
-   b.appendChild(im)}
-  box.appendChild(b)}
- box.scrollTop=box.scrollHeight}
+   im.style.cssText="max-width:60%;border-radius:10px;margin-top:8px;display:block";b.appendChild(im)}
+  log.appendChild(b)}
+ log.scrollTop=log.scrollHeight}
 async function talkStatus(){const c=$("talkStatus");
+ renderTalk();
  try{const d=await api("/api/talk-status",{});
   if(d.up){c.textContent="로컬 LLM 연결됨";c.className="chip ok"}
   else{c.textContent="로컬 LLM 꺼짐 — serve.ps1 실행 필요";c.className="chip bad"}}
  catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}}
 async function talkSend(){const t=$("talkInput").value.trim();if(!t)return;
  $("talkInput").value="";talkChat.push({role:"user",content:t});renderTalk();
- const wait=el("div","msg assistant","…");$("talklog").appendChild(wait);$("talklog").scrollTop=1e9;
  const send=talkChat.map(m=>({role:m.role,content:m.content}));   // 모델엔 텍스트만
  try{const d=await api("/api/talk",{messages:send});
-  talkChat.push({role:"assistant",content:d.reply,photos:d.photos||[]});renderTalk()}
- catch(e){wait.textContent="(대화 실패) "+e.message}}
+  talkChat.push({role:"assistant",content:d.reply,photos:d.photos||[]});
+  renderTalk();vnType(d.reply)}
+ catch(e){$("vnText").textContent="(대화 실패) "+e.message}}
 $("btnTalk").onclick=talkSend;
-$("btnTalkClear").onclick=()=>{talkChat=[];renderTalk()};
+$("btnTalkClear").onclick=()=>{talkChat=[];$("vnLog").hidden=true;renderTalk()};
+$("vnTalk").onclick=e=>{if(e.target.id==="vnLogBtn"||!$("vnLog").hidden)return;vnDone()};
+$("vnLogBtn").onclick=e=>{e.stopPropagation();const l=$("vnLog");l.hidden=!l.hidden;if(!l.hidden)renderTalk()};
+$("vnLog").onclick=e=>{e.stopPropagation();$("vnLog").hidden=true};
 $("talkInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();talkSend()}});
 
 // ---- 세로 스크롤 웹툰 리딩 + 감상본 내보내기 ----

@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import advance_scene as adv  # noqa: E402
+import local_llm  # noqa: E402
 import xai_client  # noqa: E402
 
 adv._console_guard()
@@ -190,19 +191,35 @@ def _create_scenes_from_items(items, force: bool, expected: int | None = None) -
     return result
 
 
+def _orch_local() -> bool:
+    """오케스트레이터 모드 — manifest.orchestrator.mode 가 local 이면 로컬 LLM 사용."""
+    try:
+        mf = json.loads((ROOT / "project" / "manifest.json").read_text(encoding="utf-8"))
+        return str(mf.get("orchestrator", {}).get("mode", "")) == "local"
+    except Exception:
+        return False
+
+
+def orch_chat(messages: list, temperature: float = 0.6, max_tokens: int = 8192) -> str:
+    """장면 구성용 LLM 호출 — 로컬 LLM(기본) 또는 xAI(mode=api)."""
+    if _orch_local():
+        return local_llm.chat(messages, temperature=temperature, max_tokens=max_tokens)
+    return xai_client.chat(messages, temperature=temperature)
+
+
 def compose_scenes(count: int, force: bool) -> dict:
-    """스토리라인 → 장면 자동 구성 (xAI API 호출). 수동 모드는 compose_from_json 사용."""
+    """스토리라인 → 장면 자동 구성 (로컬 LLM/API). 수동 모드는 compose_from_json 사용."""
     existing = sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []
-    if existing and not force:  # API 호출 낭비 방지 — 미리 막는다
+    if existing and not force:  # 호출 낭비 방지 — 미리 막는다
         raise RuntimeError("이미 장면이 있습니다. '기존 장면 백업 후 재구성'(--force) 으로 다시 실행하세요.")
 
     instruction = build_compose_instruction(count)
-    out = xai_client.chat([{"role": "user", "content": instruction}], temperature=0.6)
+    out = orch_chat([{"role": "user", "content": instruction}], temperature=0.6)
     try:
         items = _extract_json_array(out)
     except (ValueError, json.JSONDecodeError):
         # 1회 재시도: 형식 교정 요청
-        retry = xai_client.chat([
+        retry = orch_chat([
             {"role": "user", "content": instruction},
             {"role": "assistant", "content": out},
             {"role": "user", "content": "위 응답에서 JSON 배열만, 다른 텍스트 없이 다시 출력하라."},
