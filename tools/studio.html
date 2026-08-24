@@ -20,6 +20,8 @@ nav{width:118px;border-right:1px solid var(--line);padding:14px 0;flex-shrink:0}
 nav button{display:block;width:100%;text-align:left;padding:11px 18px;background:none;border:none;
 color:var(--sub);font:inherit;cursor:pointer;border-left:3px solid transparent}
 nav button.on{color:var(--ink);border-left-color:var(--jade);background:var(--panel)}
+.navlabel{font-size:10px;letter-spacing:.22em;color:var(--jade);padding:12px 18px 4px;text-transform:uppercase}
+nav button+.navlabel{margin-top:10px;border-top:1px solid var(--line);padding-top:14px}
 section{flex:1;padding:20px;max-width:1100px;display:none}
 section.on{display:block}
 .eyebrow{font-size:11px;letter-spacing:.18em;color:var(--jade);margin-bottom:10px}
@@ -115,6 +117,9 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
  nav button{width:auto;white-space:nowrap;padding:10px 15px;border-left:none;
   border-bottom:3px solid transparent;border-radius:8px}
  nav button.on{border-left:none;border-bottom-color:var(--jade)}
+ .navlabel{padding:10px 6px 4px;white-space:nowrap;align-self:center}
+ nav button+.navlabel{margin-top:0;border-top:none;padding-top:10px;
+  border-left:1px solid var(--line);margin-left:6px;padding-left:12px}
  section{padding:14px 12px;max-width:100%}
  header{padding:11px 13px;flex-wrap:wrap;gap:7px}
  header h1{font-size:15px}
@@ -137,10 +142,12 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <span class="chip" id="chipKey"></span><span class="chip" id="chipModel"></span></header>
 <main>
 <nav>
+<div class="navlabel">소설 만들기</div>
 <button data-tab="story" class="on">스토리</button>
 <button data-tab="scenes">장면</button>
-<button data-tab="viewer">뷰어</button>
 <button data-tab="check">검사</button>
+<div class="navlabel">감상</div>
+<button data-tab="viewer">뷰어</button>
 </nav>
 
 <section id="tab-story" class="on">
@@ -157,6 +164,16 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <button class="btn ghost" id="btnPull">마지막 답변 붙이기</button>
 <button class="btn" id="btnSaveStory">스토리라인 저장</button></div>
 <p class="small" id="storyMsg" style="margin-top:6px"></p>
+<details style="margin-top:12px">
+<summary class="small">그록 프롬프트 틀 (한글) — 복사해서 grok.com 에 붙여넣기</summary>
+<div class="row" style="margin-top:8px">
+<select id="frameSel" style="flex:1"></select>
+<button class="btn ghost" id="btnFrameCopy">복사</button>
+<button class="btn ghost" id="btnFrameChat">채팅칸에 넣기</button></div>
+<textarea id="frameText" rows="13" style="margin-top:6px"></textarea>
+<p class="small" style="margin-top:4px">{중괄호}만 채워서 쓰세요. ③·④는 [장면] 탭의 [지시문 생성] 버튼이
+앵커까지 채워 자동 생성합니다. 전체 틀 문서: templates/grok-prompts-ko.md</p>
+</details>
 </div></div>
 </section>
 
@@ -291,6 +308,134 @@ $("btnPull").onclick=()=>{const last=[...S.chat].reverse().find(m=>m.role==="ass
  if(last)$("storyline").value=($("storyline").value+"\n\n"+last.content).trim()};
 $("btnSaveStory").onclick=async()=>{await api("/api/storyline",{text:$("storyline").value});
  $("storyMsg").textContent="저장됨 — 장면 탭에서 구성할 수 있습니다."};
+
+// ---- 그록 프롬프트 틀 (한글) — 전체판은 templates/grok-prompts-ko.md ----
+const FRAMES={
+"① 아이디어 → 스토리라인":
+`너는 비주얼 노벨/웹툰 스토리 기획 파트너다. 한국어로 답해.
+
+[아이디어]
+{한 줄 아이디어 또는 소재}
+
+[원하는 것]
+- 장르/분위기: {예: 청춘 성장, 잔잔+따뜻}
+- 분량: 한 화 기준 장면 {10}개
+- 주인공: {간단 설명, 없으면 "네가 제안해줘"}
+- 꼭 넣고 싶은 요소: {…}
+- 피하고 싶은 것: {…}
+
+[출력 형식 — 이 형식만, 다른 말 없이]
+1) 로그라인 1줄
+2) 스토리라인 10~15문장 (기승전결이 보이게)
+3) 등장인물 2~3명 — 이름/나이/성격/외형(머리·눈·복장·소품을 그림에 쓸 수 있게 구체적으로)
+4) 장소 1~3곳 — 이름/분위기/시각 특징`,
+
+"② 스토리라인 다듬기":
+`아래는 내 비주얼 노벨의 스토리라인이다. 한국어로 답해.
+
+[현재 스토리라인]
+{스토리라인 붙여넣기}
+
+[고치고 싶은 점]
+- {예: 중반이 늘어짐 — 작은 갈등 하나 추가}
+- {예: 결말을 더 여운 있게}
+
+[출력]
+수정된 스토리라인 전체(비슷한 길이) + 끝에 "변경 요약" 3줄. 다른 말 없이.`,
+
+"③ 장면 구성 JSON (※자동 버튼 권장)":
+`※ [장면] 탭 → 수동 모드 → [지시문 생성] 버튼이 이 틀을 앵커까지 채워 자동 생성합니다.
+※ 직접 쓸 때만 아래를 채우세요.
+
+너는 비주얼 노벨 연출가다. 아래 스토리라인을 정확히 {N}개 장면으로 분해하라.
+
+[스토리라인]
+{스토리라인}
+
+[캐릭터 (speaker_id 는 반드시 이 목록의 id)]
+- CHAR-001 {이름}: anchor="{영어 외형 앵커 원문}"
+
+[장소]
+- LOC-001 {이름}: anchor="{영어 장소 앵커 원문}"
+
+[규칙]
+1. image_prompt 는 영어, anchor 문구 원문 포함. 2. 이미지 안 글자/말풍선 금지.
+3. dialogue 는 한국어 1~4줄. 4. location_id 는 목록의 id.
+
+[출력 형식 — SCENES_JSON_ONLY]
+다른 말 없이 JSON 배열만. 각 원소:
+{"order":1,"purpose":"...","action_beat":"...","emotion":"...","time":"...",
+ "location_id":"LOC-001","camera":{"shot":"...","angle":"...","framing":"...","focus":"..."},
+ "dialogue":[{"speaker_id":"CHAR-001","text":"..."}],"image_prompt":"..."}`,
+
+"④ 장면 이미지 프롬프트 (※자동 버튼 권장)":
+`※ 장면 카드 → 수동 모드 → [① 지시문 생성] 버튼이 연속성·앵커까지 자동 조립합니다.
+※ 직접 쓸 때만 아래를 채우세요.
+
+너는 웹툰 연출 감독 겸 이미지 프롬프트 작성자다.
+
+[캐릭터 기준(원문 그대로 포함)] {영어 앵커}
+[장소 기준(원문 그대로 포함)] {영어 앵커}
+
+[이번 장면]
+- 목적: {…}  - 행동: {…}  - 감정: {…}
+- 카메라: {shot/angle/framing/focus}
+- 화풍: {예: 따뜻한 셀 셰이딩 웹툰}
+
+[규칙] 이미지 안 글자·말풍선 금지, 대사 영역은 하단 여백으로만.
+
+[출력 — 이 4개 항목만]
+SCENE_PROMPT: (영어, 앵커 원문 포함)
+NEGATIVE_PROMPT: (영어)
+CONTINUITY_NOTES: (다음 장면으로 이어질 요소, 한국어)
+DIALOGUE_PLACEMENT: (대사 빈 공간 위치, 한국어)`,
+
+"⑤ 캐릭터 시트 (Gate B)":
+`너는 캐릭터 디자이너다. 아래 캐릭터의 "캐릭터 시트"를 외부 이미지 AI 로 생성할 프롬프트를 만들어줘.
+
+[캐릭터]
+- 이름: {…}
+- 외형 앵커(원문 그대로 포함): {영어 앵커}
+- 성격(표정에 반영): {…}
+- 화풍: {따뜻한 셀 셰이딩 웹툰}
+
+[시트 구성]
+- 전신 3면도(정면/측면/뒷면) + 표정 4종(기본/미소/놀람/울먹)
+- 단색 배경 캐릭터 시트 레이아웃, 고해상도(긴 변 {2048}px 이상)
+
+[출력 — 딱 2줄]
+PROMPT: (영어 1문단)
+NEGATIVE_PROMPT: (영어 1문단)`,
+
+"⑥ 리테이크 (일관성 수정)":
+`방금 생성한 장면 이미지가 기준과 어긋났다. 이미지 프롬프트를 수정해줘.
+
+[기준 앵커(원문 유지)] {영어 앵커}
+[현재 프롬프트] {붙여넣기}
+[어긋난 점] {예: 머리색이 다름 / 소품 누락 / 배경 시간대 다름}
+[유지할 점] {예: 구도와 조명은 그대로}
+
+앵커 문구를 원문 그대로 포함한 수정 SCENE_PROMPT 와 NEGATIVE_PROMPT 만 출력해.`,
+
+"⑦ 대사 톤 다듬기":
+`아래 장면 대사를 캐릭터 말투에 맞게 다듬어줘. 한국어.
+
+[캐릭터 말투]
+- {이름: 말투 특징}
+- {이름: 말투 특징}
+
+[대사]
+{장면 대사 붙여넣기}
+
+장면당 1~4줄 유지. 수정본만 출력.`};
+
+const fsel=$("frameSel");
+for(const k of Object.keys(FRAMES)){const o=el("option",null,k);o.value=k;fsel.appendChild(o)}
+function showFrame(){$("frameText").value=FRAMES[fsel.value]||""}
+fsel.onchange=showFrame;showFrame();
+$("btnFrameCopy").onclick=async()=>{await navigator.clipboard.writeText($("frameText").value);
+ $("btnFrameCopy").textContent="복사됨";setTimeout(()=>{$("btnFrameCopy").textContent="복사"},1200)};
+$("btnFrameChat").onclick=()=>{$("chatInput").value=$("frameText").value;$("chatInput").focus()};
 $("btnCompose").onclick=async()=>{$("composeMsg").textContent="구성 중… (수십 초 걸릴 수 있음)";
  try{const d=await api("/api/compose",{count:+$("composeCount").value,force:$("composeForce").checked});
   $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음");
