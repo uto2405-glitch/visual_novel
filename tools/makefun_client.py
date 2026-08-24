@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import logging
 import os
 import random
 import re
@@ -76,6 +77,12 @@ TASKS_MAX = 20              # 장면 assets.makefun_tasks 보존 개수
 # 대장·메타·장면 JSON 의 read-modify-write 직렬화는 저장소 전역 잠금(vn_core.WRITE_LOCK)을 쓴다.
 # 예전처럼 이 파일만의 잠금을 따로 두면 웹에서 장면을 저장하는 순간과 task_id 를 적는 순간이
 # 서로를 막지 못해, 이미 과금된 task_id 기록이 통째로 덮여 사라질 수 있다(재수령 불가 = 금전 손실).
+
+
+# 생성 작업 로그와 같은 채널(vn.gen) — webapp.setup_logging 이 logs/webapp.log 에 물린다.
+# CLI 로 단독 실행될 때는 핸들러가 없어 조용하다(라이브러리 규약).
+log = logging.getLogger("vn.gen")
+log.addHandler(logging.NullHandler())
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -274,12 +281,22 @@ def _size_from_manifest(long_edge: int | None = None) -> tuple[int, int]:
 
 
 def _print_note(width: int, height: int) -> str:
-    """이 크기가 실물 인화로 어디까지 가는지 한 줄 — 규격 판정은 print_preflight 에 위임한다."""
+    """이 크기가 실물 인화로 어디까지 가는지 한 줄 — 규격 판정은 print_preflight 에 위임한다.
+
+    지연 import 인 이유: print_preflight 도 상한 경고를 받으러 이 모듈을 부른다(서로 부른다).
+    최상단에서 서로를 import 하면 순환이 되므로 각자 쓰는 자리에서만 불러온다.
+    실패해도 생성은 계속돼야 하지만(여기는 안내문일 뿐이다) **조용히 사라지지는 않게** 남긴다.
+    """
     try:
         import print_preflight as pf
+    except ImportError as exc:
+        log.debug("인화 규격 안내 생략 — print_preflight 없음: %s", exc)
+        return ""
+    try:
         rep = pf.preflight_image(int(width), int(height), pf.DPI_GOOD)
         need = pf.needed_px("5×7", pf.DPI_GOOD)
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        log.warning("인화 규격 안내 생략 — print_preflight 계산 실패: %s", exc)
         return ""
     best = rep.get("max_size_at_target")
     inches = rep.get("max_long_in_at_target")
@@ -400,8 +417,10 @@ def record_tasks(scene_id: str, task_ids: list[str], width: int = 0, height: int
             del tasks[:-TASKS_MAX]
             assets["makefun_tasks"] = tasks
             atomic_write_json(path, sc)
-    except Exception:
-        pass   # 기록 실패로 이미 과금된 생성을 중단시키지 않는다
+    except Exception as exc:
+        # 기록 실패로 이미 과금된 생성을 중단시키지는 않는다. 다만 이 기록이 없으면
+        # 나중에 재수령(무과금 회수)을 못 하므로 무슨 일이 있었는지는 남긴다.
+        log.warning("task 기록 실패 %s: %s (재수령이 불가능해질 수 있습니다)", scene_id, exc)
 
 
 def scene_task_ids(scene_id: str) -> list[str]:
@@ -667,69 +686,33 @@ def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
 
 # --- 중복 과금 방지: 생성 작업 상태기계(gen_jobs) 연동 ------------------------
 # 웹 스튜디오는 gen_jobs 로 "이 장면은 지금 생성 중" 을 표시해 폰과 PC 가 동시에 눌러도
-# 과금이 한 번만 되게 막는다. CLI 가 그 표시를 안 보면 서버 밖에서 같은 장면을 또 생성해
-# 이중 과금이 난다 — 그래서 CLI 경로도 같은 claim 을 통과한다.
-# gen_jobs 가 없는 환경(이 모듈만 복제된 자가진단 등)에서는 조용히 통과한다.
+# 과금이 한 번만 되게 막는다. CLI 는 별도 프로세스라 그 메모리 표시를 볼 수 없다 —
+# 프로세스 경계를 넘는 방어는 gen_jobs 가 잡는 잠금 파일(logs/gen_locks/<scene_id>.lock)이고,
+# CLI 경로도 그 관문(claim)을 통과하기 때문에 서버 밖에서 같은 장면을 또 굽지 못한다.
+# gen_jobs 가 없는 환경(이 모듈만 복제된 자가진단 등)에서는 잠금 없이 통과한다.
 
 def _jobs():
     try:
         import gen_jobs
-    except Exception:
+    except ImportError:
         return None
     return gen_jobs
 
 
-def _jobs_note(jobs, sid: str, msg: str, running: bool = True) -> None:
-    note = getattr(jobs, "note", None) if jobs else None
-    if not callable(note):
-        return
-    try:
-        note(sid, msg, running=running)
-    except TypeError:                 # note(sid, msg) 만 받는 구현
-        with contextlib.suppress(Exception):
-            note(sid, msg)
-    except Exception:
-        pass
-
-
 @contextlib.contextmanager
 def claim_scene(scene_id: str, label: str = "생성"):
-    """같은 장면의 동시 생성을 막는 표시를 잡는다(웹·CLI 공통).
+    """같은 장면의 동시 생성을 막는 선점을 잡는다(웹·CLI 공통).
 
-    이미 진행 중이면 gen_jobs 가 오류를 던지고, 그것만 그대로 올려 보낸다(중복 과금 차단).
-    상태기계가 없거나 시그니처가 다르면 조용히 통과한다 — 표시 계층의 문제로 생성을 막지 않는다.
+    이미 진행 중이면 gen_jobs 가 오류를 던지고, 그것을 그대로 올려 보낸다(중복 과금 차단).
+    선점 해제는 gen_jobs.claimed 가 성공·실패 어느 쪽에서도 책임진다.
+    gen_jobs 를 불러올 수 없는 환경에서만 잠금 없이 통과한다(yield False).
     """
     jobs = _jobs()
     if not scene_id or jobs is None:
         yield False
         return
-    block = getattr(jobs, "claimed", None)      # CLI 용 전용 블록이 있으면 그대로 쓴다
-    if callable(block):
-        try:
-            ctx = block(scene_id, label)
-        except TypeError:
-            ctx = None
-        if ctx is not None:
-            with ctx:
-                yield True
-            return
-    claim = getattr(jobs, "claim", None)
-    if not callable(claim):
-        yield False
-        return
-    try:
-        claim(scene_id)
-    except RuntimeError:              # VNError 포함 — "이미 생성 중" 은 반드시 막는다
-        raise
-    except Exception:
-        yield False
-        return
-    try:
+    with jobs.claimed(scene_id, label):
         yield True
-    except BaseException as exc:
-        _jobs_note(jobs, scene_id, f"{label} 실패: {str(exc)[:120]}", running=False)
-        raise
-    _jobs_note(jobs, scene_id, f"{label} 완료", running=False)
 
 
 # --- 배치(13) ---------------------------------------------------------------

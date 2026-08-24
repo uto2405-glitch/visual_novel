@@ -25,6 +25,23 @@ async function copyTo(btn,text,label){
  try{await navigator.clipboard.writeText(String(text==null?"":text));btn.textContent="복사됨 ✓"}
  catch(e){btn.textContent="복사 실패 — 직접 선택해 복사하세요"}
  setTimeout(()=>{btn.textContent=label},1500)}
+// 긴 작업(장면 구성·마스터 굽기·내보내기)이 정지된 한 줄만 남기면 "멈춘 것 같다" 가 된다.
+// 점 애니메이션(.typing)과 경과 초를 붙여 살아 있다는 것을 보여준다.
+// 초 카운터는 aria-hidden — role=status 칸에서 1초마다 다시 읽히면 방해만 되기 때문이다.
+function busy(node,label){
+ if(!node)return {stop(){return 0}};
+ const t0=Date.now();
+ node.replaceChildren();
+ node.appendChild(el("span",null,label));
+ const dots=el("span","typing");dots.setAttribute("aria-hidden","true");
+ for(let i=0;i<3;i++)dots.appendChild(el("i"));
+ const sec=el("span",null," 0초");sec.setAttribute("aria-hidden","true");
+ node.appendChild(dots);node.appendChild(sec);
+ const tick=setInterval(()=>{sec.textContent=" "+Math.round((Date.now()-t0)/1000)+"초"},1000);
+ return {stop(text){clearInterval(tick);node.replaceChildren();
+  if(text!=null)node.textContent=text;
+  return Math.round((Date.now()-t0)/1000)}}}
+const took=s=>" · "+s+"초 걸림";
 // PIN 세션이 끊기면(401 auth_required) 요청마다 실패 문구만 뿌리지 말고 재인증 경로를 준다
 function showAuthGate(){const g=$("authGate");if(!g||!g.hidden)return;
  g.hidden=false;const b=$("authReload");if(b&&b.focus)b.focus()}
@@ -210,11 +227,14 @@ function showFrame(){$("frameText").value=FRAMES[fsel.value]||""}
 fsel.onchange=showFrame;showFrame();
 $("btnFrameCopy").onclick=()=>copyTo($("btnFrameCopy"),$("frameText").value,"복사");
 $("btnFrameChat").onclick=()=>{$("chatInput").value=$("frameText").value;$("chatInput").focus()};
-$("btnCompose").onclick=async()=>{$("composeMsg").textContent="구성 중… (수십 초 걸릴 수 있음)";
+$("btnCompose").onclick=async()=>{
+ const bz=busy($("composeMsg"),"구성 중… 로컬 LLM 이 장면을 나누고 있습니다");
  try{const d=await api("/api/compose",{count:+$("composeCount").value,force:$("composeForce").checked});
-  $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음");
+  const s=bz.stop();
+  $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음")+took(s);
   scDraft.clear();   // 장면이 갈렸으니 같은 id 의 옛 초안을 새 장면에 되붙이지 않는다
-  await refresh()}catch(e){$("composeMsg").textContent="실패: "+e.message+" — 아래 [수동 모드]로 진행하세요(크레딧 불필요)"}};
+  await refresh()}
+ catch(e){bz.stop("실패: "+e.message+" — 아래 [수동 모드]로 진행하세요(크레딧 불필요)")}};
 
 // ---- 수동 모드: 장면 구성 (grok.com 복붙) ----
 $("btnComposeInput").onclick=async()=>{try{
@@ -222,29 +242,33 @@ $("btnComposeInput").onclick=async()=>{try{
   $("composeInput").value=d.instruction;$("btnComposeInputCopy").hidden=false;
   $("btnComposeInputCopy").textContent="복사"}catch(e){$("composeInput").value="실패: "+e.message}};
 $("btnComposeInputCopy").onclick=()=>copyTo($("btnComposeInputCopy"),$("composeInput").value,"복사");
-$("btnComposeManual").onclick=async()=>{$("composeManualMsg").textContent="생성 중…";
+$("btnComposeManual").onclick=async()=>{
+ const bz=busy($("composeManualMsg"),"생성 중…");
  const force=$("composeManualForce").checked||$("composeForce").checked;
  try{const d=await api("/api/compose-manual",{text:$("composeJson").value,force:force,count:+$("composeCount").value});
-  $("composeManualMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고")+(d.warning?" · "+d.warning:"");
+  bz.stop(d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고")+(d.warning?" · "+d.warning:""));
   scDraft.clear();   // 장면이 갈렸으니 같은 id 의 옛 초안을 새 장면에 되붙이지 않는다
   await refresh()}catch(e){
   const m=/이미 장면이 있습니다/.test(e.message)
    ? "이미 장면이 있습니다 → 위 '기존 장면 백업 후 재구성'을 체크하고 다시 누르세요(기존 장면은 백업됩니다)"
    : "실패: "+e.message;
-  $("composeManualMsg").textContent=m}};
+  bz.stop(m)}};
 
 // ---- 인화 내보내기 ----
-$("btnExport").onclick=async()=>{$("exportMsg").textContent="굽는 중… (수십 초 걸릴 수 있음)";
+$("btnExport").onclick=async()=>{
+ const bz=busy($("exportMsg"),"굽는 중… 300DPI 마스터를 만들고 있습니다");
  try{const d=await api("/api/export",{size:$("exportSize").value,bleed:+$("exportBleed").value,
    all:$("exportAll").checked,skip_upscale:$("exportSkipUp").checked});
+  const s=bz.stop();
   $("exportMsg").textContent=d.count+"장 → "+(d.dir||"(없음)")
-   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+(d.skipped?" · 제외 "+d.skipped:"")
+   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+(d.skipped?" · 제외 "+d.skipped:"")+took(s)
    +" · 폰으로 받기: [뷰어] 탭 → [📥 내보낸 파일 받기]";
- }catch(e){$("exportMsg").textContent="실패: "+e.message}};
-$("btnContact").onclick=async()=>{$("exportMsg").textContent="컨택트시트 생성 중…";
+ }catch(e){bz.stop("실패: "+e.message)}};
+$("btnContact").onclick=async()=>{
+ const bz=busy($("exportMsg"),"컨택트시트 생성 중…");
  try{const d=await api("/api/export",{contact_only:true,all:$("exportAll").checked});
-  $("exportMsg").textContent=d.contact?"컨택트시트 저장: output/print/contact_sheet.png":"대상 없음";
- }catch(e){$("exportMsg").textContent="실패: "+e.message}};
+  bz.stop(d.contact?"컨택트시트 저장: output/print/contact_sheet.png":"대상 없음");
+ }catch(e){bz.stop("실패: "+e.message)}};
 
 // 생성 진행 조회 — 서버가 /api/gen-status 를 지원할 때만 상황을 보여주고, 없으면 조용히 멈춘다.
 function pollGen(sid,msg){let live=true;
@@ -441,15 +465,34 @@ function scThumbs(sc,msg){
   th.appendChild(b)});
  return th}
 
+// 인화 규격 — 서버 print_export.SIZES 와 같은 목록(parse_size 가 이 값들을 모두 받는다).
+// [굽기]·[즐겨찾기만 인화]·[크롭 미리보기] 세 곳이 갈라지지 않도록 여기 한 번만 적는다.
+// 값은 키·한글 라벨·세로 기준 종횡비(짧은 변/긴 변) 순. 작은 규격부터.
+const PRINT_SIZES=[
+ ["photocard","포토카드 55×85mm",55/85],
+ ["namecard","명함 50×90mm",50/90],
+ ["3x5","3.5×5 (89×127mm)",3.5/5],
+ ["a6","A6 (105×148mm)",105/148],
+ ["4x6","엽서 4×6",4/6],
+ ["5x7","5×7",5/7],
+ ["a5","A5 (148×210mm)",148/210],
+ ["8x10","8×10",8/10],
+ ["a4","A4 (210×297mm)",210/297],
+ ["11x14","11×14",11/14]];
+const CROP_RATIO={};
+for(const s of PRINT_SIZES)CROP_RATIO[s[0]]=s[2];
+function fillSizeSel(sel,def){if(!sel)return;
+ sel.replaceChildren();
+ for(const s of PRINT_SIZES){const o=el("option",null,s[1]);o.value=s[0];sel.appendChild(o)}
+ sel.value=def||"5x7"}
+fillSizeSel($("exportSize"));fillSizeSel($("favPrintSize"));
 // 75 · 크롭 미리보기 — 규격을 고르면 어디가 잘리는지 이미지 위에 직접 보여주고 앵커를 정한다
-const CROP_RATIO={"4x6":4/6,"5x7":5/7,"8x10":8/10,"A5":148/210,"A4":210/297,"photocard":55/85};
 function scCrop(sc){
  const bc=el("button","btn ghost","✂ 크롭 미리보기");
  const wrap=el("div");wrap.hidden=true;wrap.style.marginTop="8px";
  const ctl=el("div","row");
  const selSize=el("select");selSize.setAttribute("aria-label","크롭 규격");
- for(const s of ["4x6","5x7","8x10","A5","A4","photocard"])selSize.appendChild(el("option",null,s));
- selSize.value="5x7";
+ fillSizeSel(selSize,"5x7");   // 굽기 select 와 같은 목록·같은 라벨
  const selAnc=el("select");selAnc.setAttribute("aria-label","크롭 기준 위치");
  for(const a of [["center","가운데"],["top","위"],["bottom","아래"],["left","왼쪽"],["right","오른쪽"]]){
   const o=el("option",null,a[1]);o.value=a[0];selAnc.appendChild(o)}
@@ -459,7 +502,11 @@ function scCrop(sc){
  ctl.appendChild(el("span","small","기준"));ctl.appendChild(selAnc);ctl.appendChild(note);
  const stage=el("div");stage.style.cssText=
   "position:relative;display:inline-block;margin-top:8px;max-width:100%;line-height:0";
- const im=el("img");im.src=sc.image_url+"?w=420";im.alt=sc.purpose||sc.scene_id;
+ // 접혀 있는 동안에는 src 를 넣지 않는다 — 예전에는 카드가 그려지는 순간 장면 수만큼
+ // 숨은 요청(과 서버 썸네일 생성)이 한꺼번에 일어났다. 펼칠 때 한 장만 받는다.
+ const im=el("img");im.alt=sc.purpose||sc.scene_id;
+ im.loading="lazy";im.decoding="async";
+ const loadOnce=()=>{if(!im.getAttribute("src"))im.src=sc.image_url+"?w=420"};
  im.style.cssText="max-width:100%;border-radius:8px;display:block";
  const shadeTop=el("div"),shadeBot=el("div"),frame=el("div");
  const shadeCss="position:absolute;left:0;right:0;background:rgba(8,6,14,.66);pointer-events:none";
@@ -491,7 +538,7 @@ function scCrop(sc){
    note.textContent+=" · 기준 저장됨"}catch(e){note.textContent+=" · 저장 실패(미지원 서버)"}};
  im.onload=draw;
  bc.onclick=()=>{wrap.hidden=!wrap.hidden;bc.setAttribute("aria-expanded",String(!wrap.hidden));
-  if(!wrap.hidden)draw()};
+  if(!wrap.hidden){loadOnce();draw()}};   // 이미지가 늦게 오면 im.onload 가 다시 그린다
  bc.setAttribute("aria-expanded","false");
  wrap.appendChild(ctl);wrap.appendChild(stage);
  return {btn:bc,wrap}}
@@ -627,11 +674,13 @@ $("galFavOnly").onchange=renderGallery;
 // 즐겨찾기만 인화 — 서버가 only_ids/favorites_only 를 받아 대상 장면을 제한한다
 $("btnFavPrint").onclick=async()=>{
  if(!favSet.size){$("galMsg").textContent="먼저 ★ 로 인화할 장면을 골라주세요.";return}
- $("galMsg").textContent="즐겨찾기 "+favSet.size+"장 인화 마스터 굽는 중…";
+ const bz=busy($("galMsg"),"즐겨찾기 "+favSet.size+"장 인화 마스터 굽는 중…");
  try{const d=await api("/api/export",{size:$("favPrintSize").value,
    favorites_only:true,only_ids:[...favSet]});
-  $("galMsg").textContent=(d.count||0)+"장 → "+(d.dir||"(없음)")+(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")}
- catch(e){$("galMsg").textContent="실패: "+e.message}};
+  const s=bz.stop();
+  $("galMsg").textContent=(d.count||0)+"장 → "+(d.dir||"(없음)")
+   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+took(s)}
+ catch(e){bz.stop("실패: "+e.message)}};
 
 let lbList=[],lbIdx=-1;
 function openLightbox(i){lbList=galList();lbIdx=i;
@@ -790,45 +839,29 @@ $("talkLog").onclick=e=>{e.stopPropagation();$("talkLog").hidden=true};
 $("talkInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();talkSend()}});
 
 // ---- 세로 스크롤 웹툰 리딩 + 감상본 내보내기 ----
-function openScrollView(){const c=$("svCuts");c.replaceChildren();
+// 컷 목록 DOM 도, 읽던 위치 저장·복원(82)도 공용 엔진의 VNRuntime.renderScroll 이 한다 —
+// 예전에는 스튜디오와 감상본이 같은 화면을 각자 만들고 있어서 이미 갈라져 있었다.
+// 여기서 넘기는 것은 스튜디오 고유의 것뿐이다: 이미지 경로·화 제목·이름표 기본색.
+let svHandle=null;
+function openScrollView(){
+ const rt=window.VNRuntime;
+ if(!rt||typeof rt.renderScroll!=="function"){
+  alert("재생 엔진(vn_runtime.js)을 불러오지 못했습니다 — 새로고침 해 보세요.");return}
+ if(svHandle){svHandle.destroy();svHandle=null}
  $("svTitle").textContent=S.title||"작품";
- const list=S.scenes.filter(s=>s.image_url||(s.dialogue||[]).length);
- if(!list.length){alert("표시할 장면이 없습니다.");return}
- for(const sc of list){
-  const blk=el("div","cut");blk.dataset.sid=sc.scene_id;   // 82: 위치 복원의 기준점
-  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.purpose||sc.scene_id;
-   im.loading="lazy";im.decoding="async";blk.appendChild(im)}
-  for(const d of (sc.dialogue||[])){const say=el("div","say");
-   if(d.speaker_id){const b=el("b",null,charName(d.speaker_id)+"  ");
-    b.style.color=charColor(d.speaker_id)||"var(--jade)";
-    say.appendChild(b);say.appendChild(el("span",null,d.text||""))}
-   else say.appendChild(el("span","nar",d.text||""));
-   blk.appendChild(say)}
-  c.appendChild(blk)}
- $("scrollView").hidden=false;svRestore()}
-// 82 · 세로 스크롤 리딩의 읽던 위치 저장·복원.
-// 이미지가 lazy 로 늦게 실려 높이가 변하므로 픽셀이 아니라 "어느 장면 블록의 어디쯤"으로 기억한다.
-const svKey=()=>"vn:scroll:"+(S.title||"_");
-let svTimer=null;
-function svSave(){const v=$("scrollView");if(v.hidden)return;
- const y=v.scrollTop;let sid="",off=y;
- for(const blk of $("svCuts").children){
-  if(blk.offsetTop<=y+4){sid=blk.dataset.sid;off=y-blk.offsetTop}else break}
- try{localStorage.setItem(svKey(),JSON.stringify({sid,off,y}))}catch(e){}}
-function svRestore(){let p=null;
- try{p=JSON.parse(localStorage.getItem(svKey())||"null")}catch(e){p=null}
- if(!p)return;
- const v=$("scrollView");
- const go=()=>{if(v.hidden)return;
-  if(p.sid){const b=[...$("svCuts").children].find(x=>x.dataset.sid===p.sid);
-   if(b){v.scrollTop=b.offsetTop+(p.off||0);return}}
-  v.scrollTop=p.y||0};
- go();setTimeout(go,160);setTimeout(go,700);setTimeout(go,1800)}
-$("scrollView").addEventListener("scroll",()=>{clearTimeout(svTimer);svTimer=setTimeout(svSave,250)},{passive:true});
-function closeScrollView(){svSave();$("scrollView").hidden=true}
+ svHandle=rt.renderScroll(vnData(),$("svCuts"),{
+  imageSrc:sc=>sc.img||"",
+  epLabel:ep=>player?player.epLabel(ep):ep+"화",
+  nameColor:"var(--jade)",
+  scroller:$("scrollView"),
+  storageKey:"vn"});          // 저장 키는 예전과 같다(vn:scroll:<제목>) — 읽던 위치가 이어진다
+ if(!svHandle||!svHandle.count){alert("표시할 장면이 없습니다.");return}
+ $("scrollView").hidden=false;
+ svHandle.restore()}
+function closeScrollView(){if(svHandle)svHandle.save();$("scrollView").hidden=true}
 $("btnScrollView").onclick=async()=>{await refresh();openScrollView()};
 $("btnSvClose").onclick=closeScrollView;
-$("btnSvTop").onclick=()=>{$("scrollView").scrollTop=0;svSave()};
+$("btnSvTop").onclick=()=>{$("scrollView").scrollTop=0;if(svHandle)svHandle.save()};
 document.addEventListener("keydown",e=>{
  if(!$("scrollView").hidden&&e.key==="Escape"&&!isTypingTarget(e))closeScrollView()});
 // 63 · 내보내기 옵션(범위·최대 변·화질)을 UI 에서 그대로 서버로 전달
@@ -868,25 +901,25 @@ async function renderDl(){const box=$("dlList");if(!box)return;
 $("btnDlRefresh").onclick=renderDl;
 $("dlBox").addEventListener("toggle",()=>{if($("dlBox").open)renderDl()});
 $("btnExportViewer").onclick=async()=>{const m=$("exportViewerMsg");
- m.replaceChildren();m.textContent="내보내는 중… (이미지 내장)";
+ const bz=busy(m,"내보내는 중… 이미지를 파일 하나에 넣고 있습니다");
  try{const d=await api("/api/export-viewer",exportOpts());
-  setMsgWithLinks(m,d.file+" ("+d.mb+"MB) — 이 파일 하나로 폰에서도 재생됩니다 ",
+  const s=bz.stop();
+  setMsgWithLinks(m,d.file+" ("+d.mb+"MB"+took(s)+") — 이 파일 하나로 폰에서도 재생됩니다 ",
    [dlLink(d.file,"⬇ 내려받기"),dlLink(d.file,"▶ 지금 열기",true)]);
   if($("dlBox").open)renderDl()}
- catch(e){m.replaceChildren();m.textContent="실패: "+e.message}};
+ catch(e){bz.stop("실패: "+e.message)}};
 // 86 · PWA 내보내기 — 서버가 아직 지원하지 않으면 CLI 안내만
 $("btnExportPwa").onclick=async()=>{const m=$("exportViewerMsg");
- m.replaceChildren();m.textContent="PWA 내보내는 중…";
+ const bz=busy(m,"PWA 내보내는 중…");
  try{const d=await api("/api/export-pwa",exportOpts());
-  const base=d.dir||d.file||"";
+  const s=bz.stop(),base=d.dir||d.file||"";
   setMsgWithLinks(m,(base||"완료")+" — 폰 브라우저로 열고 [홈 화면에 추가] 하면 앱처럼 씁니다"
-   +(d.mb?" ("+d.mb+"MB) ":" "),
+   +(d.mb?" ("+d.mb+"MB"+took(s)+") ":" "),
    [d.dir?dlLink(d.dir+"/index.html","▶ 폰에서 열기",true):null]);
   if($("dlBox").open)renderDl()}
- catch(e){m.replaceChildren();
-  m.textContent=/not found/i.test(e.message)
+ catch(e){bz.stop(/not found/i.test(e.message)
    ?"이 서버는 아직 PWA 내보내기를 지원하지 않습니다 — 터미널에서: python tools/export_pwa.py"
-   :"실패: "+e.message}};
+   :"실패: "+e.message)}};
 
 // ---- 90 · LAN 접속 주소 + QR (외부 라이브러리 없이 직접 생성) ----
 // 결함 11·7: 서버 계약은 /api/state 의 lan_urls 배열 하나뿐이다.
@@ -933,7 +966,25 @@ $("btnLanCopy").onclick=async()=>{const b=$("btnLanCopy");
   b.textContent="복사됨";setTimeout(()=>{b.textContent="주소 복사"},1300)}
  catch(e){b.textContent="복사 실패 — 직접 입력하세요"}};
 
-function selectTab(name){const sec=$("tab-"+name);if(!sec)return;
+// ---- 탭 ----
+// 탭은 주소(location.hash)로 라우팅하고 마지막 탭을 기억한다. 새로고침·재인증(location.reload)
+// 뒤에도 보던 곳으로 돌아오고, 폰에서 특정 탭을 홈 화면에 추가하거나 링크로 열 수 있다.
+const TAB_KEY="vn:studio:tab";
+let curTab="";
+function tabFromHash(){const h=decodeURIComponent(String(location.hash||"").replace(/^#/,""));
+ return $("tab-"+h)?h:""}
+// 첫 화면의 해시는 replaceState 로 조용히 적는다 — 그러지 않으면 뒤로가기 한 번이
+// 아무 일도 하지 않고 주소의 #만 떼는 "죽은 한 걸음"이 된다.
+function setHash(name,quiet){
+ if(tabFromHash()===name)return;
+ const h=window.history;
+ if(quiet&&h&&h.replaceState){h.replaceState(null,"","#"+name);return}
+ location.hash="#"+name}
+function selectTab(name,quiet){const sec=$("tab-"+name);if(!sec)return;
+ curTab=name;
+ try{localStorage.setItem(TAB_KEY,name)}catch(e){}
+ // 해시보다 curTab 을 먼저 세워 두었으므로 이 대입이 부르는 hashchange 는 알아서 무시된다
+ setHash(name,quiet);
  document.querySelectorAll("nav button").forEach(x=>{const on=x.dataset.tab===name;
   x.classList.toggle("on",on);
   if(on)x.setAttribute("aria-current","page");else x.removeAttribute("aria-current")});
@@ -943,6 +994,12 @@ function selectTab(name){const sec=$("tab-"+name);if(!sec)return;
  if(name==="talk")talkStatus();
  if(name==="story")loadChatHistory();
  if(name==="viewer"){syncResume();renderLan();if($("dlBox").open)renderDl()}}
+window.addEventListener("hashchange",()=>{const t=tabFromHash();
+ if(t&&t!==curTab)selectTab(t)});
+// 첫 화면: 주소의 탭 > 마지막으로 보던 탭 > 스토리
+function initTab(){let saved="";
+ try{saved=localStorage.getItem(TAB_KEY)||""}catch(e){saved=""}
+ selectTab(tabFromHash()||($("tab-"+saved)?saved:"")||"story",true)}
 $("authReload").onclick=()=>{location.reload()};
 $("authDismiss").onclick=()=>{$("authGate").hidden=true};
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab));
@@ -1121,5 +1178,6 @@ function qrEncode(text){
  return best}
 
 syncResume();renderLan();   // syncResume 이 재생 엔진을 mount 한다(설정·저장 위치를 읽어 온다)
+initTab();                  // 주소·마지막 탭 복원 (스토리 탭이면 아래 loadChatHistory 와 합쳐진다)
 refresh().then(loadChatHistory)   // 스토리 탭이 첫 화면이므로 지난 대화를 바로 채운다
  .catch(e=>{$("chipTitle").textContent="상태 불러오기 실패";$("chipTitle").className="chip bad"});

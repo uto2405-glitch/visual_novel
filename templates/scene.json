@@ -39,8 +39,5 @@
     "score": null,
     "notes": []
   },
-  "print": {
-    "crop_anchor": "center"
-  },
   "version": 1
 }

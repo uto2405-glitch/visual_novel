@@ -93,15 +93,12 @@ def _as_order(v, fallback: int) -> int:
         return fallback
 
 
-def norm_episode(v):
-    """화 번호는 양의 정수만 (감상본 export_viewer.episode_of 와 같은 규칙). 아니면 None."""
-    if isinstance(v, bool):
-        return None
-    try:
-        n = int(str(v).strip())
-    except (TypeError, ValueError):
-        return None
-    return n if n > 0 else None
+# 화 번호·엔딩 표기 규칙의 정본은 vn_core 하나다 — 여기서는 이름만 이어 준다.
+# (예전에는 같은 규칙이 감상본·장면 구성·스튜디오에 각각 적혀 주석으로만 동기화됐고,
+#  실제로 엔딩 이름과 화 번호가 화면마다 갈렸다. 이제 갈릴 자리가 없다.)
+norm_episode = vn_core.norm_episode   # 값 → 양의 정수 또는 None
+ending_of = vn_core.ending_of         # 장면 → (엔딩인가, 엔딩 이름)
+last_episode = vn_core.last_episode   # 디스크의 마지막 장면이 물려주는 화 번호
 
 
 def _first_episode(mf: dict) -> int:
@@ -114,24 +111,6 @@ def _first_episode(mf: dict) -> int:
             if isinstance(e, dict)]
     nums = [n for n in nums if n]
     return min(nums) if nums else 0
-
-
-def last_episode():
-    """디스크에서 가장 뒤 순서 장면의 화 번호 — 새로 만드는 장면이 이어받을 값.
-
-    이 승계가 없으면 지금 있는 장면들에만 episode 가 있고 앞으로 만드는 장면에는
-    영영 붙지 않아, 감상본의 화 선택에서 새 장면이 통째로 빠진다.
-    """
-    best_order, ep = None, None
-    for f in (sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []):
-        sc = vn_core.load_json_safe(f, {})
-        e = norm_episode(sc.get("episode"))
-        if e is None:
-            continue
-        o = _as_order(sc.get("scene_order"), 0)
-        if best_order is None or o >= best_order:
-            best_order, ep = o, e
-    return ep
 
 
 def _dating_scale(mf: dict) -> dict:
@@ -276,21 +255,6 @@ def norm_branch(v) -> list:
         if isinstance(b, dict) and str(b.get("goto", "")).strip():
             out.append({"min": _as_order(b.get("min", 0), 0), "goto": str(b["goto"])})
     return out
-
-
-def ending_of(sc: dict) -> tuple:
-    """엔딩 표기를 하나로 정규화한다 → (엔딩인가, 엔딩 이름).
-
-    규약은 ``ending: true`` + 선택적 ``ending_label: "호감 엔딩"`` 이다.
-    예전 데이터의 ``ending: "호감 엔딩"``(문자열)도 그대로 받아 label 로 옮긴다.
-    감상본(export_viewer.ending_of)·스튜디오 목록(/api/state)·장면 구성이 **같은 규칙**을
-    써야 엔딩 이름이 화면마다 달라지지 않는다.
-    """
-    raw = sc.get("ending") if isinstance(sc, dict) else None
-    label = str((sc or {}).get("ending_label") or "").strip()
-    if isinstance(raw, str):
-        return bool(raw.strip()), (label or raw.strip())
-    return bool(raw), label
 
 
 def build_scene(it: dict, index: int, char_ids: list, loc_ids: set, locs: list,

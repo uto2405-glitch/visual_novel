@@ -47,8 +47,10 @@
   * 이미지 생성 스레드는 daemon 이라 **Ctrl+C 로 서버를 끄면 즉시 끊긴다.** 종료 시 진행 중인
     작업이 있으면 콘솔에 알리고(gen_jobs.running), MakeFun 에 이미 만들어진 결과는
     POST /api/refetch 로 추가 과금 없이 다시 받아올 수 있다.
-  * 같은 장면의 중복 생성(=중복 과금)은 gen_jobs.claim 하나가 막는다 — 웹이든 CLI 든
-    같은 관문을 지난다.
+  * 같은 장면의 중복 생성(=중복 과금)은 gen_jobs.claim 하나가 막는다. 웹 요청끼리는 서버
+    메모리 표시로, 웹 서버와 CLI 처럼 **프로세스가 다를 때는** logs/gen_locks/<scene_id>.lock
+    파일로 막는다(협조적 잠금 — 이 관문을 지나는 경로만 지키고, 좌초된 잠금은 20분 뒤
+    회수된다. 보장 범위는 gen_jobs 모듈 설명에 적어 두었다).
 
 로그: logs/webapp.log (회전). 기본은 오류·생성 실패·LAN 접속만, --verbose 면 요청까지.
       생성 작업 로그(vn.gen)도 같은 파일에 모인다.
@@ -169,25 +171,6 @@ def setup_logging(verbose: bool = False) -> None:
             lg.addHandler(handler)
         lg.setLevel(logging.DEBUG if verbose else logging.INFO)
         lg.propagate = False
-
-
-# ---------------------------------------------------------------- 저장 유틸(별칭)
-# 구현은 각각 vn_core(원자적 쓰기)와 talk_store(대화 로그)에 하나씩만 있다.
-# 아래 이름은 기존 호출부·자가진단 호환용 별칭이다.
-_atomic_write_text = vn_core.atomic_write_text
-_write_messages = talk_store.save_log       # 잘라낼 구간을 아카이브로 이관한 뒤 자른다
-_merge_talk = talk_store.merge_messages
-_load_talk = talk_store.load_messages
-_talk_file = talk_store.talk_path
-_safe_cid = talk_store.normalize_cid
-_resolve_talk_cid = talk_store.resolve_cid
-_missing_anchors = scene_ops.missing_anchors
-visual_style = prompt_build.visual_style
-compose_image_prompt = prompt_build.compose_image_prompt
-# 장면 상태 전이는 scene_ops 하나에만 있다(웹·CLI 공용, 승인 잠금·쓰기 잠금 포함).
-set_scene_prompt = scene_ops.set_prompt
-register_images = scene_ops.register_images
-select_image = scene_ops.select_image
 
 
 def _load_json_safe(path: Path) -> dict | None:
@@ -428,24 +411,17 @@ def r_preflight(b):
     return print_preflight.preflight_image(size[0], size[1], int(b.get("dpi", 300)))
 
 
-_CROP_ANCHORS = {"center", "top", "bottom", "left", "right"}
-
-
 def r_set_crop(b):
-    """인화 크롭 기준점 저장 — 어디를 살릴지는 사람이 정한다(print_export.crop_anchor)."""
-    sid = b.get("scene_id")
-    _require_scene(sid)
+    """인화 크롭 기준점 저장 — 어디를 살릴지는 사람이 정한다(print_export.crop_anchor).
+
+    print.crop_anchor 는 /api/set-scene 이 이미 다루는 필드다. 여기서 장면 파일을
+    직접 고쳐 쓰면 값 검증도 APPROVED 가드도 없는 **두 번째 쓰기 경로**가 생긴다
+    (승인 도장을 찍은 장면의 인화 설정이 이 경로로만 바뀌는 상태가 된다).
+    그래서 저장은 scene_ops 하나에 맡긴다 — 승인 장면의 인화 설정 변경이
+    허용되는 것도 그쪽의 명시적 예외(set_crop)이지 이 라우트의 우회가 아니다.
+    """
     anchor = str(b.get("anchor", "center"))
-    if anchor not in _CROP_ANCHORS:
-        raise VNError(f"crop_anchor 는 {'/'.join(sorted(_CROP_ANCHORS))} 중 하나여야 합니다.")
-    with WRITE_LOCK:
-        path = adv.scene_path(sid)
-        sc = adv.load(path)
-        pr = sc.get("print") if isinstance(sc.get("print"), dict) else {}
-        pr["crop_anchor"] = anchor
-        sc["print"] = pr
-        adv.save(path, sc)
-    return {"scene_id": sid, "crop_anchor": anchor}
+    return scene_ops.set_crop(b.get("scene_id"), anchor)
 
 
 def r_set_scene(b):
@@ -548,6 +524,20 @@ def _candidates(sc: dict) -> int:
     return len(sc.get("assets", {}).get("raw_images", []))
 
 
+def _progress(sid: str, label: str):
+    """MakeFun 폴링 진행을 그대로 진행 표시로 넘기는 콜백.
+
+    화면에 경과 시간이 보이는 것도 이유지만, 더 중요한 건 **살아 있다는 신호**다 —
+    gen_jobs 의 선점 잠금은 마지막 갱신에서 STALE_SEC 이 지나면 좌초로 보고 회수된다.
+    갱신이 없으면 오래 걸리는 생성이 스스로 그 판정을 받아 다른 프로세스에게 자리를
+    내주고, 같은 장면이 한 번 더 과금될 수 있다.
+    """
+    def on_progress(elapsed, status_text):
+        gen_jobs.note(sid, f"MakeFun {label} 중… {float(elapsed):.0f}초 경과 "
+                           f"· 상태 {status_text or '조회중'}")
+    return on_progress
+
+
 def r_gen_image(b):
     """MakeFun AI 로 장면 이미지 생성 → images/raw/<scene>/ 저장 + 자동 등록·검사.
 
@@ -562,7 +552,7 @@ def r_gen_image(b):
 
     def work():
         gen_jobs.note(sid, "MakeFun 에 생성 요청 중… (1~3분)")
-        return makefun_client.generate_for_scene(sid, n=n)
+        return makefun_client.generate_for_scene(sid, n=n, on_progress=_progress(sid, "생성"))
 
     return gen_jobs.start(
         sid, work, "생성", sync=bool(b.get("sync")), count=_candidates(sc),
@@ -582,7 +572,7 @@ def r_refetch(b):
 
     def work():
         gen_jobs.note(sid, "이미 만들어진 결과를 다시 받는 중… (무과금)")
-        return makefun_client.refetch_scene(sid)
+        return makefun_client.refetch_scene(sid, on_progress=_progress(sid, "재수령"))
 
     return gen_jobs.start(sid, work, "재수령", sync=bool(b.get("sync")),
                           count=_candidates(sc),
@@ -1439,6 +1429,9 @@ def main() -> int:
         # 생성 스레드는 daemon 이라 여기서 함께 끊긴다. MakeFun 쪽에서는 이미 만들어졌을 수
         # 있으므로, 다시 과금하지 말고 재수령(/api/refetch)으로 받으라고 알려 준다.
         pend = gen_jobs.running()
+        # 잠금 파일은 여기서 반드시 푼다 — 안 그러면 다시 켠 뒤 그 장면이 최대 20분(STALE_SEC)
+        # 동안 "이미 생성 중" 으로 거절된다(중단된 작업을 회수하러 온 사용자를 막는 꼴).
+        gen_jobs.release_all("서버 종료로 중단됨")
         if pend:
             print(f"\n⚠ 진행 중이던 이미지 작업이 중단되었습니다: {', '.join(pend)}")
             print("  MakeFun 에서 이미 만들어졌을 수 있습니다. 다시 켠 뒤 해당 장면에서")

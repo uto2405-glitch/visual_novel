@@ -20,6 +20,7 @@ webapp 의 r_* 와 advance_scene 의 cmd_* 는 이 함수들을 부르는 얇은
   approve(sid)                                    REVIEW_HUMAN → APPROVED (FAIL 시 롤백)
   revise(sid, stage, note="")                     이전 단계로 되돌림(자료 보존)
   update_fields(sid, fields)                      장면 계획 필드 병합 저장(화이트리스트)
+  set_crop(sid, anchor)                           인화 크롭 기준점(승인 잠금의 유일한 예외)
 
 CLI 어댑터를 위한 보조(웹은 쓰지 않는다)
   import_image_files(sid, paths, run_check=True)  외부 파일을 후보 폴더로 복사 후 등록
@@ -28,11 +29,16 @@ CLI 어댑터를 위한 보조(웹은 쓰지 않는다)
   missing_anchors(sc, text)                       프롬프트에 빠진 앵커 원문 목록
   fix_anchor_text(sc, text)                       빠진 앵커를 채운 프롬프트
 
+이 파일의 자리(계층)
+  * 아래로만 의존한다: **vn_core 하나**(경로·JSON·원자적 쓰기·저장소 계층·쓰기 잠금).
+    예전에는 저장소 계층이 advance_scene(CLI)에 있어서 이 모듈이 CLI 를 import 하고
+    CLI 가 다시 이 모듈을 지연 import 하는 순환이었다 — BACK_STATES 가 두 벌이던 이유다.
+  * 위층(advance_scene·webapp·vn_compose)이 이 모듈을 부른다. 여기서 그쪽을 부르지 않는다.
+
 오류는 모두 vn_core.VNError(RuntimeError 파생)다. 종료 코드 변환은 각 도구의 main() 몫.
 """
 from __future__ import annotations
 
-import contextlib
 import re
 import shutil
 import sys
@@ -41,11 +47,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import advance_scene as adv   # noqa: E402  저장소 계층(load/save/scene_path/run_checker) 재사용
 import vn_core                # noqa: E402
 from vn_core import VNError   # noqa: E402
 
-# 되돌릴 수 있는 단계 — revise 의 유일한 허용 집합.
+# 되돌릴 수 있는 단계 — revise 의 유일한 허용 집합(CLI 의 revise 인자 목록도 이것을 쓴다).
 BACK_STATES = ("SCENE_PLAN", "PROMPT", "IMAGE")
 
 _REVISE_HINT = "  python tools/advance_scene.py revise {sid} IMAGE --note \"사유\""
@@ -62,30 +67,16 @@ EDITABLE_FIELDS = ("purpose", "action_beat", "emotion", "time", "camera", "dialo
 PROTECTED_FIELDS = ("status", "review", "assets", "prompt", "scene_id", "scene_order", "version")
 CAMERA_KEYS = ("shot", "angle", "framing", "focus")
 PRINT_KEYS = ("crop_mode", "pad_color", "crop_anchor")
-CROP_MODES = ("cover", "fit")                                   # print_export.export_one
-CROP_ANCHORS = ("center", "top", "bottom", "left", "right")     # webapp._CROP_ANCHORS
+# 크롭 집합의 정본은 vn_core 다(자르기 방식·웹 검증·여기가 같은 값을 봐야 한다).
+CROP_MODES = vn_core.CROP_MODES
+CROP_ANCHORS = vn_core.CROP_ANCHORS
 
 _TEXT_LIMIT = 2000          # 한 필드에 들어갈 수 있는 글자 수 상한(장면 파일 비대화 방지)
 _MISSING = object()
 
-
-# ---------------------------------------------------------------- 잠금
-@contextlib.contextmanager
-def _lock():
-    """전역 쓰기 잠금.
-
-    vn_core.WRITE_LOCK 이 정본이다. advance_scene 이 아직 자기 잠금을 따로 갖고 있는
-    동안에는(이관 과도기) 그것도 같이 잡아 webapp 의 기존 ``with adv.WRITE_LOCK`` 블록과
-    상호배제를 보장한다. 순서는 항상 vn_core → advance_scene 하나뿐이라 교착이 없다.
-    두 잠금이 같은 객체가 되면(이관 완료) 한 번만 잡는다.
-    """
-    other = getattr(adv, "WRITE_LOCK", None)
-    with vn_core.WRITE_LOCK:
-        if other is None or other is vn_core.WRITE_LOCK:
-            yield
-        else:
-            with other:
-                yield
+# 저장소 전역 단일 쓰기 잠금 — 모든 쓰기 경로가 이 하나 안에서만 read-modify-write 한다.
+# (RLock 이라 select→register 처럼 겹쳐 잡는 경로도 안전하다.)
+_LOCK = vn_core.WRITE_LOCK
 
 
 # ---------------------------------------------------------------- 저장소 접근
@@ -94,7 +85,7 @@ def _scene_path(sid: Any) -> Path:
     밖의 파일에 닿는 것을 원천 차단하기 위해서다."""
     if not vn_core.is_scene_id(sid):
         raise VNError(f"장면 ID 형식이 올바르지 않습니다(SCENE-001 형식): {sid!r}")
-    return adv.scene_path(sid)
+    return vn_core.scene_path(sid)
 
 
 def _require(sid: Any) -> Path:
@@ -127,20 +118,16 @@ def _norm(sc: dict) -> dict:
 
 
 def _load(path: Path) -> dict:
-    """장면 읽기 — advance_scene 의 로더를 재사용하되, 그 안의 die()/SystemExit 가
-    웹 요청 스레드를 죽이지 못하게 VNError 로 바꾼다(이관 전후 모두 안전)."""
-    try:
-        sc = adv.load(path)
-    except SystemExit as exc:
-        raise VNError(f"장면 파일을 읽을 수 없습니다: {path.name} "
-                      "(JSON 형식이 깨졌는지 확인하세요)") from exc
-    if not isinstance(sc, dict):
-        raise VNError(f"{path.name}: JSON 최상위가 객체({{...}})가 아닙니다.")
-    return _norm(sc)
+    """장면 읽기 — 형식 오류는 VNError(사용자에게 그대로 보여줄 문장)로 올라온다.
+
+    읽은 뒤 _norm 으로 하위 구조를 보장하므로, 아래 함수들은 assets/review 존재를
+    다시 확인하지 않아도 된다.
+    """
+    return _norm(vn_core.load_dict(path))
 
 
 def _save(path: Path, sc: dict) -> None:
-    adv.save(path, sc)          # 원자적 저장(임시 파일 → 교체)
+    vn_core.atomic_write_json(path, sc)     # 원자적 저장(임시 파일 → 교체)
 
 
 def _fails(out: str) -> str:
@@ -230,7 +217,7 @@ def set_prompt(sid: str, text: str, fix_anchors: bool = False) -> dict:
         raise VNError("이미지 프롬프트가 비어 있습니다.")
     path = _require(sid)
     fixed: list[str] = []
-    with _lock():
+    with _LOCK:
         sc = _load(path)
         _deny_if_approved(sc, sid, "프롬프트를 바꾸려면")
         if fix_anchors:
@@ -238,7 +225,7 @@ def set_prompt(sid: str, text: str, fix_anchors: bool = False) -> dict:
         sc["prompt"]["grok_output"] = text
         sc["status"] = "PROMPT"
         _save(path, sc)
-        code, out = adv.run_checker(sid)
+        code, out = vn_core.run_checker(sid)
     return {"scene_id": sid, "status": "PROMPT", "checker_pass": code == 0,
             "fails": _fails(out), "fixed_anchors": fixed}
 
@@ -261,7 +248,7 @@ def register_images(sid: str, run_check: bool = True) -> dict:
     승인된 컷을 사람 확인 없이 교체하는 유일한 통로였기 때문이다.
     """
     path = _require(sid)
-    with _lock():
+    with _LOCK:
         sc = _load(path)
         files, rels = _scan(sid)
         cur = list(sc["assets"]["raw_images"])
@@ -288,7 +275,7 @@ def register_images(sid: str, run_check: bool = True) -> dict:
         if not run_check:
             return {"count": len(rels), "auto": sc["review"].get("auto", "PENDING"),
                     "fails": "", "locked": False}
-        code, out = adv.run_checker(sid)
+        code, out = vn_core.run_checker(sid)
         sc = _load(path)
         sc["review"]["auto"] = "PASS" if code == 0 else "FAIL"
         if code == 0 and sc.get("status") == "IMAGE":
@@ -315,7 +302,7 @@ def import_image_files(sid: str, paths: Iterable[Any], run_check: bool = True) -
     if bad:
         raise VNError(f"허용되지 않는 파일 형식: {', '.join(bad)} "
                       f"(허용: {', '.join(sorted(vn_core.IMAGE_EXTS))})")
-    with _lock():
+    with _LOCK:
         sc = _load(path)
         _deny_if_approved(sc, sid, "후보 이미지를 추가하려면")
         dest = vn_core.IMAGES_RAW / sid
@@ -370,7 +357,7 @@ def resolve_candidate(sid: str, key: Any) -> str:
 def select_image(sid: str, rel: str) -> dict:
     """후보 1장을 selected_image 로 지정한다. 반환: {selected, auto_pass, fails}"""
     path = _require(sid)
-    with _lock():   # 검사~저장을 한 잠금 안에 둬 승인 직후의 교체(경쟁 상태)까지 막는다
+    with _LOCK:   # 검사~저장을 한 잠금 안에 둬 승인 직후의 교체(경쟁 상태)까지 막는다
         _deny_if_approved(_load(path), sid, "선택 이미지를 바꾸려면")
         # 후보 목록만 최신화하고 검사는 돌리지 않는다 — 아래에서 어차피 한 번 돌리므로,
         # 여기서도 돌리면 선택 1회에 검사기 서브프로세스가 2번 뜬다(승격은 아래에서 직접 한다).
@@ -384,7 +371,7 @@ def select_image(sid: str, rel: str) -> dict:
         # A7 이 auto=PASS 선행을 요구하므로, 먼저 PASS 로 두지 않으면 정상 선택도 FAIL 이 된다.)
         sc["review"]["auto"] = "PASS"
         _save(path, sc)
-        code, out = adv.run_checker(sid)
+        code, out = vn_core.run_checker(sid)
         sc = _load(path)
         if code == 0:
             if sc.get("status") == "IMAGE":     # register_images(run_check=True) 가 하던 승격
@@ -404,7 +391,7 @@ def approve(sid: str) -> dict:
     되돌린다(부분 승인 상태를 남기지 않는다).
     """
     path = _require(sid)
-    with _lock():
+    with _LOCK:
         try:
             original = path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -420,7 +407,7 @@ def approve(sid: str) -> dict:
         sc["review"]["human"] = "PASS"
         sc["status"] = "APPROVED"
         _save(path, sc)
-        code, out = adv.run_checker(sid)
+        code, out = vn_core.run_checker(sid)
         if code != 0:
             vn_core.atomic_write_text(path, original)      # 롤백
             raise VNError("자동 검사 FAIL — 승인을 되돌렸습니다.\n" + _fails(out))
@@ -436,7 +423,7 @@ def revise(sid: str, stage: str, note: str = "") -> dict:
     if stage not in BACK_STATES:
         raise VNError(f"되돌릴 단계는 {'/'.join(BACK_STATES)} 중 하나여야 합니다: {stage!r}")
     path = _require(sid)
-    with _lock():
+    with _LOCK:
         sc = _load(path)
         sc["status"] = stage
         sc["review"]["auto"] = "PENDING"
@@ -463,17 +450,6 @@ def _flag(v: Any) -> bool:
     if isinstance(v, str):
         return v.strip().lower() not in ("", "false", "0", "no", "off")
     return bool(v)
-
-
-def _int_or_none(v: Any):
-    """양의 정수만 (export_viewer.episode_of · vn_compose._norm_episode 와 같은 규칙)."""
-    if isinstance(v, bool):
-        return None
-    try:
-        n = int(str(v).strip())
-    except (TypeError, ValueError):
-        return None
-    return n if n > 0 else None
 
 
 def _id_list(v: Any, what: str) -> list[str]:
@@ -560,7 +536,7 @@ def _apply_field(sc: dict, key: str, value: Any) -> None:
         else:
             sc.pop(key, None)
     elif key == "episode":
-        ep = _int_or_none(value)
+        ep = vn_core.norm_episode(value)     # 화 번호 규칙의 정본은 vn_core 하나다
         if ep is None:
             sc.pop(key, None)               # 화를 쓰지 않는 작품 — 필드 자체를 두지 않는다
         else:
@@ -616,6 +592,11 @@ def update_fields(sid: str, fields: Any) -> dict:
     만들고, 편집 폼이 그것을 쓸 수 있으면 사람 승인 게이트가 필드 하나로 우회된다.
 
     APPROVED 장면은 revise 로 되돌리기 전에는 편집할 수 없다(다른 전이 함수와 같은 가드).
+    **예외는 print 하나뿐이다** — 인화 크롭·여백은 승인 게이트가 지키는 창작 산출물이 아니라
+    출력 설정이고, 인화는 대개 승인한 뒤에 한다. 여기서 막으면 승인 컷을 뽑을 때마다
+    revise 로 승인을 풀었다 다시 찍어야 해서, 게이트가 지키려던 것(사람이 승인한 그림)이
+    오히려 흔들린다. 그림·대사·분기를 바꾸는 편집은 그대로 거부된다.
+
     저장 후 검사기를 돌려 결과를 함께 돌려준다 — 편집이 규격을 깼는지 그 자리에서 보이게.
     """
     if not isinstance(fields, dict):
@@ -632,9 +613,11 @@ def update_fields(sid: str, fields: Any) -> dict:
     if not fields:
         raise VNError("바꿀 내용이 없습니다.")
     path = _require(sid)
-    with _lock():
+    print_only = set(fields) == {"print"}   # 출력 설정만 바꾸는 편집 — 승인 잠금의 유일한 예외
+    with _LOCK:
         sc = _load(path)
-        _deny_if_approved(sc, sid, "장면 내용을 바꾸려면")
+        if not print_only:
+            _deny_if_approved(sc, sid, "장면 내용을 바꾸려면")
         updated = []
         for key in EDITABLE_FIELDS:     # 요청 키 순서에 결과가 흔들리지 않게 항상 같은 순서로
             if key not in fields:
@@ -644,6 +627,17 @@ def update_fields(sid: str, fields: Any) -> dict:
             if sc.get(key, _MISSING) != before:
                 updated.append(key)
         _save(path, sc)
-        code, out = adv.run_checker(sid)
+        code, out = vn_core.run_checker(sid)
     return {"scene_id": sid, "status": sc.get("status", ""), "updated": updated,
             "checker_pass": code == 0, "fails": _fails(out)}
+
+
+def set_crop(sid: str, anchor: str) -> dict:
+    """인화 크롭 기준점만 바꾼다 — 승인 잠금의 **명시적 예외**에 이름을 준 것.
+
+    update_fields 의 print 예외를 그냥 쓰면 "왜 승인 장면이 바뀌었나"를 나중에 읽는 사람이
+    화이트리스트 안에서 찾아야 한다. 인화 설정 변경은 창작물 수정과 다른 행위이므로
+    호출부(/api/set-crop)와 감사 로그에서 그 의도가 이름으로 드러나게 한다.
+    구현은 update_fields 하나뿐이다(쓰기 경로를 늘리지 않는다).
+    """
+    return update_fields(sid, {"print": {"crop_anchor": anchor}})

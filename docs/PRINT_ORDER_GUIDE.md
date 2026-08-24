@@ -142,7 +142,17 @@ python tools/print_export.py --size 5x7 --mode fit --bg 245,240,228   # RGB 로�
 "print": { "crop_anchor": "top", "crop_mode": "fit", "pad_color": "#f5f0e4" }
 ```
 
-한 번 정해 두면 다음 주문에서도 그 컷만 그 규칙으로 구워진다. (→ [SCHEMA.md](SCHEMA.md))
+한 번 정해 두면 다음 주문에서도 그 컷만 그 규칙으로 구워진다. (→ [SCHEMA.md](SCHEMA.md) §2.8)
+
+> **`--anchor top` 을 줬는데 아무 변화가 없다면** 그 장면에 `print.crop_anchor` 가 이미
+> 적혀 있는지부터 본다. 장면 값이 명령행보다 세다 — 경고도 없이 조용히 이긴다.
+> 그래서 `print` 블록은 **그 규칙이 정말 필요한 컷에만** 넣는다(모든 장면에 `"center"` 를
+> 박아 두면 명령행 옵션이 통째로 죽는다).
+>
+> ```powershell
+> # print 블록이 박힌 장면 찾기
+> python -c "import json,glob;[print(f) for f in sorted(glob.glob('project/scenes/*.json')) if json.load(open(f,encoding='utf-8')).get('print')]"
+> ```
 
 ### 색 — sRGB ICC 를 임베드한다
 

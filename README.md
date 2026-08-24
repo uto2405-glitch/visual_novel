@@ -50,8 +50,13 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 | 6 | 감상 | [뷰어] · [갤러리] · [대화] 탭 | 나 |
 | 7 | 내보내기 | 단일 HTML 감상본 · PWA · 인화 마스터 | 도구 |
 
-내부 상태 흐름: `SCENE_PLAN → PROMPT → IMAGE → REVIEW_AUTO → REVIEW_HUMAN → APPROVED` (되돌리기 `REVISE`)
+내부 상태 흐름: `SCENE_PLAN → PROMPT → IMAGE → REVIEW_HUMAN → APPROVED`
+(되돌리기: `advance_scene revise <ID> SCENE_PLAN|PROMPT|IMAGE`)
+자동 검사는 후보 등록·선택 시점에 그 자리에서 돌고 `review.auto` 에 남는다 — 머무는 단계가 아니다.
 검사기는 **상태에 맞는 항목만** 본다. `SCENE_PLAN` 장면은 이미지가 없어도 FAIL 이 아니다.
+
+> `status` 를 손으로 `REVIEW_AUTO` 라고 적지 마라. 검사기 열거값에만 남은 미사용 상태라
+> **검사는 통과하지만 승격·승인이 모두 막힌다** — 자세한 건 [docs/SCHEMA.md](docs/SCHEMA.md) §2.1.
 
 ## 화면
 
@@ -169,7 +174,8 @@ MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해�
 
 ## 프라이버시
 
-인물과 나눈 대화(`project/story/chatlog.json`, `talk_*.json`)는 **git 에서 제외**된다.
+인물과 나눈 대화(`project/story/chatlog.json`, `talk_*.json`, 상한을 넘겨 밀려난
+`*.archive.jsonl`, 요약본 `memory_*.json`)는 **git 에서 제외**된다.
 감상본 HTML 에도 포함되지 않는다 — 들어가는 건 제목·캐릭터 이름·대사·승인된 이미지다.
 그 파일 하나에 작품 전체가 들어 있으므로, 공개 호스팅 전에
 **[docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md)** 를 먼저 읽는다.

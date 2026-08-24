@@ -16,9 +16,11 @@
  *   choice= {text, goto?, affection?}     branch = {min, goto}
  * 스튜디오는 /api/state 의 장면(scene_id·dialogue·image_url…)을 이 모양으로 변환해 넘긴다.
  *
- * 전역은 하나만 노출한다: window.VNRuntime = {mount(opts)}
- *   opts = {data, root, imageSrc(sc,kind), storageKey, onExit(), onGallery(),
- *           onSavedChange(has), backgroundNodes()}
+ * 전역은 하나만 노출한다: window.VNRuntime = {mount(opts), renderScroll(data,container,opts)}
+ *   mount.opts = {data, root, imageSrc(sc,kind), storageKey, onExit(), onGallery(),
+ *                 onSavedChange(has), backgroundNodes(), extraButtons}
+ *   renderScroll  세로 스크롤 리딩(웹툰형) 화면 — 재생과 별개의 읽기 방식이라 상태가 없다.
+ *                 두 호스트가 같은 DOM·같은 위치 저장 규약을 쓰게 하는 단일 출처.
  *
  * 규약: 이 파일은 문자열을 HTML 로 조립하지 않는다 — 문자열 주입 API 는 한 번도 쓰지 않고
  *       createElement/textContent/속성 대입만 쓴다(자가진단 J01·V01 이 감시). 감상본에
@@ -35,8 +37,14 @@
     return n;
   };
   var REDUCE = !!(global.matchMedia && global.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  var COARSE = !!(global.matchMedia && global.matchMedia("(pointer:coarse)").matches);
   var FOCUSABLE = "button:not([disabled]),[href],input,select,textarea,[tabindex]:not([tabindex='-1'])";
   var PRELOAD_SPAN = 2;      // 현재 위치 ±2컷만 미리 받는다(100컷 작품에서 수백 MB 선요청 방지)
+  // 단축키 힌트: 폰(터치)에는 없는 키를 나열하지 않고, 몇 컷 읽고 나면 사라진다 —
+  // 좁은 화면에서 대사창 한 줄을 매 컷 빼앗지 않기 위해서다.
+  var HINT_KEYS = "탭/Space 진행 · ← 이전 · L 기록 · C 장면 · S 설정 · Esc 닫기";
+  var HINT_TOUCH = "탭으로 진행 · 좌우 스와이프";
+  var HINT_LINES = COARSE ? 3 : 6;
 
   /* ------------------------------------------------------------------ 스타일
    * 두 화면이 같은 연출을 쓰도록 CSS 도 런타임이 들고 있다. 색은 호스트가
@@ -96,10 +104,13 @@
     ".vnr-hint{margin-top:6px;text-align:right;opacity:.78;font-size:11.5px;font-style:normal}",
     ".vnr-dlg,.vnr-bar{transition:opacity .2s ease}",
     ".vnr.vnr-uihidden .vnr-dlg,.vnr.vnr-uihidden .vnr-bar{opacity:0;pointer-events:none}",
-    /* 선택지 */
+    /* 선택지 — 무대(.vnr)는 position:fixed 라 스크롤 컨테이너가 아니다. 선택지가 화면보다
+       길어지면 첫/마지막 항목을 누를 수 없으므로 이 상자 자신이 스크롤해야 한다. */
     ".vnr-choices{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;",
     "display:flex;flex-direction:column;gap:12px;width:min(560px,88%);",
-    "padding-bottom:env(safe-area-inset-bottom)}",
+    "max-height:calc(100% - 140px);overflow-y:auto;-webkit-overflow-scrolling:touch;",
+    "overscroll-behavior:contain;",
+    "padding:4px 4px calc(4px + env(safe-area-inset-bottom))}",
     ".vnr-choices button{background:rgba(24,18,12,.94);color:var(--vnr-ink,#EDE4D3);",
     "border:1px solid var(--vnr-accent,#5FB39A);border-radius:12px;padding:14px 18px;",
     "font-size:15px;text-align:left;box-shadow:0 8px 24px -10px rgba(0,0,0,.7)}",
@@ -179,6 +190,9 @@
     ".vnr-dlg{bottom:calc(14px + env(safe-area-inset-bottom));padding:13px 16px}",
     ".vnr-dlg.vnr-top{top:calc(58px + env(safe-area-inset-top))}",
     ".vnr-text{font-size:var(--vnr-fs,16px);max-height:34vh}",
+    ".vnr-hint{font-size:11px;text-align:center;opacity:.62}",
+    ".vnr-choices{max-height:calc(100% - 96px);gap:10px}",
+    ".vnr-choices button{padding:12px 15px;font-size:14.5px}",
     ".vnr-set{right:8px;left:8px;width:auto}",
     ".vnr-log,.vnr-scenes{inset:6% 5%}}"
   ].join("");
@@ -257,6 +271,123 @@
     return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? "#17110D" : "#fff";
   }
 
+  /* ======================================================== 세로 스크롤 리딩
+   * "위에서 아래로 쭉 읽는" 웹툰형 읽기 화면. 스튜디오와 감상본이 각자 같은 DOM 을
+   * 따로 만들고 있었고(그래서 이미 갈렸다 — 읽던 위치 저장은 스튜디오에만 있었다),
+   * 여기 하나로 합쳤다. 재생 엔진과 달리 상태가 없으므로 mount 밖의 독립 함수다.
+   *
+   *   renderScroll(data, container, opts) → {count, save(), restore(), destroy()}
+   *   opts = {imageSrc(sc,"scroll"), epLabel(ep), nameColor, scroller, storageKey}
+   *     scroller    실제로 스크롤되는 요소(위치 저장·복원의 기준). 없으면 그리기만 한다.
+   *     storageKey  주면 "<key>:scroll:<제목>" 에 읽던 위치를 저장한다(엔진의 vn:pos 와 별도).
+   *
+   * 클래스 이름은 두 호스트의 기존 CSS 규약을 그대로 쓴다 —
+   *   .cut(장면 블록) · .ep(화 머리) · .say(대사 줄) · .nar(나레이션) · .pick(선택지)
+   * 그래서 호스트는 CSS 한 줄 바꾸지 않고 이 함수로 갈아탈 수 있다.
+   */
+  function renderScroll(data, container, opts) {
+    if (!container || !container.appendChild) return null;
+    opts = opts || {};
+    var d = normData(data);
+    var imgOf = (typeof opts.imageSrc === "function")
+      ? opts.imageSrc : function (sc) { return (sc && sc.img) || ""; };
+    var epLabel = (typeof opts.epLabel === "function")
+      ? opts.epLabel : function (ep) { return ep + "화"; };
+    var nameColor = (opts.nameColor == null) ? "" : String(opts.nameColor);
+    var scroller = (opts.scroller && opts.scroller.addEventListener) ? opts.scroller : null;
+    var key = opts.storageKey ? String(opts.storageKey) + ":scroll:" + (d.title || "_") : "";
+    var timers = [], scrollTimer = null;
+
+    container.replaceChildren();
+    var curEp = null, count = 0;
+    d.scenes.forEach(function (sc) {
+      var url = imgOf(sc, "scroll") || "";
+      var lines = sc.lines || [], choices = sc.choices || [];
+      if (!url && !lines.length && !choices.length) return;   // 그릴 것이 없는 장면은 건너뛴다
+      var blk = el("div", "cut");
+      blk.setAttribute("data-sid", sc.id);                    // 위치 복원의 기준점
+      if (sc.ep && sc.ep !== curEp) {
+        curEp = sc.ep;
+        blk.appendChild(el("div", "ep", epLabel(sc.ep)));
+      }
+      if (url) {
+        var im = el("img");
+        im.src = url;
+        im.alt = sc.purpose || sc.id;
+        im.loading = "lazy";
+        im.decoding = "async";
+        blk.appendChild(im);
+      }
+      lines.forEach(function (l) {
+        var s = el("div", "say");
+        if (l.n) {
+          var b = el("b", null, l.n + "  ");
+          b.style.color = l.c || nameColor;
+          s.appendChild(b);
+          s.appendChild(el("span", null, l.t || ""));
+        } else s.appendChild(el("span", "nar", l.t || ""));
+        blk.appendChild(s);
+      });
+      choices.forEach(function (c) {          // 스크롤 모드는 선택지를 목록으로만 보여준다
+        var s = el("div", "say");
+        s.appendChild(el("span", "pick", "▸ " + ((c && c.text) || "")));
+        blk.appendChild(s);
+      });
+      container.appendChild(blk);
+      count++;
+    });
+
+    /* 읽던 위치는 픽셀로 기억하지 않는다 — 이미지가 lazy 로 늦게 실려 높이가 계속 바뀌기
+       때문이다. "어느 장면 블록의 어디쯤"으로 적어 두고, 복원은 몇 번 나눠 다시 맞춘다. */
+    function save() {
+      if (!key || !scroller) return;
+      var y = scroller.scrollTop, sid = "", off = y, kids = container.children;
+      for (var i = 0; i < kids.length; i++) {
+        if (kids[i].offsetTop <= y + 4) {
+          sid = kids[i].getAttribute("data-sid") || "";
+          off = y - kids[i].offsetTop;
+        } else break;
+      }
+      try {
+        global.localStorage.setItem(key, JSON.stringify({ sid: sid, off: off, y: y }));
+      } catch (e) { /* 저장 불가여도 읽기는 계속된다 */ }
+    }
+    function restore() {
+      if (!key || !scroller) return false;
+      var p = null;
+      try { p = JSON.parse(global.localStorage.getItem(key) || "null"); } catch (e) { p = null; }
+      if (!p || typeof p !== "object") return false;
+      var go = function () {
+        if (scroller.hidden) return;               // 닫힌 뒤 늦게 도착한 타이머는 무시
+        if (p.sid) {
+          var kids = container.children;
+          for (var i = 0; i < kids.length; i++) {
+            if (kids[i].getAttribute("data-sid") === p.sid) {
+              scroller.scrollTop = kids[i].offsetTop + (p.off || 0);
+              return;
+            }
+          }
+        }
+        scroller.scrollTop = p.y || 0;
+      };
+      go();
+      [160, 700, 1800].forEach(function (ms) { timers.push(global.setTimeout(go, ms)); });
+      return true;
+    }
+    function onScroll() {
+      global.clearTimeout(scrollTimer);
+      scrollTimer = global.setTimeout(save, 250);
+    }
+    if (key && scroller) scroller.addEventListener("scroll", onScroll, { passive: true });
+    function destroy() {
+      if (key && scroller) scroller.removeEventListener("scroll", onScroll);
+      global.clearTimeout(scrollTimer);
+      timers.forEach(function (t) { global.clearTimeout(t); });
+      timers = [];
+    }
+    return { count: count, save: save, restore: restore, destroy: destroy };
+  }
+
   /* ================================================================ mount */
   function mount(opts) {
     opts = opts || {};
@@ -274,7 +405,7 @@
     }
 
     // ---- 상태 ----
-    var vi = 0, di = 0, ended = false, revealing = false, fullText = "", awaiting = false;
+    var vi = 0, di = 0, ended = false, revealing = false, fullText = "", awaiting = false, hintLeft = 0;
     var autoOn = false, skipOn = false, isOpen = false;
     var revealTimer = null, autoTimer = null, affTimer = null, wakeLock = null;
     var aff = 0, navStack = [], backlog = [], backlogKeys = new Set(), seen = new Set();
@@ -435,7 +566,7 @@
     E.dlg.setAttribute("aria-label", "대사");
     E.name = el("span", "vnr-name");
     E.text = el("div", "vnr-text");
-    E.hint = el("div", "vnr-hint", "탭/Space 진행 · ← 이전 · L 기록 · C 장면 · S 설정 · Esc 닫기");
+    E.hint = el("div", "vnr-hint", COARSE ? HINT_TOUCH : HINT_KEYS);
     E.dlg.appendChild(E.name);
     E.dlg.appendChild(E.text);
     E.dlg.appendChild(E.hint);
@@ -682,6 +813,7 @@
       var sc = data.scenes[vi];
       if (!sc) return;
       updateProg();
+      if (hintLeft > 0 && --hintLeft === 0) E.hint.hidden = true;   // 조작법을 익힌 뒤엔 자리를 돌려준다
       var wasSeen = markSeen();
       if (skipOn && !wasSeen && !SET.skipAll) setSkip(false);   // 스킵은 안 읽은 대사에서 멈춘다
       var line = (sc.lines || [])[di];
@@ -1025,6 +1157,8 @@
       if (!data.scenes.length) return false;
       loadSeen();
       ended = false;
+      hintLeft = HINT_LINES;
+      E.hint.hidden = false;
       applyFs();
       applyCinema();
       hideEnd();
@@ -1221,5 +1355,5 @@
     };
   }
 
-  global.VNRuntime = { mount: mount, schema: 1 };
+  global.VNRuntime = { mount: mount, renderScroll: renderScroll, schema: 1 };
 })(typeof window !== "undefined" ? window : this);

@@ -19,7 +19,10 @@ logs/
 # 개인 대화 기록 — 인물과 나눈 사적 대화는 저장소에 올리지 않는다
 project/story/chatlog.json
 project/story/talk_*.json
-# 그 대화를 압축한 기억 요약본도 같은 사적 기록이다 (local_llm.save_memory_summary)
+# 상한(LOG_CAP)을 넘겨 이관된 대화 아카이브도 같은 사적 기록이다 (talk_store.archive_path).
+# 확장자가 .jsonl 이라 위 두 줄에 걸리지 않는다 — 이 줄이 없으면 `git add .` 한 번에 커밋된다.
+project/story/*.archive.jsonl
+# 그 대화를 압축한 기억 요약본도 같은 사적 기록이다 (prompt_build.save_memory_summary)
 project/story/memory_*.json
 
 # 재구성 백업 잔재 (backups/ 로 이관 전 과거 흔적)

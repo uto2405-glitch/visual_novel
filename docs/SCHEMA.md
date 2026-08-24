@@ -33,7 +33,7 @@
 | `output` | obj | ⬜ | 사람 | 프롬프트 조립 · 검사기 · 인화 | **A3** (`min_long_edge_px`) |
 | `dating` | obj | ⬜ | 사람 | 뷰어·감상본 호감도 미터 | — |
 | `episodes` | list | ⬜ | 사람 | 스튜디오 `/api/state` (화 단위 선택) | — |
-| `talk` | obj | ⬜ | 사람 | `local_llm` 인물 대화 | — |
+| `talk` | obj | ⬜ | 사람 | 인물 대화 — 페르소나 조립 `prompt_build` · 전송 `local_llm` | — |
 | `workflow` | obj | ⬜ | 사람 | (없음) — 사람이 지킬 게이트 선언 | — |
 | `characters` | list | ✅ | 사람 | 프롬프트 앵커 · 대사 화자 · 대화 페르소나 | **A1 A2 A4 A6** |
 | `locations` | list | ✅ | 사람 | 프롬프트 앵커 | **A1 A2 A6** |
@@ -116,10 +116,16 @@
 | `episodes[].title` | str | ⬜ | 화 이름 |
 | `episodes[].note` | str | ⬜ | 사람용 메모 |
 | `talk.character_id` | str | ⬜ | 인물 대화의 기본 상대. 없으면 첫 캐릭터 |
-| `talk.relationship` | str | ⬜ | 페르소나 관계 설정 (기본 `"다정한 여자친구"`) |
+| `talk.relationship` | str | ⬜ | 페르소나 `[관계]` 한 줄 (기본 `"다정한 여자친구"`) |
 | `talk.base_url` | str | ⬜ | 대화용 LLM 주소 |
 
 `dating` 이 **없으면** 뷰어·감상본에서 호감도 미터 자체가 숨는다(선형 작품).
+
+> **`relationship` 은 비워 두지 마라 — 키를 지워라.** 기본값은 `talk.get("relationship", …)`,
+> 즉 **키가 없을 때만** 적용된다. `""` 는 '존재하는 값'이라 그대로 문장에 박혀
+> `[관계] 상대는 너의 . 편하고 다정한 반말로…` 가 되고, 페르소나의 관계 설정이 통째로 빈다.
+> 관계를 따로 정하지 않을 거면 **키 자체를 삭제**한다. (`dating` 처럼 "없으면 기능이 꺼지는"
+> 블록과 달리, 여기서 빈 문자열은 기능을 끄는 게 아니라 **깨뜨린다**.)
 
 ### 1.6 `characters[]`
 
@@ -134,8 +140,8 @@
 | `profile.build` | str | ⬜ | 사람 | 프롬프트 입력 | — |
 | `profile.wardrobe` | str | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 | — |
 | `profile.signature_props` | list[str] | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 | — |
-| `profile.personality` | str | ⬜ | 사람 | **대화 페르소나**(`local_llm`) `[너의 성격]` | — |
-| `profile.speech_style` | str | ⬜ | 사람 | **대화 페르소나**(`local_llm`) `[말투 규칙]` | — |
+| `profile.personality` | str | ⬜ | 사람 | **대화 페르소나**(`prompt_build`) `[너의 성격]` | — |
+| `profile.speech_style` | str | ⬜ | 사람 | **대화 페르소나**(`prompt_build`) `[말투 규칙]` | — |
 | `reference_images` | list[str] | ⬜ | 사람 | 프롬프트 입력의 첨부 안내 | — |
 | `prompt_anchor` | str | ⚠ | 사람 | 프롬프트 조립 · `scene_lint` 역방향 검사 | **A6 필수** |
 | `wardrobe_default` | str | ⬜ | 사람 | **(없음)** — 아래 참조 | — |
@@ -174,13 +180,24 @@ A6 상호작용을 확인한 뒤에 구현한다. 그때까지 **장면 데이�
 
 ### 1.7 `locations[]` · `props[]`
 
+`locations[]`
+
 | 필드 | 타입 | 필수 | 읽는 쪽 | 검사기 |
 |---|---|---|---|---|
 | `location_id` | str | ✅ | 장면 참조 | **A2** 존재·중복 |
 | `name` · `description` | str | ⬜ | 프롬프트 입력 | — |
+| `version` | int | ⬜ | **(없음)** — 템플릿에는 있지만 어떤 코드도 읽지 않는다. 캐릭터 쪽 `version` 만 프롬프트 입력에 찍힌다(`make_grok_input`) | — |
 | `reference_images` | list[str] | ⬜ | 프롬프트 입력의 첨부 안내 | — |
 | `prompt_anchor` | str | ⚠ | 프롬프트 조립 | **A6** (값이 있으면 프롬프트 포함을 강제) |
-| `prop_id` | str | ✅(props) | 장면 참조 | **A2** 존재·중복 |
+
+`props[]`
+
+| 필드 | 타입 | 필수 | 읽는 쪽 | 검사기 |
+|---|---|---|---|---|
+| `prop_id` | str | ✅ | 장면 참조 | **A2** 존재·중복 |
+| `name` · `description` | str | ⬜ | 프롬프트 입력 (`[PROP-001] 이름 — 설명`) | — |
+| `prompt_anchor` | str | ⬜ | 프롬프트 입력 (값이 있을 때만 한 줄 추가) | — |
+| `reference_images` | list[str] | ⬜ | **(없음)** — 소품에는 첨부 안내가 없다. 캐릭터·장소만 읽는다 | — |
 
 > **장소 앵커에 시간대를 넣지 마라.** `"at sunset"` 이 앵커에 박혀 있으면 밤 장면 프롬프트에도
 > 따라 들어간다. 시간대는 장면의 `time` 필드가 담당하고, `scene_lint` 의 `time-mismatch` ·
@@ -193,6 +210,15 @@ A6 상호작용을 확인한 뒤에 구현한다. 그때까지 **장면 데이�
 파일 1개 = 장면 1개. **파일명(stem)과 `scene_id` 가 반드시 같아야 한다**(A2).
 ID 형식은 `SCENE-` + 3자리 이상 숫자 (`^SCENE-\d{3,}$`).
 
+> ### ⚠ ID 형식은 **검사기가 보지 않는다**
+> `check_protocol` 이 확인하는 건 "scene_id 와 파일명이 같은가" 뿐이다. 형식의 정본은
+> **`vn_core.is_scene_id`** 이고, 이걸 관문으로 쓰는 쪽은 도구 전체다 —
+> `advance_scene` · `scene_ops` · `make_grok_input` · `makefun_client` · `gen_jobs` · `webapp`.
+> 그래서 손으로 만든 `SCENE-1.json`(또는 `SCENE-01`)은 **검사기 RESULT: PASS 를 받은 뒤**
+> 프롬프트 생성·이미지 생성·상태 전이·웹 편집이 전부 "잘못된 scene_id" 로 거부된다.
+> 되살릴 방법은 파일명과 `scene_id` 를 세 자리로 고쳐 쓰는 것뿐이니, 장면은
+> **`advance_scene new` 나 `vn_compose` 로 만든다**(둘 다 형식을 보장한다).
+
 ### 2.1 필수 · 식별
 
 | 필드 | 타입 | 필수 | 쓰는 쪽 | 읽는 쪽 | 검사기 |
@@ -201,19 +227,34 @@ ID 형식은 `SCENE-` + 3자리 이상 숫자 (`^SCENE-\d{3,}$`).
 | `scene_order` | int | ✅ | `advance_scene new` | 재생 순서 · 인화 파일명 접두사 | **A5** 1부터 연속·중복 금지 |
 | `status` | enum | ✅ | `scene_ops` (사람이 전이) | 검사기 게이트 · 감상본 포함 여부 | **A2 A3 A6 A7** |
 | `episode` | int | ⬜ | 사람 | 스튜디오 `/api/state` (화 단위 선택) | — |
-| `version` | int | ⬜ | 사람 | (없음) — 기록용 | — |
+| `version` | int | ⬜ | **`scene_ops.revise`** (되돌릴 때마다 +1) | `revise` 결과 표시 — 그 밖엔 기록용 | — |
 
 `status` 값과 그 의미:
 
 ```
-SCENE_PLAN → PROMPT → IMAGE → REVIEW_AUTO → REVIEW_HUMAN → APPROVED
-                                        되돌리기 ↘ REVISE
+SCENE_PLAN → PROMPT → IMAGE → REVIEW_HUMAN → APPROVED
+     ↑__________________|  되돌리기: advance_scene revise <SCENE_PLAN|PROMPT|IMAGE>
 ```
+
+자동 검사는 **후보 등록·이미지 선택 시점에 그 자리에서 실행**되고 결과는 `review.auto` 에 적힌다.
+따로 머무는 단계가 아니다 — 검사가 PASS 면 `IMAGE` 가 곧바로 `REVIEW_HUMAN` 으로 올라간다
+(`scene_ops.register_images` · `select_image`).
+
+> ### ⚠ `REVIEW_AUTO` 는 **쓰면 안 되는 값**이다
+> `check_protocol.SCENE_STATES` 열거에 이름만 남아 있어서 **검사기는 통과시킨다.** 그런데
+> 이 값을 만드는 도구도, 이 값에서 다음 단계로 올려 주는 도구도 **없다** — 승격은 `IMAGE`
+> 에서만 일어나고(`register_images`/`select_image`), `approve` 는 `REVIEW_HUMAN` 만 받는다.
+> 손으로 `status: "REVIEW_AUTO"` 라고 적으면 그 장면은 초록불인 채로 **승인까지 영영 못 간다.**
+> 빠져나오는 길은 `advance_scene revise <ID> IMAGE` 뿐이고, 그때 `selected_image` 는 비워진다.
+>
+> 같은 이유로 `status: "REVISE"` 도 직접 적지 않는다. `revise` 명령은 status 를 `REVISE` 가
+> 아니라 **되돌아간 단계 이름**(`SCENE_PLAN`/`PROMPT`/`IMAGE`)으로 적는다. 열거값 `REVISE` 는
+> 옛 데이터를 읽어 주기 위한 호환 항목이다.
 
 **검사기는 상태에 맞는 항목만 본다.** `SCENE_PLAN` 장면은 이미지도 프롬프트도 없어야 정상이고
 FAIL 이 아니다.
 
-**`REVISE` 의 면제 범위는 A3 까지다.** 되돌린 장면은 이미지 검사(A3)에서 빠지지만,
+**status 값이 `REVISE` 인 옛 장면의 면제 범위는 A3 까지다.** 그런 장면은 이미지 검사(A3)에서 빠지지만,
 **`prompt.grok_output` 이 남아 있으면 A6 앵커 검사는 계속 적용된다**
 (`check_protocol` 은 A6 대상을 "IMAGE 이상 **또는** 프롬프트가 있는 장면"으로 잡는다).
 즉 되돌려 놓은 장면이라도 프롬프트에서 앵커를 지우면 그 순간 A6 FAIL 이다.
@@ -227,18 +268,25 @@ FAIL 이 아니다.
 
 #### 손으로 고쳐도 되는 필드 / 도구만 쓰는 필드
 
+세 갈래다. 정본은 `scene_ops` 의 두 상수 — `EDITABLE_FIELDS` 와 `PROTECTED_FIELDS` 다.
+
 | | 필드 | 쓰는 방법 |
 |---|---|---|
 | **편집 가능** | `purpose` · `action_beat` · `emotion` · `time` · `camera` · `dialogue` · `characters` · `location_id` · `episode` · `choices` · `branch` · `ending` · `ending_label` · `print` | 스튜디오 장면 편집(`POST /api/set-scene` — 이 목록만 병합) 또는 직접 편집 |
-| **도구 전용** | `status` · `review` · `assets` · `scene_id` · `scene_order` | `scene_ops`/`advance_scene` 만. 편집 경로로는 바꿀 수 없다 |
+| **도구 전용** (`PROTECTED_FIELDS` 7개) | `status` · `review` · `assets` · `prompt` · `scene_id` · `scene_order` · `version` | `scene_ops`/`advance_scene` 만. 편집 경로는 **"건드리면 안 되는 필드"** 로 거부한다 |
+| **직접 편집만** | `props` · `visual_style` | 편집 경로의 화이트리스트에 **없어서** `set-scene` 이 "모르는 필드" 로 거부한다. 파일을 직접 고친다 |
 
 `status`·`review`·`assets` 는 상태 전이·승인 잠금·과금 복구(`makefun_tasks`)가 걸려 있어
 손으로 고치면 불변식이 깨진다. APPROVED 장면은 편집 경로에서도 거부되고, 먼저 `revise` 로
 되돌려야 한다.
+`prompt` 는 `scene_ops.set_prompt` 가 A6 앵커를 확인하며 쓰는 값이고,
+`version` 은 `scene_ops.revise` 가 되돌릴 때마다 1씩 올린다(그래서 편집 경로가 막혀 있다).
 
 ### 2.2 장면 계획 (프롬프트의 재료)
 
 **쓰는 쪽**: 사람(스튜디오 장면 편집 또는 직접 편집) · `vn_compose`(스토리라인 → 장면 구성).
+단 **`props` 와 `visual_style` 은 스튜디오 편집으로 못 바꾼다** — `EDITABLE_FIELDS` 밖이라
+`set-scene` 이 거부한다. 이 둘은 파일을 직접 고친다(앞의 세 갈래 표 참조).
 
 | 필드 | 타입 | 필수 | 읽는 쪽 | 검사기 |
 |---|---|---|---|---|
@@ -288,6 +336,16 @@ angle: eye-level / high-angle / low-angle / overhead /
 `scene_lint` 는 그 역방향 — **등장 목록에 없는** 인물의 앵커가 섞였는지도 경고한다.
 
 ### 2.4 `dialogue[]`
+
+`dialogue` **배열 자체가 A2 필수 키**다. `assets`·`review` 와 같은 취급이라, 대사 없는 컷이라도
+키를 빼면 `필수 키 없음: dialogue` 로 FAIL 한다. 대사가 없으면 **빈 배열**을 둔다:
+
+```json
+"dialogue": []
+```
+
+(A2 가 키 존재를 요구하는 7개: `scene_id` · `scene_order` · `location_id` · `characters` ·
+`dialogue` · `assets` · `review`.)
 
 | 필드 | 타입 | 필수 | 읽는 쪽 | 검사기 |
 |---|---|---|---|---|
@@ -396,6 +454,12 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 얼굴이 프레임 위쪽에 있는 컷은 `crop_anchor: "top"`, 가장자리에 중요한 게 붙은 컷은
 `crop_mode: "fit"`. → [PRINT_ORDER_GUIDE.md](PRINT_ORDER_GUIDE.md)
 
+> **적어 둔 값은 명령행보다 세다.** `print_export` 는 장면 값이 있으면 그것을 쓰고 없을 때만
+> `--anchor`/`--mode`/`--bg` 를 쓴다(`export_batch`: `pol.get("crop_anchor", anchor)`).
+> 그래서 **필요한 컷에만** 적는다 — 모든 장면에 `"crop_anchor": "center"` 같은 기본값이
+> 박혀 있으면 `--anchor top` 이 아무 말 없이 무시된다. 같은 이유로
+> `templates/scene.json` 에는 `print` 블록을 두지 않는다(새 장면 전부에 복사되므로).
+
 ---
 
 ## 3. 파생 데이터 — 코드가 만들고 사람이 안 고치는 파일
@@ -416,15 +480,22 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 | `project/story/character_bible.md` | 사람 | 대화 페르소나 `[너에 대한 기록]` | ✔ 추적 | 인물의 취향·기념일·기억 |
 | `project/story/chatlog.json` | 스튜디오 스토리 탭 | 스토리 탭 이어하기 | ✂ **제외** | 기획 대화 |
 | `project/story/talk_<CID>.json` | 인물 대화 | 대화 이어하기 · 기억 요약 | ✂ **제외** | 인물과 나눈 대화 |
-| `project/story/memory_<CID>.json` | `local_llm` 요약 | 창 밖 맥락 주입 | ✂ **제외** | 압축된 장기 기억 |
+| `project/story/*.archive.jsonl` | `talk_store` 상한 이관 | (없음) — 사람이 직접 열어 보는 보관본 | ✂ **제외** | **상한을 넘겨 밀려난 옛 대화 원문** |
+| `project/story/memory_<CID>.json` | `prompt_build.save_memory_summary` | 창 밖 맥락 주입(`memory_digest`) | ✂ **제외** | 압축된 장기 기억 |
 | `output/` · `backups/` | 내보내기 · 백업 도구 | 사람 | ✂ 제외 | 재생성 가능 |
 
 ### 3.1 사적 데이터 — git 에서 제외되는 이유
 
-`chatlog.json` · `talk_*.json` · `memory_*.json` 은 **인물과 나눈 사적 대화**이고 그 압축본이다.
-원격 저장소에 올라가서는 안 되므로 `.gitignore` 가 셋 다 제외한다. 감상본 HTML 에도 들어가지
-않는다 — 감상본에 실리는 건 제목·캐릭터 이름·대사·승인된 이미지뿐이다.
+`chatlog.json` · `talk_*.json` · `*.archive.jsonl` · `memory_*.json` 은 **인물과 나눈 사적 대화**이고
+그 보관본·압축본이다. 원격 저장소에 올라가서는 안 되므로 `.gitignore` 가 넷 다 제외한다.
+감상본 HTML 에도 들어가지 않는다 — 감상본에 실리는 건 제목·캐릭터 이름·대사·승인된 이미지뿐이다.
 → [PRIVACY_HOSTING.md](PRIVACY_HOSTING.md)
+
+> **아카이브(`.jsonl`)를 빠뜨리기 쉬운 이유.** 대화 로그가 상한(`talk_store.LOG_CAP`, 1.5MB)을
+> 넘으면 오래된 구간이 **삭제되지 않고** 옆 파일로 옮겨진다 —
+> `talk_CHAR-001.json` → `talk_CHAR-001.archive.jsonl`, `chatlog.json` → `chatlog.archive.jsonl`.
+> 내용은 원문 그대로인데 확장자가 `.json` 이 아니라서 `talk_*.json` 패턴에 걸리지 않는다.
+> 제외 규칙을 손볼 때 **`.json` 과 `.jsonl` 을 함께** 본다.
 
 `logs/` 전체도 제외 대상이다. `makefun_usage.jsonl` 은 비용 이력이고 `lan_pin.txt` 는
 이번 실행의 접속 PIN 이라 둘 다 기기 로컬에 남아야 한다.
@@ -454,8 +525,17 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 | `requested` · `saved` | 요청 장수 / 실제 저장된 장수 |
 | `ok` | 완전 성공 여부 |
 | `model` · `width` · `height` | 생성 파라미터 |
-| `billable` | **과금 대상인가** — 재수령(`refetch: true`)은 `false` |
+| `billable` | **과금 대상인가** — 재수령은 `false` |
+| `refetch` | 재수령(`--refetch`)일 때만 `true`. 과금 없이 이미 만든 task 를 다시 받은 줄이다 |
+| `capped` · `want_px` · `cap_px` | **규격이 깎였을 때만** 붙는 세 필드 — 요청하려던 긴 변(`want_px`)이 `image_generator.max_long_edge_px`(`cap_px`)에 잘렸다는 표시 |
 | `error` | 실패 사유(200자로 자름) |
+
+> **`capped` 를 흘려보내지 마라.** 이 세 필드는 "**돈은 썼는데 규격은 못 맞췄다**"를 나중에
+> 식별하는 유일한 흔적이다(§1.3 의 함정이 실제로 발생한 줄). 붙어 있으면 그 장면의 이미지는
+> 인화 기준에 미달일 수 있으니, 두 상한을 올린 뒤 **다시 생성**해야 한다 — 재수령(`--refetch`)은
+> 같은 작은 이미지를 다시 받을 뿐이다. `_gen_meta.json` 항목에도 같은 세 필드가 들어간다.
+>
+> 깎였는지 훑어보기: `python -c "[print(l) for l in open('logs/makefun_usage.jsonl',encoding='utf-8') if 'capped' in l]"`
 
 ### 3.4 `project/favorites.json`
 
@@ -489,6 +569,17 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 
 `scene.json` 은 **코드가 직접 읽는 유일한 JSON 템플릿**이라 여기에 넣은 값이 그대로 새 장면에
 박힌다. 선택 필드(`episode` 등)를 기본값으로 넣어 두면 그 필드가 필요 없는 작품에도 붙는다.
+
+그래서 **"기본값처럼 보이는 값"을 여기 두지 않는다.** 실제로 두 번 겪은 형태다:
+
+| 두면 생기는 일 | 결론 |
+|---|---|
+| `"print": {"crop_anchor": "center"}` | 새 장면 전부가 장면 값을 갖게 되고, 장면 값이 명령행보다 세므로 `print_export --anchor top` 이 **조용히 무시된다**(§2.8) → **`print` 블록 없음** |
+| `"episode": 1` | 화를 안 쓰는 작품에도 1화가 붙는다 → 템플릿에 두지 않고 `advance_scene new` 가 직전 장면에서 승계 |
+| `talk.relationship: ""`(manifest 쪽) | 빈 문자열이 기본값을 이겨 페르소나가 깨진다(§1.5) → 값을 채우거나 키를 삭제 |
+
+`review-report.json` 은 이 세 파일과 성격이 다르다 — 사람이 시사하며 채우는 서식이고
+장면 파일에 병합되지 않는다(§2.7).
 
 ---
 

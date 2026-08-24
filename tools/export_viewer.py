@@ -6,8 +6,9 @@
 분기·엔딩·백로그·장면 이동·시네마틱·설정)와 세로 스크롤 웹툰 모드, 화(episode) 구분을 포함한다.
 
 재생 엔진은 스튜디오와 공용이다: ``tools/vn_runtime.js`` 를 빌드할 때 __RUNTIME__ 자리에
-그대로 인라인하므로 단일 HTML 자기완결 성질(외부 요청 0)은 그대로다. 이 파일이 만드는
-``build_data()`` 의 모양이 두 화면이 함께 쓰는 정본 데이터 스키마다.
+그대로 인라인하므로 단일 HTML 자기완결 성질(외부 요청 0)은 그대로다. VN 재생(mount)뿐 아니라
+세로 스크롤 읽기(renderScroll)도 그 엔진이 그린다 — 감상본에 남은 것은 표지·화 선택뿐이다.
+이 파일이 만드는 ``build_data()`` 의 모양이 두 화면이 함께 쓰는 정본 데이터 스키마다.
 
 사용법:
   python tools/export_viewer.py                # 승인 장면
@@ -66,7 +67,8 @@ UI_TEXT = ("VISUAL NOVEL · 소장본 처음부터 감상 ▸ 이어보기 세�
            "아직 지나온 대사가 없습니다. 지금 읽음 새 장면 — 끝 — 탭하면 닫힙니다 "
            "위아래 화살표로 고르고 Enter 선택지를 먼저 고르세요. 그만 보려면 버튼을 누르세요. "
            "호감도 올라감 내려감 감상 완료 개 장면 오프라인 자족 파일 "
-           "이미지 없음 이미지를 불러올 수 없음 ♥ ●+−×() []「」『』…,.!?~-—:;\"'%/ "
+           "이미지 없음 이미지를 불러올 수 없음 재생 엔진을 불러오지 못했습니다 "
+           "♥ ●+−×() []「」『』…,.!?~-—:;\"'%/ "
            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
 
@@ -238,29 +240,9 @@ def prune_dangling_gotos(scenes: list) -> list:
     return warns
 
 
-def ending_of(sc: dict) -> tuple[bool, str]:
-    """엔딩 표기를 하나로 정규화한다 → (엔딩인가, 엔딩 이름).
-
-    규약은 ``ending: true`` + 선택적 ``ending_label: "호감 엔딩"`` 이다.
-    예전 데이터의 ``ending: "호감 엔딩"``(문자열)도 그대로 받아 label 로 옮긴다.
-    """
-    raw = sc.get("ending")
-    label = str(sc.get("ending_label") or "").strip()
-    if isinstance(raw, str):
-        label = label or raw.strip()
-        return bool(raw.strip()), label
-    return bool(raw), label
-
-
-def episode_of(sc: dict):
-    """장면의 화 번호(정수)만 받아들인다. 없거나 형이 다르면 None."""
-    ep = sc.get("episode")
-    if isinstance(ep, bool) or not isinstance(ep, int):
-        try:
-            ep = int(str(ep).strip())
-        except (TypeError, ValueError):
-            return None
-    return ep if ep > 0 else None
+# 엔딩 표기와 화 번호 규칙의 정본은 vn_core 다 — 감상본·장면 구성·스튜디오가 같은 함수를 쓴다.
+# (규칙이 파일마다 적혀 주석으로만 동기화되던 시절에는 같은 장면의 엔딩 이름이 화면마다 갈렸다.)
+ending_of = vn_core.ending_of      # 장면 → (엔딩인가, 엔딩 이름)
 
 
 def episode_list(mf: dict, scenes: list) -> list:
@@ -268,8 +250,8 @@ def episode_list(mf: dict, scenes: list) -> list:
     titles = {}
     for e in (mf.get("episodes") or []):
         if isinstance(e, dict):
-            n = e.get("episode")
-            if isinstance(n, int) and not isinstance(n, bool):
+            n = vn_core.norm_episode(e.get("episode"))
+            if n is not None:
                 titles[n] = str(e.get("title") or "").strip()
     present = sorted({s["ep"] for s in scenes if isinstance(s.get("ep"), int)})
     return [{"ep": n, "title": titles.get(n, "")} for n in present]
@@ -309,7 +291,7 @@ def build_data(include_all: bool, max_edge: int, quality: int, cover_id: str | N
             missing.append(f"{sc.get('scene_id', f.stem)}: 이미지 파일을 읽지 못함 ({sel})")
         entry = {"id": sc.get("scene_id", "?"), "order": sc.get("scene_order", 0),
                  "purpose": str(sc.get("purpose", "")), "img": img, "lines": lines}
-        ep = episode_of(sc)
+        ep = vn_core.norm_episode(sc.get("episode"))
         if ep is not None:
             entry["ep"] = ep
         if isinstance(sc.get("choices"), list) and sc["choices"]:
@@ -474,7 +456,7 @@ background:radial-gradient(115% 85% at 50% 38%,rgba(21,15,10,.42),rgba(14,10,6,.
 #scroll{position:fixed;inset:0;background:var(--bg);display:none;overflow-y:auto;z-index:4;
 -webkit-overflow-scrolling:touch}
 #scroll.on{display:block}
-#scroll .cut{max-width:820px;margin:0 auto}
+#cuts{max-width:820px;margin:0 auto}
 #scroll .cut img{width:100%;display:block}
 #scroll .say{padding:12px 18px;border-bottom:1px solid var(--line);
 word-break:keep-all;overflow-wrap:anywhere}
@@ -496,7 +478,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 #card{padding:calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
  calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left))}
 #scroll .topbar{padding-top:calc(10px + env(safe-area-inset-top))}
-#scroll .cut{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
+#cuts{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
  padding-bottom:calc(44px + env(safe-area-inset-bottom))}
 </style></head><body>
 <div id="card">
@@ -514,15 +496,16 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div class="topbar"><b id="scTitle"></b>
 <span><button class="b" id="bToVN">VN 모드</button>
 <button class="b" id="bScExit">닫기</button></span></div>
-<div class="cut" id="cuts"></div>
+<div id="cuts"></div>
 </div>
 
 <script>__RUNTIME__</script>
 <script>
 "use strict";
-/* 감상본 부팅 — 재생은 위에 인라인된 공용 엔진(tools/vn_runtime.js)이 전담한다.
-   여기 남은 것은 이 파일에만 있는 껍데기뿐이다: 표지 · 세로 스크롤 모드 · 화 선택.
-   덕분에 스튜디오 뷰어와 감상본이 같은 연출·같은 단축키·같은 엔딩 규약으로 재생된다. */
+/* 감상본 부팅 — 재생(mount)도 세로 스크롤 그리기(renderScroll)도 위에 인라인된 공용
+   엔진(tools/vn_runtime.js)이 전담한다. 여기 남은 것은 이 파일에만 있는 껍데기다:
+   표지 · 화 선택 · 두 화면 사이 전환. 덕분에 스튜디오 뷰어와 감상본이 같은 연출·같은
+   단축키·같은 엔딩 규약으로 재생되고, 읽던 위치도 같은 방식으로 남는다. */
 var DATA=__DATA__;
 var $=function(id){return document.getElementById(id)};
 var el=function(t,c,x){var n=document.createElement(t);
@@ -532,29 +515,29 @@ function hideShell(){$("card").classList.add("hide");$("scroll").classList.remov
 function showCard(){$("scroll").classList.remove("on");$("card").classList.remove("hide");
  var b=$("bStart");if(b&&b.focus)b.focus()}
 
-/* ---- 세로 스크롤 웹툰 모드(이 감상본에만 있는 읽기 방식) ---- */
-var scrollBuilt=false;
+/* ---- 세로 스크롤 웹툰 모드 ---- 그리기는 공용 엔진의 renderScroll 이 맡는다.
+   스튜디오와 같은 DOM·같은 클래스(.cut/.ep/.say/.nar/.pick)로 그려지므로 이 파일의 CSS 는
+   그대로 두고 함수 호출만 넘긴다 — 두 벌이던 렌더러가 한 벌이 됐다. */
+var scrollBuilt=false,scrollView=null;
 function buildScroll(){
  if(scrollBuilt)return;
  scrollBuilt=true;
- var box=$("cuts"),curEp=null;
- DATA.scenes.forEach(function(sc){
-  if(sc.ep&&sc.ep!==curEp){curEp=sc.ep;box.appendChild(el("div","ep",player?player.epLabel(sc.ep):sc.ep+"화"))}
-  if(sc.img){var im=el("img");im.src=sc.img;im.alt=sc.purpose||sc.id;im.loading="lazy";
-   im.decoding="async";box.appendChild(im)}
-  (sc.lines||[]).forEach(function(l){var s=el("div","say");
-   if(l.n){var b=el("b",null,l.n+"  ");b.style.color=l.c||"var(--amber)";
-    s.appendChild(b);s.appendChild(el("span",null,l.t||""))}
-   else s.appendChild(el("span","nar",l.t||""));
-   box.appendChild(s)});
-  (sc.choices||[]).forEach(function(c){var s=el("div","say");   // 스크롤 모드는 선택지를 목록으로만
-   s.appendChild(el("span","pick","▸ "+(c.text||"")));box.appendChild(s)})})}
+ if(!window.VNRuntime){$("cuts").appendChild(el("div","say","재생 엔진을 불러오지 못했습니다."));return}
+ scrollView=window.VNRuntime.renderScroll(DATA,$("cuts"),{
+  imageSrc:function(sc){return (sc&&sc.img)||""},        // 감상본은 전부 내장 data URI
+  epLabel:function(ep){return player?player.epLabel(ep):ep+"화"},
+  nameColor:"var(--amber)",
+  scroller:$("scroll"),                                  // 읽던 위치를 기억할 스크롤 요소
+  storageKey:"tc"})}
 function openScroll(){
  if(player&&player.isOpen())player.exit();   // exit() 가 표지를 되돌린 뒤 그 위를 덮는다
  buildScroll();
  $("card").classList.add("hide");$("scroll").classList.add("on");
+ if(scrollView)scrollView.restore();         // 보이게 한 뒤 복원해야 높이 계산이 맞는다
  var b=$("bToVN");if(b&&b.focus)b.focus()}
-function closeScroll(){$("scroll").classList.remove("on");showCard()}
+function closeScroll(){
+ if(scrollView)scrollView.save();
+ $("scroll").classList.remove("on");showCard()}
 
 /* ---- 공용 엔진 부팅 ---- */
 var player=window.VNRuntime?window.VNRuntime.mount({
@@ -589,7 +572,8 @@ function buildEps(){
 $("bStart").onclick=function(){play(false)};
 $("bResume").onclick=function(){play(true)};
 $("bScroll").onclick=openScroll;
-$("bToVN").onclick=function(){$("scroll").classList.remove("on");play(false,player?player.index():0)};
+$("bToVN").onclick=function(){if(scrollView)scrollView.save();
+ $("scroll").classList.remove("on");play(false,player?player.index():0)};
 $("bScExit").onclick=closeScroll;
 
 /* 표지·스크롤 모드의 키 처리. 재생 중에는 엔진이 키를 맡으므로 손대지 않는다. */

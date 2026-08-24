@@ -5,9 +5,17 @@
 원자적 쓰기 4벌, 경로 탈출 방어 3벌)을 여기 하나로 모은다. 각 도구는 자기 파일에서
 같은 코드를 다시 쓰지 말고 이 모듈을 import 한다.
 
+여기 있는 것은 세 가지다.
+  1. 기반: 경로 상수·JSON 읽기·원자적 쓰기·경로 안전·오류 타입.
+  2. **저장소 계층**: 장면 파일 읽기/쓰기(scene_path·load_dict·all_scenes)와 검사기 실행
+     (run_checker). 예전에는 advance_scene(CLI)에 있었고, 그래서 위층인 scene_ops 가
+     CLI 를 import 하고 CLI 가 다시 scene_ops 를 지연 import 하는 **순환**이 있었다.
+  3. **여러 층이 공유하는 도메인 규칙**: ending_of·norm_episode·last_episode·크롭 집합.
+     같은 규칙이 두세 벌로 갈리면 화면마다 다른 답이 나온다(엔딩 이름·화 번호가 실제로 갈렸다).
+
 설계 규약(어기면 순환 import 로 서버가 죽는다):
   * **다른 tools 모듈을 import 하지 않는다.** 표준 라이브러리만 쓴다.
-  * 의존 방향은 한 방향뿐: vn_core ← advance_scene ← scene_ops ← webapp.
+  * 의존 방향은 한 방향뿐: vn_core ← scene_ops ← advance_scene(CLI)·vn_compose·webapp.
 
 오류 규약:
   * 사용자에게 보여줄 오류는 :class:`VNError`(RuntimeError 파생)로 던진다.
@@ -22,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -53,6 +62,11 @@ IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"})
 # (프롬프트 조립 경로마다 문구가 갈리면 컷 사이 화풍이 흔들린다. 문자열 출처는 여기 하나.)
 DEFAULT_VISUAL_STYLE = ("bright cel-shaded Korean romance webtoon, soft warm palette, "
                         "clean line art")
+
+# 인화 크롭 규약 — 자르기 방식(print_export)과 입력 검증(webapp·scene_ops)이 같은 집합을 봐야 한다.
+# 두 벌로 갈리면 UI 에서 고른 값이 저장은 되고 출력에서만 조용히 무시된다.
+CROP_MODES = ("cover", "fit")
+CROP_ANCHORS = ("center", "top", "bottom", "left", "right")
 
 # 저장소 전역 단일 쓰기 잠금 — 장면 JSON 의 read-modify-write 를 직렬화한다.
 # 웹 스튜디오는 스레드 서버라 폰과 PC 에서 동시에 눌러도 이 잠금 하나로 순서가 정해진다.
@@ -200,6 +214,99 @@ def visual_style(mf: dict | None = None, sc: dict | None = None) -> str:
 def is_scene_id(sid: Any) -> bool:
     """SCENE-001 형식인지. 파일 접근 전에 반드시 통과시켜야 하는 관문."""
     return isinstance(sid, str) and bool(SCENE_ID_RE.match(sid))
+
+
+def ending_of(sc: Any) -> tuple[bool, str]:
+    """엔딩 표기를 하나로 정규화한다 → (엔딩인가, 엔딩 이름).
+
+    규약은 ``ending: true`` + 선택적 ``ending_label: "호감 엔딩"`` 이다.
+    예전 데이터의 ``ending: "호감 엔딩"``(문자열)도 그대로 받아 label 로 옮긴다.
+
+    감상본(export_viewer)·장면 구성(vn_compose)·스튜디오 목록(/api/state)이 **이 함수 하나**를
+    써야 같은 장면의 엔딩 이름이 화면마다 달라지지 않는다.
+    """
+    if not isinstance(sc, dict):
+        return False, ""
+    raw = sc.get("ending")
+    label = str(sc.get("ending_label") or "").strip()
+    if isinstance(raw, str):
+        return bool(raw.strip()), (label or raw.strip())
+    return bool(raw), label
+
+
+def norm_episode(v: Any):
+    """화 번호는 **양의 정수만** — 그 밖의 값은 None(화를 쓰지 않는 작품).
+
+    감상본의 화 선택, 장면 편집(scene_ops), 장면 구성이 같은 답을 내야 화 하나가
+    통째로 빠지는 사고가 없다. bool 은 int 지만 화 번호가 아니므로 먼저 걸러낸다.
+    """
+    if isinstance(v, bool):
+        return None
+    try:
+        n = int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+# ---------------------------------------------------------------- 저장소 계층
+def scene_path(sid: str) -> Path:
+    """장면 파일 경로. 형식 검증(is_scene_id)은 부르는 쪽 몫이다 — 외부 입력은 반드시 먼저 거른다."""
+    return SCENES / f"{sid}.json"
+
+
+def load_dict(path: Path | str) -> dict:
+    """JSON 을 읽어 dict 로 돌려준다. 최상위가 객체가 아니면 VNError.
+
+    장면·매니페스트처럼 "객체가 아니면 이후 코드가 전부 KeyError"인 파일의 입구다.
+    """
+    data = load_json(path)
+    if not isinstance(data, dict):
+        raise VNError(f"{Path(path).name}: JSON 최상위가 객체({{...}})가 아닙니다. 파일을 확인하세요.")
+    return data
+
+
+def all_scenes() -> list[dict]:
+    """project/scenes/ 의 모든 장면(파일명 순). 깨진 파일은 VNError 로 즉시 드러낸다."""
+    if not SCENES.exists():
+        return []
+    return [load_dict(f) for f in sorted(SCENES.glob("SCENE-*.json"))]
+
+
+def run_checker(sid: str | None = None) -> tuple[int, str]:
+    """프로토콜 검사기를 별도 프로세스로 돌린다 → (종료코드, 출력 전문).
+
+    별도 프로세스인 이유: 검사기는 도구가 고칠 수 없는 판정자다. 같은 프로세스에서
+    import 하면 도구 쪽 전역 상태(경로·캐시)가 판정에 섞일 수 있다.
+    """
+    cmd = [sys.executable, str(CHECKER)]
+    if sid:
+        cmd += ["--scene", sid]
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    return proc.returncode, (proc.stdout + proc.stderr)
+
+
+def last_episode():
+    """가장 뒤 순서 장면의 화 번호(없으면 None) — 새로 만드는 장면이 이어받을 값.
+
+    이 승계가 없으면 지금 있는 장면들에만 episode 가 있고 앞으로 만드는 장면에는
+    영영 붙지 않아, 감상본의 화 선택에서 새 장면이 통째로 빠진다.
+    깨진 장면 파일 하나가 새 장면 생성을 막지 않도록 여기서는 관대하게 읽는다.
+    """
+    best_order, ep = None, None
+    for f in (sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []):
+        sc = load_json_safe(f, {})
+        e = norm_episode(sc.get("episode"))
+        if e is None:
+            continue
+        try:
+            order = int(sc.get("scene_order"))
+        except (TypeError, ValueError):
+            order = 0
+        if best_order is None or order >= best_order:
+            best_order, ep = order, e
+    return ep
 
 
 # ---------------------------------------------------------------- 경로 안전

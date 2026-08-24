@@ -21,6 +21,9 @@
 설계 원칙
   * 사용자의 project/ · images/ 원본은 절대 건드리지 않는다 — 모든 실행은 샌드박스 사본에서.
   * 유료 API(MakeFun·xAI)는 절대 호출하지 않는다. 네트워크가 나가는 지점만 스텁으로 막는다.
+  * 웹 스튜디오는 **첫 web=True 테스트에서 한 번만** 뜨고 나머지 웹 테스트가 그 서버를 그대로
+    쓴다(Box._web 재사용). 그래서 기동 비용은 실행당 한 번뿐이고, 러너는 그 시간을 테스트
+    시간에서 빼서 따로 보여 준다 — 첫 웹 테스트가 느린 것처럼 보이던 착시를 없앤다.
   * 확실히 존재하는 모듈은 optional 로 눅이지 않는다(REQUIRED_MODULES · meta T01 이 감시).
   * 테스트는 서로의 뒷정리에 기대지 않는다 — 상태를 바꾸면 픽스처가 반드시 원상 복구한다.
   * 한 테스트에서 난 예외는 그 테스트의 FAIL 로만 귀속된다(전체 실행이 멈추지 않는다).
@@ -30,10 +33,12 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import concurrent.futures
 import contextlib
 import datetime as dt
+import fnmatch
 import http.server
 import importlib.util
 import io
@@ -69,8 +74,17 @@ BANNED_DOM = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
 REQUIRED_MODULES = (
     "vn_core", "advance_scene", "scene_ops", "talk_store", "prompt_build", "local_llm",
     "webapp", "vn_compose", "export_viewer", "makefun_client", "scene_lint",
-    "secret_scan", "xai_client", "backup_project", "print_preflight",
+    "secret_scan", "xai_client", "backup_project", "print_preflight", "gen_jobs",
 )
+
+# 저장소가 선언한 계층(vn_core.py 머리말: vn_core ← scene_ops ← advance_scene ← webapp).
+# 숫자가 작을수록 아래층이고, **아래층은 위층을 import 하지 않는다**(지연 import 포함).
+# 여기 없는 모듈은 이 검사의 대상이 아니다 — 위치를 선언한 것만 기계로 강제한다.
+LAYER = {"vn_core": 0, "talk_store": 1, "scene_ops": 1, "advance_scene": 2, "webapp": 4}
+
+# 새 장면을 만들며 찍는 초기 상태. 이 두 값에는 사람 승인 게이트가 걸려 있지 않다.
+# 나머지 상태(IMAGE·REVIEW_HUMAN·REVISE·APPROVED)는 scene_ops 만 쓸 수 있다(L03).
+AUTHORING_STATES = ("SCENE_PLAN", "PROMPT")
 
 
 def _console_guard() -> None:
@@ -274,6 +288,7 @@ class Box:
         self._web_error: str | None = None
         self._mock = None
         self.web_port = 0
+        self.boot_secs = 0.0        # 웹 스튜디오 기동에 쓴 시간(실행당 한 번) — 러너가 따로 센다
         self._opener = ur.build_opener(ur.ProxyHandler({}))
 
     # -------------------------------------------------- 준비 · 정리
@@ -386,11 +401,14 @@ class Box:
             return
         if self._web_error:      # 한 번 실패했으면 나머지 웹 테스트는 즉시 실패시킨다(재시도 대기 낭비 방지)
             raise Failed(self._web_error)
+        t0 = time.perf_counter()
         try:
             self._start_web()
         except Failed as e:
             self._web_error = str(e)
             raise
+        finally:
+            self.boot_secs += time.perf_counter() - t0
 
     def _start_web(self) -> None:
         anchor_c, anchor_l = self.anchors()
@@ -451,13 +469,15 @@ class Box:
         self._web = subprocess.Popen(
             [PY, "tools/webapp.py", "--port", str(self.web_port), "--no-browser"],
             cwd=self.root, env=wenv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(80):
+        # 처음 1초는 촘촘히(50ms) 물어본다 — 보통 여기서 끝난다. 그 뒤에는 느슨하게(200ms)
+        # 최대 17초까지 기다린다(느린 PC 의 첫 import·백신 검사 몫).
+        for i in range(100):
             if self._web.poll() is not None:
                 raise Failed("웹 스튜디오가 기동 직후 종료했습니다.")
             code, _h, _b = self.raw("/api/state")
             if code == 200:
                 return
-            time.sleep(0.2)
+            time.sleep(0.05 if i < 20 else 0.2)
         raise Failed(f"웹 스튜디오가 기동하지 않았습니다(port {self.web_port}).")
 
     def set_api(self, base_url: str, model: str) -> None:
@@ -650,6 +670,247 @@ def t02(b: Box):
         except (OSError, ValueError) as e:
             bad.append(f"{p.name}: {type(e).__name__}: {e}")
     eq(bad, [], "구문 오류")
+
+
+# ============================================================ arch (계층 불변식)
+# 계층 규약은 지금까지 주석으로만 있었다 — 어기는 코드가 자가진단 전체를 그대로 통과했다.
+# 여기서부터는 ast 로 소스를 읽어 기계가 판정한다(JS 쪽 J01·J03 과 같은 방식).
+_AST_CACHE: dict[str, ast.Module] = {}
+
+
+def tool_names(b: Box) -> list[str]:
+    """tools/ 안의 파이썬 모듈 이름(자기 자신 제외)."""
+    return sorted(p.stem for p in (b.root / "tools").glob("*.py") if p.stem != "selftest")
+
+
+def tool_ast(b: Box, name: str) -> ast.Module:
+    if name not in _AST_CACHE:
+        _AST_CACHE[name] = ast.parse(b.p(f"tools/{name}.py").read_text(encoding="utf-8"),
+                                     f"{name}.py")
+    return _AST_CACHE[name]
+
+
+def tool_imports(b: Box, name: str) -> dict[str, str]:
+    """{불러온 도구 모듈: '모듈 수준'|'함수 본문'} — 함수 안의 지연 import 도 놓치지 않는다.
+
+    지연 import 는 순환을 '동작하게' 만들 뿐 의존 방향을 되돌리지는 못한다. 계층 검사에서
+    빼 두면 규약이 함수 본문으로 숨는다 — 그래서 같은 무게로 센다.
+    """
+    tools = set(tool_names(b))
+    tree = tool_ast(b, name)
+    deferred = {id(sub) for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                for sub in ast.walk(node) if isinstance(sub, (ast.Import, ast.ImportFrom))}
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            mods = [a.name.split(".")[0] for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            mods = [(node.module or "").split(".")[0]] if not node.level else []
+        else:
+            continue
+        how = "함수 본문" if id(node) in deferred else "모듈 수준"
+        for m in mods:
+            if m in tools and m != name and out.get(m) != "모듈 수준":
+                out[m] = how
+    return out
+
+
+def func_body(b: Box, mod: str, name: str) -> list:
+    for node in ast.walk(tool_ast(b, mod)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return list(node.body)
+    return []
+
+
+def func_calls(b: Box, mod: str, name: str) -> set[str]:
+    """함수가 **실제로 부르는** 이름들(`scene_ops.update_fields` 처럼 점 표기 그대로).
+
+    원문 문자열 검색과 달리 독스트링·주석은 세지 않는다 — "예전에는 adv.save 로 썼다"
+    같은 설명이 검사에 걸리면 안 된다.
+    """
+    out: set[str] = set()
+    for node in ast.walk(tool_ast(b, mod)):
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name):
+            continue
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            parts, f = [], sub.func
+            while isinstance(f, ast.Attribute):
+                parts.append(f.attr)
+                f = f.value
+            if isinstance(f, ast.Name):
+                parts.append(f.id)
+            if parts:
+                out.add(".".join(reversed(parts)))
+    return out
+
+
+def _status_writes(b: Box, name: str) -> list[tuple[int, Any]]:
+    """장면 dict 의 status 에 쓰는 자리 → [(줄번호, 상수값 또는 None)].
+
+    ``sc["status"] = ...`` 뿐 아니라 튜플 대입과 ``.update({"status": ...})`` 우회까지 본다.
+    """
+    out: list[tuple[int, Any]] = []
+
+    def const(v):
+        return v.value if isinstance(v, ast.Constant) else None
+
+    for node in ast.walk(tool_ast(b, name)):
+        if isinstance(node, ast.Assign):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple):
+                tgts = node.targets[0].elts
+                vals = (list(node.value.elts) if isinstance(node.value, ast.Tuple)
+                        and len(node.value.elts) == len(tgts) else [None] * len(tgts))
+            else:
+                tgts, vals = list(node.targets), [node.value] * len(node.targets)
+            for t, v in zip(tgts, vals):
+                if (isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
+                        and t.slice.value == "status"):
+                    out.append((node.lineno, const(v) if v is not None else None))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "update":
+            for arg in node.args:
+                if isinstance(arg, ast.Dict):
+                    for k, v in zip(arg.keys, arg.values):
+                        if isinstance(k, ast.Constant) and k.value == "status":
+                            out.append((node.lineno, const(v)))
+            for kw in node.keywords:
+                if kw.arg == "status":
+                    out.append((node.lineno, const(kw.value)))
+    return out
+
+
+@test("arch", "L01 계층 방향 — vn_core 는 도구를 부르지 않고, 아래층은 위층을 import 하지 않는다")
+def l01(b: Box):
+    """선언만 있고 강제가 없던 규약(vn_core ← scene_ops ← advance_scene ← webapp)을 잠근다.
+
+    scene_ops 가 advance_scene 을 부르는 순간(과거 상태) 이 검사가 떨어진다 — 지연 import
+    로 숨겨도 마찬가지다. webapp 은 아무도 import 하지 않는다(서버가 라이브러리가 되면
+    라우트·인증·로깅이 CLI 에 딸려 들어온다).
+    """
+    names = tool_names(b)
+    bad: list[str] = []
+    for m in names:
+        imports = tool_imports(b, m)
+        if m == "vn_core":
+            bad += [f"vn_core → {t} ({how}) — 기반 모듈은 표준 라이브러리만 쓴다"
+                    for t, how in sorted(imports.items())]
+            continue
+        if "webapp" in imports and m != "webapp":
+            bad.append(f"{m} → webapp ({imports['webapp']}) — 최상위 서버를 아래에서 부른다")
+        if m not in LAYER:
+            continue
+        for t, how in sorted(imports.items()):
+            if t in LAYER and LAYER[t] >= LAYER[m]:
+                bad.append(f"{m}(계층 {LAYER[m]}) → {t}(계층 {LAYER[t]}) ({how})")
+    eq(sorted(set(bad)), [], "계층 위반")
+
+
+@test("arch", "L02 모듈 수준 순환 import 0 — 서버가 import 시점에 죽는 고리가 없다")
+def l02(b: Box):
+    """모든 변이 모듈 수준인 고리만 센다. 그런 고리는 import 순서에 따라 그 자리에서
+    ImportError 를 내고 스튜디오가 뜨지 않는다.
+
+    (한 변이 함수 본문 지연 import 인 고리는 여기서 세지 않는다 — local_llm ↔ prompt_build
+     하위호환 통로가 그 형태이고, 방향 규약은 L01 이 따로 잠근다.)
+    """
+    graph = {m: [t for t, how in tool_imports(b, m).items() if how == "모듈 수준"]
+             for m in tool_names(b)}
+    cycles: list[str] = []
+    state: dict[str, int] = {}
+
+    def walk(node: str, path: list[str]) -> None:
+        state[node] = 1
+        for nxt in graph.get(node, []):
+            if state.get(nxt) == 1:
+                cycle = path[path.index(nxt):] + [nxt] if nxt in path else [node, nxt]
+                cycles.append(" → ".join(cycle))
+            elif state.get(nxt, 0) == 0:
+                walk(nxt, path + [nxt])
+        state[node] = 2
+
+    for m in sorted(graph):
+        if state.get(m, 0) == 0:
+            walk(m, [m])
+    eq(sorted(set(cycles)), [], "모듈 수준 순환")
+
+
+@test("arch", "L03 장면 status — 승인 게이트가 걸린 상태는 scene_ops 만 쓴다")
+def l03(b: Box):
+    """status 를 밖에서 찍을 수 있으면 '사람이 승인한다'는 규약이 대입 한 줄로 우회된다.
+
+    새 장면을 만들며 초기 상태(SCENE_PLAN·PROMPT)를 넣는 것은 전이가 아니라 작성이라
+    허용한다 — 그 자리에는 아직 승인할 것이 없다. 그 밖의 값(IMAGE·REVIEW_HUMAN·
+    REVISE·APPROVED)과 '값을 알 수 없는 대입'은 scene_ops 밖에서 전부 금지다.
+    """
+    bad = []
+    for m in tool_names(b):
+        if m == "scene_ops":
+            continue
+        for line, value in _status_writes(b, m):
+            if value in AUTHORING_STATES:
+                continue
+            shown = repr(value) if value is not None else "값이 상수가 아님"
+            bad.append(f"{m}.py:{line} status ← {shown}")
+    eq(sorted(bad), [], "scene_ops 밖의 장면 상태 대입")
+
+
+@test("arch", "L04 webapp 에 모델 프롬프트 문자열 0 — 조립은 prompt_build·vn_compose 담당")
+def l04(b: Box):
+    """webapp.py 머리말이 선언한 규약("모델에 보내는 프롬프트 문자열은 이 파일에 한 줄도
+    없다")을 기계로 확인한다. 프롬프트가 라우트로 새면 같은 문구가 두 벌이 되고, 조용히
+    갈린 쪽이 사용자 화면에 나온다."""
+    bad = []
+    for node in ast.walk(tool_ast(b, "webapp")):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = {k.value for k in node.keys if isinstance(k, ast.Constant)}
+        if not {"role", "content"} <= keys:
+            continue
+        for k, v in zip(node.keys, node.values):
+            if (isinstance(k, ast.Constant) and k.value == "content"
+                    and isinstance(v, ast.Constant) and str(v.value).strip()):
+                bad.append(f"webapp.py:{node.lineno} {str(v.value)[:60]!r}")
+    eq(bad, [], "webapp 이 모델 메시지 문자열을 직접 들고 있음")
+    src = b.p("tools/webapp.py").read_text(encoding="utf-8")
+    for marker in ("SCENES_JSON_ONLY", "[말투 규칙]", "NEGATIVE_PROMPT:", "1인칭으로"):
+        eq(src.count(marker), 0, f"프롬프트 조각 {marker!r} 이 webapp 으로 복사됨")
+
+
+@test("arch", "L05 vn_core 단일 출처 — ending_of·norm_episode·CROP_ANCHORS 를 다시 만들지 않는다")
+def l05(b: Box):
+    """같은 규칙이 모듈마다 한 벌씩 있으면 주석으로만 동기화된다(엔딩 이름·화 번호가 실제로
+    화면마다 갈렸던 사고). 이름을 이어 주는 별칭(`ending_of = vn_core.ending_of`)은 허용하고,
+    **자체 구현**(def · 리터럴 재정의)만 떨어뜨린다."""
+    vc = b.mod("vn_core")
+    want = ("ending_of", "norm_episode", "CROP_ANCHORS")
+    arrived = [n for n in want if hasattr(vc, n)]
+    dups = []
+    for m in tool_names(b):
+        if m == "vn_core":
+            continue
+        for node in tool_ast(b, m).body:          # 최상위 정의만 본다
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name in arrived:
+                    dups.append(f"{m}.py:{node.lineno} def {node.name}")
+            elif isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if not isinstance(t, ast.Name):
+                        continue
+                    if t.id.lstrip("_") in arrived and isinstance(
+                            node.value, (ast.Tuple, ast.List, ast.Set, ast.Dict, ast.Lambda)):
+                        dups.append(f"{m}.py:{node.lineno} {t.id} = (자체 정의)")
+    eq(sorted(dups), [], "vn_core 와 같은 규칙의 두 번째 구현")
+    for m in ("scene_ops", "vn_compose"):        # 별칭이 같은 값을 가리키는지(런타임 확인)
+        mod = b.mod(m)
+        for n in arrived:
+            if hasattr(mod, n) and not callable(getattr(mod, n)):
+                eq(getattr(mod, n), getattr(vc, n), f"{m}.{n} 값이 vn_core 와 다름")
+    missing = [n for n in want if n not in arrived]
+    if missing:
+        raise Gap(f"vn_core 에 아직 없음: {', '.join(missing)} — 통합 대기(도착하면 자동 잠금)")
 
 
 # ============================================================ pipeline (CLI)
@@ -848,6 +1109,86 @@ def p16(b: Box):
     rc2, out2 = b.run(ADV, "new", "SCENE-042")     # 정상 형식은 계속 만들어져야 한다
     b.p("project/scenes/SCENE-042.json").unlink(missing_ok=True)
     eq(rc2, 0, f"정상 형식까지 막힘 — {out2[:200]}")
+
+
+# ============================================================ template (새 작품 시작)
+# 지금까지 자가진단은 examples/ 만 픽스처로 썼다 — templates/ 는 **한 번도 실행되지 않았다**.
+# 그래서 templates/scene.json 에 박혀 있던 print.crop_anchor 나 talk.relationship:"" 같은
+# 결함이 걸릴 자리가 없었다(사용자가 새 작품을 시작할 때만 드러난다).
+@contextlib.contextmanager
+def template_project(b: Box):
+    """templates/ 로 새 작품을 시작한 상태를 만들고, 끝나면 원래 project/ 를 그대로 되돌린다.
+
+    사용자가 하는 그대로다 — templates/manifest.json 을 복사해 이름·앵커만 채운다.
+    (선택 항목은 템플릿이 준 값 그대로 둔다. 그래야 템플릿의 기본값이 검사 대상이 된다.)
+    """
+    proj, stash = b.p("project"), b.p("_project.selftest-stash")
+    shutil.rmtree(stash, ignore_errors=True)
+    os.replace(proj, stash)
+    try:
+        (proj / "scenes").mkdir(parents=True)
+        mf = read_json(b.p("templates/manifest.json"))
+        mf["title"] = "셀프테스트 신작"
+        mf["characters"][0].update(
+            name="하늘", prompt_anchor="CHAR-001 anchor: short black hair, hazel eyes")
+        mf["locations"][0].update(
+            name="교실", prompt_anchor="LOC-001 anchor: sunlit classroom")
+        write_json(proj / "manifest.json", mf)
+        yield mf
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+        os.replace(stash, proj)
+
+
+@test("template", "TPL01 templates/ 로 시작한 새 작품 — 첫 장면 생성 + 검사기 통과")
+def tpl01(b: Box):
+    with template_project(b):
+        rc, out = b.run(ADV, "new")
+        eq(rc, 0, f"첫 장면 생성 실패 — {out[:300]}")
+        sc = b.scene("SCENE-001")
+        eq(sc["scene_id"], "SCENE-001", "scene_id")
+        eq(sc["scene_order"], 1, "scene_order")
+        rc2, out2 = b.checker()
+        fails = "\n".join(l for l in out2.splitlines() if "FAIL" in l)
+        eq(rc2, 0, f"새 작품이 자기 검사기를 통과하지 못함 — {fails[:400]}")
+
+
+@test("template", "TPL02 새 장면에 '사람이 고른 적 없는 값'이 미리 박혀 있지 않다")
+def tpl02(b: Box):
+    """템플릿에 선택 필드를 박아 두면 모든 새 장면이 그 값을 갖고 태어난다 — 인화 기준점을
+    한 번도 고르지 않았는데 crop_anchor 가 정해져 있는 식이다. 비어 있거나 없어야 한다."""
+    optional = ("print", "episode", "ending", "ending_label", "choices", "branch")
+
+    def leaked(sc: dict) -> list[str]:
+        return [k for k in optional if sc.get(k) not in (None, "", [], {}, False)]
+
+    with template_project(b):
+        eq(b.run(ADV, "new")[0], 0, "첫 장면 생성 실패")
+        eq(b.run(ADV, "new")[0], 0, "둘째 장면 생성 실패")
+        one, two = b.scene("SCENE-001"), b.scene("SCENE-002")
+        eq(leaked(one), [], "새 장면에 미리 박힌 선택 필드")
+        eq(leaked(two), [], "둘째 장면에 미리 박힌 선택 필드")
+        eq(str(one.get("visual_style", "")), "", "화풍은 매니페스트가 정한다(장면에 박지 않는다)")
+        eq(one.get("status"), "SCENE_PLAN", "새 장면 시작 상태")
+        eq(one["review"]["human"], "PENDING", "승인 도장이 미리 찍혀 있음")
+        eq(one["assets"]["selected_image"], "", "선택 이미지가 미리 지정돼 있음")
+
+
+@test("template", "TPL03 templates 매니페스트로도 인물 페르소나 문장이 깨지지 않는다")
+def tpl03(b: Box):
+    """talk.relationship 처럼 템플릿이 빈 값으로 두면 '상대는 너의 .' 같은 문장이 모델에
+    간다. 새 작품의 첫 대화가 이 문장으로 시작한다 — 자동으로 걸려야 하는 자리다."""
+    llm = b.mod("local_llm")
+    with template_project(b) as mf:
+        sysmsg, meta = llm.persona_prompt()
+    ok(isinstance(sysmsg, str) and sysmsg.strip(), "시스템 메시지가 비어 있음")
+    eq(meta.get("name"), "하늘", "인물 이름")
+    has(sysmsg, "하늘", "이름이 페르소나에 반영되지 않음")
+    for broken in ("너의 .", "너의 ,", "너의 \n", "None", "[관계] 상대는 너의 ."):
+        hasnt(sysmsg, broken, "빈 값이 그대로 문장이 됨")
+    rel = str(((mf.get("talk") or {}).get("relationship") or "")).strip()
+    if rel:
+        has(sysmsg, rel, "매니페스트의 관계 설정이 문장에 없음")
 
 
 # ============================================================ checker 부정 픽스처
@@ -1337,6 +1678,52 @@ def w30(b: Box):
     eq(sc["ending_label"], "호감 엔딩", "ending_label")
     plain = vc.build_scene({**item, "ending": False, "ending_label": ""}, 8, *args, episode=0)
     ok(not plain.get("ending") and not plain.get("ending_label"), "엔딩이 아닌 장면에 라벨이 남음")
+
+
+@test("webapp", "W31 /api/set-crop — 장면 쓰기는 scene_ops 한 곳으로(두 번째 쓰기 경로 없음)", web=True)
+def w31(b: Box):
+    """이 라우트는 예전에 adv.load/save 로 장면 파일을 직접 고쳐 썼다. 그러면 값 검증도
+    APPROVED 가드도 없는 두 번째 쓰기 경로가 생긴다 — 승인 도장을 찍은 장면의 인화 설정이
+    이 경로로만 바뀌는 상태였다.
+
+    구현이 '거부'든 'scene_ops 안의 명시적 예외'든, 잠그는 것은 하나다:
+    **webapp 이 직접 쓰지 않는다.** 그 위에서 승인 장면의 결과를 그대로 고정한다.
+    """
+    if not func_body(b, "webapp", "r_set_crop"):
+        raise Gap("webapp.r_set_crop 이 없음 — /api/set-crop 경로가 사라졌거나 이름이 바뀌었다")
+    calls = func_calls(b, "webapp", "r_set_crop")
+    ok(any(c.startswith("scene_ops.") for c in calls),
+       f"크롭 저장이 scene_ops 를 거치지 않음 — 부르는 것: {sorted(calls)}")
+    for direct in ("adv.save", "adv.load", "atomic_write_json", "vn_core.atomic_write_json"):
+        ok(direct not in calls, f"webapp 이 장면 파일을 직접 씀({direct}) — 두 번째 쓰기 경로")
+
+    with fresh_scene(b) as sid:
+        st, d = b.wapi("/api/set-crop", {"scene_id": sid, "anchor": "top"})
+        eq(st, 200, f"정상 저장 — {json.dumps(d, ensure_ascii=False)[:200]}")
+        eq((b.scene(sid).get("print") or {}).get("crop_anchor"), "top", "저장 값")
+        eq(b.scene(sid)["status"], "SCENE_PLAN", "크롭 저장이 장면 상태를 움직임")
+        keep = b.scene(sid)
+        eq(b.code("/api/set-crop", {"scene_id": sid, "anchor": "옆으로"}), 400,
+           "허용되지 않는 기준점이 통과")
+        eq(b.scene(sid), keep, "거부됐는데 파일이 바뀜")
+    eq(b.code("/api/set-crop", {"scene_id": "../etc", "anchor": "top"}), 400, "장면 ID 형식 검증")
+    eq(b.code("/api/set-crop", {"scene_id": "SCENE-404", "anchor": "top"}), 400, "없는 장면")
+
+    with cli_scene(b, "APPROVED") as sid2:
+        before = b.scene(sid2)
+        st2, d2 = b.wapi("/api/set-crop", {"scene_id": sid2, "anchor": "bottom"})
+        after = b.scene(sid2)
+        if st2 == 200:
+            # 허용이 설계라면 그것은 scene_ops 안의 **명시적** 예외여야 한다(웹의 우회가 아니라).
+            so = b.mod("scene_ops")
+            ok(any("crop" in n for n in dir(so) if not n.startswith("_")),
+               "승인 장면의 크롭이 바뀌는데 scene_ops 에 그 예외를 담당하는 API 가 없음")
+            eq((after.get("print") or {}).get("crop_anchor"), "bottom", "허용했는데 저장되지 않음")
+            eq(after["status"], "APPROVED", "status")
+            eq(after["review"], before["review"], "승인 기록이 함께 바뀜")
+        else:
+            eq(st2, 400, f"거부는 400 이어야 한다 — {json.dumps(d2, ensure_ascii=False)[:200]}")
+            eq(after, before, "거부됐는데 승인 장면이 바뀜")
 
 
 # ============================================================ PIN 인증(LAN)
@@ -2120,6 +2507,55 @@ def s04(b: Box):
     hasnt(rendered, planted, "원문 노출")
 
 
+def gitignored(rel: str, patterns: list[str]) -> bool:
+    """.gitignore 규칙 중 하나라도 이 경로를 제외하는가(뒤에 오는 규칙이 이긴다).
+
+    git 의 전체 문법을 흉내 내지 않는다 — 이 저장소가 실제로 쓰는 형태
+    (`logs/`, `project/story/talk_*.json`, `*.key`, `!scratch/.gitkeep`)만 판정한다.
+    """
+    hit = False
+    name = rel.rsplit("/", 1)[-1]
+    dirs = rel.split("/")[:-1]
+    for raw in patterns:
+        neg = raw.startswith("!")
+        pat = raw.lstrip("!").rstrip("/")
+        anchored = pat.startswith("/")
+        pat = pat.lstrip("/")
+        if not pat:
+            continue
+        if "/" in pat:                       # 경로를 가진 규칙은 저장소 뿌리에서 맞춘다
+            match = fnmatch.fnmatch(rel, pat) or rel.startswith(pat + "/")
+        elif anchored:                       # '/name' — 뿌리의 그 항목(과 그 아래)만
+            match = fnmatch.fnmatch(rel.split("/")[0], pat)
+        else:                                # 이름만 있는 규칙은 어느 깊이에서나 맞는다
+            match = fnmatch.fnmatch(name, pat) or any(fnmatch.fnmatch(d, pat) for d in dirs)
+        if match:
+            hit = not neg
+    return hit
+
+
+@test("security", "S05 사적 대화·아카이브가 .gitignore 를 빠져나가지 않는다")
+def s05(b: Box):
+    """인물과 나눈 대화는 이 저장소에서 가장 사적인 파일이다. 상한을 넘겨 옮겨 담는
+    아카이브는 확장자가 .jsonl 이라 talk_*.json 규칙에 **걸리지 않는다** — 규칙이 한 줄
+    빠지면 `git add .` 한 번으로 전부 커밋된다. 파일명 규칙은 talk_store 가 정하므로
+    여기서도 talk_store 에게 물어본다(규칙이 바뀌면 검사도 따라간다)."""
+    ts = b.mod("talk_store")
+    patterns = [l.strip() for l in b.p(".gitignore").read_text(encoding="utf-8").splitlines()
+                if l.strip() and not l.strip().startswith("#")]
+    private = [ts.archive_path(ts.talk_path("CHAR-001")), ts.talk_path("CHAR-001"),
+               ts.story_chat_path(), ts.STORY_DIR / "memory_CHAR-001.json"]
+    naked = []
+    for p in private:
+        rel = Path(p).resolve().relative_to(b.root.resolve()).as_posix()
+        if not gitignored(rel, patterns):
+            naked.append(rel)
+    eq(naked, [], "저장소에 실릴 수 있는 사적 파일")
+    # 규칙이 지나치게 넓어 작품 데이터까지 삼키지는 않는지(반대 방향 회귀)
+    for keep in ("project/manifest.json", "project/scenes/SCENE-001.json", "tools/webapp.py"):
+        ok(not gitignored(keep, patterns), f"{keep} 까지 git 에서 빠짐")
+
+
 # ============================================================ 단위(순수 함수)
 @test("unit", "U01 scene_ops — APPROVED 장면은 어떤 쓰기 경로로도 바뀌지 않는다")
 def u01(b: Box):
@@ -2368,14 +2804,111 @@ def u10(b: Box):
         eq(again["checker_pass"], True, "재저장 후 검사")
 
 
+# 다른 프로세스에서 같은 장면을 선점해 보는 조각 — 네트워크·유료 API 는 건드리지 않는다.
+_CLAIM_PY = (
+    "import sys\n"
+    "sys.path.insert(0, 'tools')\n"
+    "import gen_jobs\n"
+    "try:\n"
+    "    gen_jobs.claim(sys.argv[1])\n"
+    "    print('CLAIMED')\n"
+    "    if len(sys.argv) > 2 and sys.argv[2] == 'crash':\n"
+    "        import os; sys.stdout.flush(); os._exit(0)\n"     # 좌초 잠금을 남기고 급사
+    "    gen_jobs.release(sys.argv[1])\n"
+    "except Exception as exc:\n"
+    "    print('REJECTED', type(exc).__name__)\n"
+)
+
+
+@test("unit", "U11 gen_jobs — 프로세스 경계에서도 같은 장면 선점 거부 · 좌초 잠금은 회수")
+def u11(b: Box):
+    """중복 과금의 마지막 구멍은 **서버 밖**이다. 웹이 굽고 있는 장면을 CLI 로 한 번 더
+    돌리면 메모리 표시로는 막을 수 없다 — 표시가 프로세스마다 따로 있기 때문이다.
+    그래서 여기서는 진짜 별도 프로세스를 띄워 확인한다(MakeFun 호출은 하지 않는다 —
+    선점만).
+    """
+    gj = need_mod(b, "gen_jobs")
+    lock_dir = getattr(gj, "LOCK_DIR", None)
+    stale_sec = float(getattr(gj, "STALE_SEC", 1200) or 1200)
+
+    def claim_in_subprocess(sid: str, crash: bool = False) -> str:
+        rc, out = b.run("-c", _CLAIM_PY, sid, *(["crash"] if crash else []))
+        ok("CLAIMED" in out or "REJECTED" in out,
+           f"별도 프로세스가 답하지 않음(rc={rc}) — {out[:300]}")
+        return "REJECTED" if "REJECTED" in out else "CLAIMED"
+
+    held, other = "SCENE-921", "SCENE-922"
+    try:
+        # 1) 이 프로세스가 잡은 장면 → 다른 프로세스는 거절당해야 한다
+        gj.claim(held)
+        got = claim_in_subprocess(held)
+        if got == "CLAIMED":
+            if lock_dir is None:
+                raise Gap("gen_jobs 선점이 아직 메모리 전용 — 서버 밖 CLI 가 같은 장면을 또 굽는다"
+                          "(같은 이미지에 두 번 과금)")
+            raise Failed("잠금 파일이 있는데도 다른 프로세스가 같은 장면을 선점함")
+        gj.release(held)
+        eq(claim_in_subprocess(held), "CLAIMED", "해제한 장면을 다른 프로세스가 잡지 못함")
+
+        # 2) 급사한 프로세스가 남긴 좌초 잠금 — 살아 있는 동안은 막고, 늙으면 회수한다
+        eq(claim_in_subprocess(other, crash=True), "CLAIMED", "선점 실패")
+        eq(claim_in_subprocess(other), "REJECTED", "남은 잠금이 다음 프로세스를 막지 않음")
+        locks = sorted(Path(lock_dir).glob("*")) if lock_dir else []
+        stale = [p for p in locks if other in p.name]
+        ok(stale, f"좌초 잠금 파일을 찾지 못함: {[p.name for p in locks]}")
+        old = time.time() - stale_sec - 60
+        for p in stale:
+            os.utime(p, (old, old))
+        eq(claim_in_subprocess(other), "CLAIMED",
+           f"{stale_sec / 60:.0f}분 넘게 방치된 좌초 잠금이 회수되지 않음(영구 잠금)")
+    finally:
+        with contextlib.suppress(Exception):
+            gj.release(held)
+        for sid in (held, other):
+            with contextlib.suppress(Exception):
+                b.run("-c", "import sys\nsys.path.insert(0,'tools')\nimport gen_jobs\n"
+                            "gen_jobs.release(sys.argv[1])\n", sid)
+        if lock_dir:
+            for p in Path(lock_dir).glob("*"):
+                if held in p.name or other in p.name:
+                    with contextlib.suppress(OSError):
+                        p.unlink()
+
+
+@test("unit", "U12 persona_prompt 이관 — 새 자리·옛 이름이 같은 문장을 만든다(하위호환)")
+def u12(b: Box):
+    """프롬프트 조립이 prompt_build 로 옮겨 갔어도 옛 이름(local_llm.persona_prompt)으로
+    부르는 곳(webapp·CLI·이 자가진단 U03)이 그대로 살아 있어야 한다. 그리고 두 이름이
+    **각자 한 벌씩** 문장을 만들면 곧 갈린다 — 한쪽은 통로여야 한다."""
+    llm = b.mod("local_llm")
+    pb = b.mod("prompt_build")
+    new = need_attr(pb, "persona_prompt", "페르소나 프롬프트 조립의 새 자리")
+    old = need_attr(llm, "persona_prompt", "옛 이름으로 부르는 곳(webapp·CLI)")
+    s_new, m_new = new()
+    s_old, m_old = old()
+    eq(m_old, m_new, "메타(인물·앨범)가 이름마다 다름")
+    def flat(s):        # 시각 블록의 숫자는 호출마다 달라진다 — 뭉개고 문장만 비교한다
+        return re.sub(r"\d+", "N", str(s))
+
+    eq(flat(s_old), flat(s_new), "같은 이름으로 두 벌의 페르소나 문장이 만들어짐")
+    bodies = {n: len(func_body(b, m, "persona_prompt"))
+              for n, m in (("prompt_build", "prompt_build"), ("local_llm", "local_llm"))}
+    ok(min(bodies.values()) <= 3,
+       f"두 모듈 모두 자기 구현을 갖고 있음(문장 수 {bodies}) — 한쪽은 통로여야 한다")
+    # 같은 통로를 쓰는 다른 옛 이름도 함께(웹 사진 첨부 경로가 여기 걸린다)
+    ok(callable(getattr(llm, "resolve_photos", None)), "local_llm.resolve_photos 옛 이름이 끊김")
+
+
 # ============================================================ 러너
-GROUPS = ["meta", "pipeline", "checker", "webapp", "auth", "makefun", "backup",
-          "print", "viewer", "js", "security", "unit"]
+GROUPS = ["meta", "arch", "pipeline", "template", "checker", "webapp", "auth", "makefun",
+          "backup", "print", "viewer", "js", "security", "unit"]
 
 # --list 에서 각 그룹이 무엇을 잠그는지 한 줄로 보여 준다(부분 실행을 고르기 쉽게).
 GROUP_NOTE = {
     "meta": "자가진단 자신 — 필수 모듈·구문(가장 빠름)",
+    "arch": "계층 규약을 소스로 강제(import 방향·상태 대입·프롬프트 위치)",
     "pipeline": "CLI 상태 전이 · 승인 게이트",
+    "template": "templates/ 로 시작한 새 작품(사용자의 첫 5분)",
     "checker": "검사기가 '떨어뜨리는 능력'(부정 픽스처)",
     "webapp": "웹 스튜디오 라우트·잠금 (서버 기동)",
     "auth": "폰 접속 PIN·토큰",
@@ -2418,6 +2951,7 @@ def _line(status: str, t: dict, secs: float) -> str:
 
 def run_one(b: Box, t: dict, strict: bool = False) -> tuple[str, str, float]:
     started = time.perf_counter()
+    boot_before = b.boot_secs
     status, detail = "PASS", ""
     try:
         if t["web"]:
@@ -2434,8 +2968,13 @@ def run_one(b: Box, t: dict, strict: bool = False) -> tuple[str, str, float]:
         where = next((l.strip() for l in reversed(tb[:-1]) if "selftest.py" in l), "")
         status = "FAIL"
         detail = f"{type(e).__name__}: {e}" + (f"  ({where})" if where else "")
-    secs = time.perf_counter() - started
+    # 웹 스튜디오 기동은 실행당 한 번뿐인 비용이다 — 그것을 처음 부른 테스트의 시간에
+    # 얹으면 그 테스트가 느린 것처럼 보인다(감사에서 'W01 20초' 로 읽혔다). 떼어 낸다.
+    boot = b.boot_secs - boot_before
+    secs = time.perf_counter() - started - boot
     print(_line(status, t, secs))
+    if boot > 0:
+        print(f"      └ 웹 스튜디오 기동 {boot:.1f}초 — 이 실행의 모든 웹 테스트가 이 서버 하나를 쓴다")
     if detail and status != "PASS":
         for ln in str(detail).splitlines()[:4]:
             print(f"      └ {ln}")
@@ -2461,7 +3000,8 @@ def print_list(tests: list[dict], patterns: list[str]) -> None:
     print("부분 실행: python tools/selftest.py -k unit -k js   (그룹 이름·테스트 번호 모두 가능)")
 
 
-def print_summary(results: list[tuple[str, dict, str, float]], elapsed: float) -> int:
+def print_summary(results: list[tuple[str, dict, str, float]], elapsed: float,
+                  boot: float = 0.0) -> int:
     npass = sum(1 for s, _t, _d, _x in results if s == "PASS")
     skips = [(t, d) for s, t, d, _x in results if s == "SKIP"]
     gaps = [(t, d) for s, t, d, _x in results if s == "GAP"]
@@ -2483,6 +3023,9 @@ def print_summary(results: list[tuple[str, dict, str, float]], elapsed: float) -
     if elapsed > 20 and slow:
         print("가장 느린 항목: " + " · ".join(f"{t['name'].split()[0]} {x:.1f}초"
                                               for _s, t, _d, x in slow))
+        if boot > 0:
+            print(f"  (+ 웹 스튜디오 기동 {boot:.1f}초 — 웹 테스트 "
+                  f"{sum(1 for _s, t, _d, _x in results if t['web'])}건이 한 번만 낸다)")
     if fails:
         print("실패 항목:")
         for t, d in fails:
@@ -2543,7 +3086,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    return print_summary(results, time.perf_counter() - t0)
+    return print_summary(results, time.perf_counter() - t0,
+                         boot=(box.boot_secs if box is not None else 0.0))
 
 
 if __name__ == "__main__":

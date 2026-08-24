@@ -2,6 +2,17 @@
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>웹툰 스튜디오</title>
+<meta name="description" content="AI 비주얼 노벨 스튜디오 — 스토리·장면·이미지·감상·인화">
+<meta name="color-scheme" content="dark">
+<!-- 폰 '홈 화면에 추가'(docs/PHONE_TUTORIAL.md 5장)로 열었을 때의 겉모습.
+     아이콘은 data URI 인라인 — 외부 요청 0, CSP(img-src 'self' data:) 그대로 통과한다. -->
+<meta name="theme-color" content="#241C15">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="웹툰 스튜디오">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23241C15'/%3E%3Cpath d='M23 17h54a11 11 0 0 1 11 11v27a11 11 0 0 1-11 11H41L30 85l-1-19h-6a11 11 0 0 1-11-11V28a11 11 0 0 1 11-11z' fill='%235FB39A'/%3E%3Crect x='26' y='31' width='48' height='7' rx='3.5' fill='%23241C15'/%3E%3Crect x='26' y='45' width='34' height='7' rx='3.5' fill='%23241C15'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAIAAACyr5FlAAAEGklEQVR42u3dMW4WMRAG0L0EHWU6RIHSUEWioEJCKBVdboA4QBpqqrSUXIELMggpolik/MrYO5590ldHivf9Xntsr7erly9EdrNpAoFD4BA4BA6BQ+AQOAQOgUPgEIFD4BA4BA6BQ+AQOAQOgUPgEIFD4BA4BA6BQ+AQOAQOgWNA3txcv/34Th4TDXJqHNEEH759+fzz+92vH7KbaJxoomios+B49frq/dc7D/7SRKNF07XFEf9b/A485uckGnAmkUk49Ba5vUgTHCH99uHeE81NNOmELmQbPeo05Bw3XB09Vt2GyvAIR2eoj40MPqbiiNeht8nM98ug8ccQHGTM97EGDrPWNvPbLX2VxHM6KukrMsk4lDSOLX7UxaHbaNZ5bLoNncdwHDGb8mwqJHFam4bj5u6TB1Mh8SDK4bAcX2dZvxwOT6VOauEwT2k5Z9kss1mKG4vDaLTlmHQzGjUmhQOOFjgO2YZ/YNKPa/TEMW7fyhJEsvbB9MRxWhm5SxANcUw7jlE5Ke+XhjhO3m0kdh4NcZCRtRABBxxwwAHH6MNbqyRllaohjkGHL9ZKSqmjZ50jcaPKiqnWjOXK55O/T1JnBpvbhp0X3m4f7uNvniTpu/atygocAofAIXAIHHDAAQcccMABBxxwwAGHwCFwCBwCR/vjkG9urgt+Js9xyG4bP+Foe66p1Ee9HYfsuTcYjp7HIet0Hg41GXnAAQccDXDU+Wqe45DlUqfg4ThkuWqYqazjkAtceOg4ZKFxaLULDx2HLJGa92DWwuFGyFLJqjX7ML4P48MBx1E4XPBWKlkj+rSbmlxRXiSJ5aI0HMakzUajmTjc5FUkifcOZ1467M3S6Z2SjMNlXocn8VLZZBzmLG3mKfk4dB6duo18HEYePUYbo3CYtqw+SRmIw8ulwQtlIA6nZ1dcoJ+Hg4/VZYzFwcfSMobjsOayxBrKYThq7rJcfdY65xjHDBxXA27kPnOHMW0D9iQciKz4TZupOB6JxLy84AdxaiYaKprrkOMaB+D4V0m8O+MH8XebPwePc5BINEs0zrFHeI7EUWE+PKi22COnxnHyyyjh6HluG46xy3gnvKC0IY4RJ6ZcjQ5Hz88WwjEKx+3DvacOR58vJMMxA8eIvXRwdMCh3gWHehcc6l1wpJx1MAhtiyOi3gVHPg71LjjUu+BQ74IjBYd6FxzqXXCod8HxfBzqXafD8fRzDAahp8PxxG2k6l1wqHfBcQkO9S441LvguBCHehcc6l1wXIJDvQuOfRzqXXD8ye4nXwxC4djfRqreBcc+DvUuOPZxqHfBsY9DvQuO/+JQ74JjH4d6Fxz7ONS74NiPtwkcAofAIXAIHAKHCBwCh8AhcAgcAofAIXAIHAKHCBwCh8AhcAgcAofAIavlN/+o7YMJWzEMAAAAAElFTkSuQmCC">
 <style>
 :root{--bg:#241C15;--panel:#2E251C;--panel2:#372D22;--line:#453828;--ink:#EDE4D3;
 --sub:#A79680;--jade:#5FB39A;--jade-d:#2F6B59;--seal:#C43D2B;--warn:#D9A441;
@@ -85,7 +96,8 @@ color:inherit;font:inherit;text-align:left;cursor:pointer}
 border:none;background:rgba(18,13,9,.66);color:#B4A48C;font-size:17px;cursor:pointer;
 line-height:40px;padding:0;z-index:2}
 .galcard .fav.on{color:var(--warn)}
-/* 세로 스크롤 리딩 */
+/* 세로 스크롤 리딩 — DOM 은 공용 엔진(VNRuntime.renderScroll)이 만든다.
+   클래스 규약: .cut(장면 블록) · .ep(화 머리) · .say(대사) · .nar(나레이션) · .pick(선택지) */
 .scrollview{position:fixed;inset:0;background:var(--bg);overflow-y:auto;z-index:8;-webkit-overflow-scrolling:touch}
 .scrollview .topbar{position:sticky;top:0;background:rgba(36,28,21,.93);padding:10px 14px;
 display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);z-index:2}
@@ -94,6 +106,9 @@ display:flex;justify-content:space-between;align-items:center;border-bottom:1px 
 .scrollview .say{padding:12px 18px;border-bottom:1px solid var(--line);word-break:keep-all;overflow-wrap:anywhere}
 .scrollview .say b{font-weight:800}
 .scrollview .say .nar{color:var(--sub);font-style:italic;display:block;text-align:center}
+.scrollview .say .pick{color:var(--warn)}
+.scrollview .ep{padding:20px 18px 9px;color:var(--jade);font-weight:800;font-size:13px;
+letter-spacing:.06em;border-bottom:1px solid var(--line)}
 [hidden]{display:none!important}
 @media(prefers-reduced-motion:no-preference){.btn,nav button,.thumbs img{transition:all .15s}}
 /* ---- 모바일/터치 ---- */
@@ -101,14 +116,17 @@ display:flex;justify-content:space-between;align-items:center;border-bottom:1px 
 body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 @media(max-width:720px){
  main{flex-direction:column;min-height:auto}
- nav{width:100%;display:flex;overflow-x:auto;gap:4px;padding:6px 8px;
-  border-right:none;border-bottom:1px solid var(--line);-webkit-overflow-scrolling:touch}
- nav button{width:auto;white-space:nowrap;padding:10px 15px;border-left:none;
+ /* 가로 스크롤 대신 줄바꿈 — 360px 폰에서 [뷰어]·[갤러리]·[대화] 가 화면 밖으로
+    밀려 닿을 수 없던 문제. 두 줄로 접히면 모든 탭이 항상 보인다. */
+ nav{width:100%;display:flex;flex-wrap:wrap;justify-content:center;gap:4px;padding:6px 8px;
+  border-right:none;border-bottom:1px solid var(--line)}
+ nav button{width:auto;flex:0 0 auto;white-space:nowrap;padding:10px 15px;border-left:none;
   border-bottom:3px solid transparent;border-radius:8px}
  nav button.on{border-left:none;border-bottom-color:var(--jade)}
- .navlabel{padding:10px 6px 4px;white-space:nowrap;align-self:center}
+ .navlabel{padding:10px 4px 4px;white-space:nowrap;align-self:center;
+  font-size:9.5px;letter-spacing:.12em}
  nav button+.navlabel{margin-top:0;border-top:none;padding-top:10px;
-  border-left:1px solid var(--line);margin-left:6px;padding-left:12px}
+  border-left:1px solid var(--line);margin-left:6px;padding-left:10px}
  section{padding:14px 12px;max-width:100%}
  header{padding:11px 13px;flex-wrap:wrap;gap:7px}
  header h1{font-size:15px}
@@ -120,6 +138,13 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
  .vnbtn{padding:9px 12px;font-size:12.5px}
 }
 @media(max-width:720px) and (orientation:landscape){#chatlog{height:62vh}}
+/* 아주 좁은 폰(360px 급): 그룹 머리말을 접고 탭 6개에 폭을 모두 준다.
+   nav 의 aria-label("작업 단계")이 남아 있어 화면 낭독에는 손실이 없다. */
+@media(max-width:430px){
+ .navlabel{display:none}
+ nav{gap:3px;padding:6px 4px}
+ nav button{padding:10px 12px}
+}
 /* ---- 51 · 응답 대기 타이핑 인디케이터 ---- */
 .typing{display:inline-flex;gap:6px;align-items:center;height:22px}
 .typing i{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.3}
@@ -242,9 +267,10 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <details class="card" id="printExport">
 <summary class="small">인화 내보내기 · 승인 장면을 실물 인화용 마스터로 (Pillow 필요)</summary>
 <div class="row" style="margin-top:10px">
+<!-- 규격 목록은 studio.js 의 PRINT_SIZES 하나가 채운다(서버 print_export.SIZES 와 같은 목록).
+     여기 남긴 한 줄은 스크립트가 죽었을 때의 기본값일 뿐이다. -->
 규격 <select id="exportSize" aria-label="인화 규격">
-<option value="4x6">엽서 4×6</option><option value="5x7" selected>5×7</option>
-<option value="8x10">8×10</option><option value="A5">A5</option><option value="A4">A4</option></select>
+<option value="5x7" selected>5×7</option></select>
 블리드 <input type="number" id="exportBleed" value="0" step="0.125" min="0" style="width:64px"
  aria-label="블리드(인치)">인치
 <label class="small"><input type="checkbox" id="exportAll"> 승인 외 포함</label>
@@ -348,8 +374,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div class="row" style="margin-bottom:12px">
 <label class="small"><input type="checkbox" id="galFavOnly"> 즐겨찾기만 보기</label>
 <select id="favPrintSize" style="width:auto" aria-label="즐겨찾기 인화 규격">
-<option value="4x6">엽서 4×6</option><option value="5x7" selected>5×7</option>
-<option value="8x10">8×10</option><option value="A5">A5</option><option value="A4">A4</option></select>
+<option value="5x7" selected>5×7</option></select>
 <button class="btn ghost" id="btnFavPrint">★ 즐겨찾기만 인화</button>
 <span class="small" id="galMsg" role="status"></span></div>
 <div id="galGrid" class="galgrid"></div>

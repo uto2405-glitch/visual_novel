@@ -13,11 +13,15 @@
   revise SID <단계> [--note 사유]   SCENE_PLAN/PROMPT/IMAGE 로 되돌림 (자료 보존)
 
 이 파일의 자리(계층)
-  * **저장소 계층**이다: 장면 파일 읽기/쓰기(load·save·scene_path)와 검사기 실행(run_checker).
-  * **상태 전이 규칙은 여기 없다** — scene_ops 하나에만 있다. 아래 cmd_* 는 그 함수를
-    부르고 결과를 사람이 읽을 문장으로 옮기는 얇은 어댑터다. 웹 스튜디오도 같은 함수를
-    부르므로 CLI 와 웹이 서로 다른 규칙으로 움직일 수 없다(예: 승인 잠금은 양쪽 모두 적용).
-  * 경로·JSON·원자적 쓰기·오류 타입은 vn_core 가 단일 출처다.
+  * **순수 CLI 어댑터**다. 아래 cmd_* 는 scene_ops 의 전이 함수를 부르고 결과를 사람이
+    읽을 문장으로 옮기기만 한다. 웹 스튜디오도 같은 함수를 부르므로 CLI 와 웹이 서로 다른
+    규칙으로 움직일 수 없다(예: 승인 잠금은 양쪽 모두 적용).
+  * **상태 전이 규칙은 여기 없다**(scene_ops). **저장소 계층도 여기 없다**(vn_core).
+    예전에는 저장소 계층이 이 파일에 있어서 scene_ops 가 CLI 를 import 하고 CLI 가 다시
+    scene_ops·vn_compose 를 지연 import 하는 순환이었다. 지금은 한 방향이다:
+    vn_core ← scene_ops ← 이 파일.
+  * 아래 재수출 이름(load·save·scene_path·run_checker·all_scenes·WRITE_LOCK)은 기존
+    호출부(webapp·vn_compose·grok_api)를 위한 얇은 별칭이다. 구현은 vn_core 한 곳뿐이다.
 
 오류 규약: 라이브러리 함수는 VNError 를 던지고, 종료 코드 변환은 main() 에서만 한다.
 """
@@ -25,25 +29,34 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scene_ops  # noqa: E402
 import vn_core  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
-# 경로·잠금은 vn_core 가 정본이다. 아래 이름들은 기존 호출부(webapp·scene_ops)를 위한 별칭.
+# 경로·잠금은 vn_core 가 정본이다. 아래 이름들은 기존 호출부(webapp·vn_compose)를 위한 별칭.
 ROOT = vn_core.ROOT
 SCENES = vn_core.SCENES
 MANIFEST = vn_core.MANIFEST
 RAW_DIR = vn_core.IMAGES_RAW
 CHECKER = vn_core.CHECKER
 TEMPLATE = vn_core.TEMPLATES / "scene.json"
-
-BACK_STATES = ("SCENE_PLAN", "PROMPT", "IMAGE")
 WRITE_LOCK = vn_core.WRITE_LOCK   # 저장소 전역 단일 쓰기 잠금(웹의 동시 요청 직렬화)
+
+# 저장소 계층 재수출 — 구현은 vn_core, 여기는 이름만 유지한다(하위호환).
+load = vn_core.load_dict
+save = vn_core.atomic_write_json
+scene_path = vn_core.scene_path
+run_checker = vn_core.run_checker
+all_scenes = vn_core.all_scenes
+
+# 되돌릴 수 있는 단계 — 정본은 scene_ops.revise 가 검사하는 그 집합 하나다.
+# (예전에는 여기 따로 적어 둬서 두 벌이었고, 한쪽만 늘리면 CLI 와 웹의 허용 단계가 갈렸다.)
+BACK_STATES = scene_ops.BACK_STATES
 
 _console_guard = vn_core.console_guard   # 예전 이름 유지(호출부 호환). import 시 이미 적용됨.
 
@@ -57,59 +70,6 @@ def die(msg: str) -> NoReturn:
     raise VNError(msg)
 
 
-def load(path: Path) -> dict:
-    """장면·매니페스트 읽기 — 실패는 VNError(사용자에게 보여줄 문장)."""
-    data = vn_core.load_json(path)
-    if not isinstance(data, dict):
-        raise VNError(f"{Path(path).name}: JSON 최상위가 객체({{...}})가 아닙니다. 파일을 확인하세요.")
-    return data
-
-
-def save(path: Path, data: dict) -> None:
-    """원자적 저장: 임시 파일에 쓴 뒤 교체 — 저장 중 강제 종료돼도 원본이 깨지지 않는다."""
-    vn_core.atomic_write_json(path, data)
-
-
-def scene_path(sid: str) -> Path:
-    return SCENES / f"{sid}.json"
-
-
-def run_checker(sid: str | None = None) -> tuple[int, str]:
-    cmd = [sys.executable, str(CHECKER)]
-    if sid:
-        cmd += ["--scene", sid]
-    proc = subprocess.run(cmd, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
-    return proc.returncode, (proc.stdout + proc.stderr)
-
-
-def all_scenes() -> list[dict]:
-    out = []
-    if SCENES.exists():
-        for f in sorted(SCENES.glob("SCENE-*.json")):
-            out.append(load(f))
-    return out
-
-
-def _ops():
-    """scene_ops 지연 import — 모듈 수준에서 서로를 부르지 않아 순환 import 가 없다.
-
-    (의존 방향은 vn_core ← advance_scene ← scene_ops 하나뿐이고, CLI 어댑터만
-     실행 시점에 위층을 부른다.)
-    """
-    import scene_ops
-    return scene_ops
-
-
-def _inherit_episode():
-    """새 장면이 이어받을 화 번호(없으면 None) — 규칙의 정본은 vn_compose.last_episode 하나다.
-
-    지연 import 인 이유는 _ops() 와 같다(저장소 계층이 위층을 모듈 수준에서 부르지 않는다).
-    """
-    import vn_compose
-    return vn_compose.last_episode()
-
-
 def _print_fails(fails: str) -> None:
     if fails.strip():
         print(fails)
@@ -117,7 +77,7 @@ def _print_fails(fails: str) -> None:
 
 def apply_prompt(sid: str, text: str) -> None:
     """Grok 출력을 장면에 반영하고 상태를 PROMPT 로 올린다. (수동/API 모드 공용)"""
-    res = _ops().set_prompt(sid, text)
+    res = scene_ops.set_prompt(sid, text)
     print("상태 → PROMPT")
     if res["checker_pass"]:
         print("앵커 검사 포함 자동 검사 통과. 다음: 외부 이미지 AI에서 후보 생성")
@@ -146,9 +106,10 @@ def cmd_new(args: argparse.Namespace) -> None:
     sc = load(TEMPLATE)
     sc["scene_id"] = sid
     sc["scene_order"] = max((s.get("scene_order", 0) for s in scenes), default=0) + 1
-    # 화(episode)는 지금 작업 중인 마지막 장면에서 이어받는다. 승계하지 않으면 templates
-    # 기본값(1화)이 조용히 붙어 3화를 쓰는 중에 만든 장면이 1화에 끼어든다.
-    ep = _inherit_episode()
+    # 화(episode)는 지금 작업 중인 마지막 장면에서 이어받는다(templates/scene.json 에는
+    # episode 키가 없다 — 없는 값을 임의로 붙이지 않는다). 승계하지 않으면 3화를 쓰는
+    # 중에 만든 장면에 화가 아예 붙지 않아 감상본의 화 선택에서 통째로 빠진다.
+    ep = vn_core.last_episode()
     if ep is None:
         sc.pop("episode", None)     # 화를 쓰지 않는 작품 — 없는 정보를 만들어 붙이지 않는다
     else:
@@ -189,7 +150,7 @@ def cmd_set_prompt(args: argparse.Namespace) -> None:
 
 def cmd_add_images(args: argparse.Namespace) -> None:
     sid = args.scene_id
-    res = _ops().import_image_files(sid, args.files)
+    res = scene_ops.import_image_files(sid, args.files)
     print(f"후보 {len(res.get('imported', []))}장 등록 (폴더 전체 {res['count']}장):")
     for i, r in enumerate(res.get("imported", []), 1):
         print(f"  [{i}] {r}")
@@ -202,10 +163,9 @@ def cmd_add_images(args: argparse.Namespace) -> None:
 
 
 def cmd_select(args: argparse.Namespace) -> None:
-    ops = _ops()
     sid = args.scene_id
-    chosen = ops.resolve_candidate(sid, args.candidate)
-    res = ops.select_image(sid, chosen)
+    chosen = scene_ops.resolve_candidate(sid, args.candidate)
+    res = scene_ops.select_image(sid, chosen)
     print(f"선택: {res['selected']}")
     if res["auto_pass"]:
         print(f"다음: python tools/advance_scene.py approve {sid}")
@@ -215,7 +175,7 @@ def cmd_select(args: argparse.Namespace) -> None:
 
 def do_approve(sid: str) -> None:
     """승인 잠금 — 검사 FAIL 시 원상 복구 후 VNError. (웹 스튜디오도 이 경로를 쓴다)"""
-    _ops().approve(sid)
+    scene_ops.approve(sid)
 
 
 def cmd_approve(args: argparse.Namespace) -> None:
@@ -232,7 +192,7 @@ def cmd_approve(args: argparse.Namespace) -> None:
 
 
 def cmd_revise(args: argparse.Namespace) -> None:
-    res = _ops().revise(args.scene_id, args.target, args.note)
+    res = scene_ops.revise(args.scene_id, args.target, args.note)
     print(f"{args.scene_id} → {res['status']} (version {res['version']}). "
           "기존 이미지·프롬프트는 보존됨.")
 

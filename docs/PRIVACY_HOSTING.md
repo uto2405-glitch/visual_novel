@@ -21,7 +21,7 @@
 | ✔ | **모든 대사 원문** |
 | ✔ | **승인된 장면 이미지 전부** — base64 로 HTML 안에 박힘 (`--all` 이면 승인 안 된 것까지) |
 | ✔ | 선택지·분기·엔딩 데이터 |
-| ✘ | 인물과 나눈 채팅 로그(`project/story/talk_*.json`, `chatlog.json`)와 그 요약본(`memory_*.json`) — 내보내지 않는다 |
+| ✘ | 인물과 나눈 채팅 로그(`project/story/talk_*.json`, `chatlog.json`), 상한을 넘겨 밀려난 아카이브(`*.archive.jsonl`), 그 요약본(`memory_*.json`) — 내보내지 않는다 |
 | ✘ | API 키·토큰 — 서버에만 있고 감상본에 들어가지 않는다 |
 
 즉 **채팅 기록은 안전하지만, 작품 전체(그림+대사)는 파일 하나에 통째로 들어간다.**
@@ -103,8 +103,10 @@ PWA 의 오프라인 캐시(`sw.js`, 서비스 워커)는 **HTTPS 또는 localho
 - [ ] 이 작품이 **공개되어도 괜찮은가?** (되돌릴 수 없다는 전제로)
 - [ ] `--all` 로 내보내 **승인 안 된 습작 컷**까지 들어가 있지 않은가?
 - [ ] 저장소를 public 으로 만들 계획이라면, `project/story/chatlog.json` ·
-      `project/story/talk_*.json` · `project/story/memory_*.json` 이 **과거 커밋에도** 없는가?
-      (지금 무엇이 사적 데이터인지는 [SCHEMA.md](SCHEMA.md) §3 이 정본이다)
+      `project/story/talk_*.json` · **`project/story/*.archive.jsonl`** ·
+      `project/story/memory_*.json` 이 **과거 커밋에도** 없는가?
+      (`*.archive.jsonl` 은 대화가 상한을 넘길 때 생기는 **옛 대화 원문**이다. 확장자가 달라
+       `talk_*.json` 패턴에 안 걸리니 따로 확인한다 — [SCHEMA.md](SCHEMA.md) §3 이 정본이다)
 - [ ] `python tools/secret_scan.py` 가 깨끗한가?
 - [ ] 이미지 AI 서비스 약관상 재배포가 허용되는가?
 - [ ] 그냥 [PHONE_TUTORIAL.md](PHONE_TUTORIAL.md) 의 LAN 접속으로 충분하지 않은가?
