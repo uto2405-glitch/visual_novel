@@ -11,8 +11,9 @@
 HTTP 라우트(webapp)는 여기서 조립된 것을 넘기기만 한다 — 같은 프롬프트가 웹·CLI 로
 갈라져 서로 다른 말을 하게 되는 것을 막는 경계다. 사용자가 가장 많이 마주하는 프롬프트인
 **인물 페르소나**(말투 규칙·장기 기억·앨범 사진 규칙)도 그래서 여기 있다. local_llm 은
-그 문자열을 서버에 실어 나르기만 하는 순수 전송 계층이고, 옛 이름으로 부르던 곳을 위한
-얇은 재수출만 갖는다.
+그 문자열을 서버에 실어 나르기만 하는 순수 전송 계층이고, 이제 이쪽을 되받지 않는다 —
+프롬프트가 필요한 곳(webapp·CLI)은 **이 모듈을 직접 부른다**. 의존은 한 방향뿐이다:
+local_llm ← prompt_build.
 
 화풍 문자열의 단일 출처는 vn_core.visual_style(매니페스트 → 장면 → 기본값)이다.
 
@@ -91,9 +92,7 @@ def story_context() -> str:
     if sl:
         out.append("[현재 스토리라인]\n" + sl[:STORYLINE_CHARS])
     lines = []
-    scene_files = sorted(vn_core.SCENES.glob("SCENE-*.json")) if vn_core.SCENES.exists() else []
-    for f in scene_files[:CONTEXT_SCENES]:
-        sc = vn_core.load_json_safe(f, {})
+    for _f, sc in vn_core.iter_scenes()[:CONTEXT_SCENES]:
         lines.append(f"- {sc.get('scene_id')} [{sc.get('status', '')}] "
                      f"{str(sc.get('purpose', ''))[:40]}")
     if lines:
@@ -294,18 +293,18 @@ _PHOTO_NEG = re.compile(r"없(네|어|다|는데|음|지|을)")
 
 
 def album_list() -> list:
-    """승인된 장면 이미지 = 인물의 '앨범'. [{scene_id, label, rel}]."""
+    """승인된 장면 이미지 = 인물의 '앨범'. [{scene_id, label, rel}].
+
+    '완성된 컷인가'의 판정은 vn_core.is_deliverable 하나다 — 감상본·인화·앨범이 같은
+    질문에 각자 답하면 인물이 "그 사진 없어" 라고 말하는 컷이 감상본에는 들어 있게 된다.
+    """
     out = []
-    for f in sorted(vn_core.SCENES.glob("SCENE-*.json")) if vn_core.SCENES.exists() else []:
-        sc = vn_core.load_json_safe(f, {})
-        if not sc or sc.get("status") != "APPROVED":
-            continue
-        assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
-        rel = str(assets.get("selected_image", "") or "").strip()
-        if not rel:
+    for _f, sc in vn_core.iter_scenes():
+        if not vn_core.is_deliverable(sc):
             continue
         label = str(sc.get("purpose") or sc.get("action_beat") or sc.get("scene_id") or "")
-        out.append({"scene_id": sc.get("scene_id"), "label": label[:70], "rel": rel})
+        out.append({"scene_id": sc.get("scene_id"), "label": label[:70],
+                    "rel": vn_core.selected_of(sc)})
     return out
 
 

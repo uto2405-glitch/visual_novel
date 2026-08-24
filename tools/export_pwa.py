@@ -21,10 +21,9 @@ import base64
 import hashlib
 import io
 import json
-import struct
+import re
 import sys
 import unicodedata
-import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,8 +34,9 @@ from vn_core import atomic_write_bytes, atomic_write_text          # noqa: E402
 # 경로·원자적 쓰기·콘솔 방어는 vn_core 가 단일 출처(import 만으로 콘솔 보호가 걸린다).
 ROOT = vn_core.ROOT
 OUT = vn_core.OUTPUT / "pwa"
-THEME = "#17110D"
-ACCENT = (224, 166, 75)
+# 앱 색·아이콘 모양의 단일 출처는 감상본(export_viewer)이다 — PWA 는 그 감상본을 감싼
+# 포장이므로 여기서 색을 따로 정하면 같은 작품이 경로마다 다른 앱으로 보인다.
+THEME = ev.THEME
 ICON_SIZES = (192, 512)
 
 # 제목은 사용자 문자열이므로 템플릿 치환이 아니라 json.dumps 로 직렬화한다
@@ -111,35 +111,15 @@ self.addEventListener("fetch", e => {
 });
 """
 
+# 감상본 HTML 이 이미 theme-color·apple-mobile-web-app-* 를 들고 있다(같은 앱 겉모습).
+# 여기서 다시 넣지 않고, PWA 에만 필요한 것 — webmanifest 링크와 **파일** 아이콘만 더한다.
 HEAD_INJECT = ('<link rel="manifest" href="manifest.webmanifest">'
-               '<meta name="theme-color" content="#17110D">'
-               '<link rel="apple-touch-icon" href="icon-192.png">'
-               '<meta name="apple-mobile-web-app-capable" content="yes">'
-               '<meta name="mobile-web-app-capable" content="yes">'
-               '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">')
+               '<link rel="apple-touch-icon" href="icon-192.png">')
+# 감상본의 인라인 data URI 아이콘은 걷어낸다 — apple-touch-icon 이 둘이면 어느 쪽이 쓰일지
+# 브라우저마다 달라, --icon-from-cut 으로 만든 아이콘이 조용히 무시될 수 있다.
+INLINE_ICON_RE = re.compile(r'<link rel="apple-touch-icon"[^>]*>')
 SW_REG = ('<script>if("serviceWorker" in navigator){'
           'addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}))}</script>')
-
-
-def _icon_png(size: int) -> bytes:
-    """단순 방사형 그라데이션 앱 아이콘 바이트(투명 없음, maskable 안전)."""
-    def chunk(tag, data):
-        c = tag + data
-        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
-    cx = cy = size / 2
-    rows = bytearray()
-    for y in range(size):
-        rows.append(0)
-        for x in range(size):
-            d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 / (size / 2)
-            t = min(1.0, d)
-            r = int(ACCENT[0] * (1 - t) + 0x17 * t)
-            g = int(ACCENT[1] * (1 - t) + 0x11 * t)
-            b = int(ACCENT[2] * (1 - t) + 0x0D * t)
-            rows += bytes((r, g, b))
-    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
-            + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
 
 
 def _pick_cut(data: dict, scene_id: str | None):
@@ -196,6 +176,7 @@ def export(include_all: bool, max_edge: int, quality: int,
            webp: bool = False, use_cache: bool = True) -> Path:
     data, html = ev.build_html(include_all, max_edge, quality, cover_id, font_spec,
                                webp, use_cache)
+    html = INLINE_ICON_RE.sub("", html, count=1)      # 인라인 아이콘 → 아래의 파일 아이콘으로
     html = html.replace("</head>", HEAD_INJECT + "</head>", 1)
     html = html.replace("</body>", SW_REG + "</body>", 1)
     wm = webmanifest(data["title"])
@@ -203,7 +184,7 @@ def export(include_all: bool, max_edge: int, quality: int,
     cut = _square_image(_pick_cut(data, icon_scene) or "") if icon_from_cut else None
     icons = {}
     for size in ICON_SIZES:
-        icons[size] = (cut is not None and _cut_icon_bytes(cut, size)) or _icon_png(size)
+        icons[size] = (cut is not None and _cut_icon_bytes(cut, size)) or ev.app_icon_png(size)
 
     # 캐시 버전은 번들 내용의 sha256 — 내용이 같으면 재실행해도 그대로(불필요한 재캐시 방지)
     h = hashlib.sha256()

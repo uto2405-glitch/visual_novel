@@ -40,6 +40,8 @@
   var COARSE = !!(global.matchMedia && global.matchMedia("(pointer:coarse)").matches);
   var FOCUSABLE = "button:not([disabled]),[href],input,select,textarea,[tabindex]:not([tabindex='-1'])";
   var PRELOAD_SPAN = 2;      // 현재 위치 ±2컷만 미리 받는다(100컷 작품에서 수백 MB 선요청 방지)
+  var BAR_IDLE_MS = 3000;    // 폰: 이만큼 손을 떼고 있으면 툴바가 그림 위에서 물러난다
+  var TAP_R = 24;            // 이 반경 안이면 탭. 가로로 이만큼을 넘기면 스와이프 — 사이에 빈 구간이 없다
   // 단축키 힌트: 폰(터치)에는 없는 키를 나열하지 않고, 몇 컷 읽고 나면 사라진다 —
   // 좁은 화면에서 대사창 한 줄을 매 컷 빼앗지 않기 위해서다.
   var HINT_KEYS = "탭/Space 진행 · ← 이전 · L 기록 · C 장면 · S 설정 · Esc 닫기";
@@ -89,6 +91,16 @@
     ".vnr-btn.on{color:var(--vnr-accent,#5FB39A);border-color:var(--vnr-accent,#5FB39A)}",
     ".vnr-aff{background:rgba(196,61,43,.22);border-color:var(--vnr-seal,#C43D2B);",
     "color:#F2C0B6;font-weight:700}",
+    /* 툴바 유휴 숨김 — 대사창은 그대로 두고 툴바만 물러난다(읽는 중에 글이 사라지면 안 된다) */
+    ".vnr.vnr-baridle .vnr-bar{opacity:0;pointer-events:none}",
+    /* [⋯] 보조 도구 — 폰에서 툴바를 한 줄로 유지하기 위해 같은 버튼 노드를 여기로 옮겨 담는다 */
+    ".vnr-more{position:absolute;top:calc(100% + 6px);right:0;z-index:4;display:flex;",
+    "flex-direction:column;gap:6px;padding:8px;min-width:136px;",
+    "background:rgba(24,18,12,.96);border:1px solid var(--vnr-line,#453828);border-radius:10px;",
+    "box-shadow:0 14px 34px rgba(0,0,0,.55)}",
+    ".vnr-more .vnr-btn{width:100%;text-align:left;background:transparent;border-color:transparent}",
+    ".vnr-more .vnr-btn:hover,.vnr-more .vnr-btn:focus-visible{",
+    "border-color:var(--vnr-accent,#5FB39A)}",
     /* 대사창 */
     ".vnr-dlg{position:absolute;left:50%;transform:translateX(-50%);",
     "bottom:calc(26px + env(safe-area-inset-bottom));width:min(880px,92%);",
@@ -194,7 +206,34 @@
     ".vnr-choices{max-height:calc(100% - 96px);gap:10px}",
     ".vnr-choices button{padding:12px 15px;font-size:14.5px}",
     ".vnr-set{right:8px;left:8px;width:auto}",
-    ".vnr-log,.vnr-scenes{inset:6% 5%}}"
+    ".vnr-log,.vnr-scenes{inset:6% 5%}}",
+    /* 세로 스크롤 리딩(renderScroll)의 구조 CSS — 레이아웃·타이포·간격은 여기 한 벌뿐이다.
+       두 호스트(스튜디오·감상본)는 자기 껍데기(고정 오버레이·상단바)와 팔레트 토큰만 얹는다:
+         --vnr-line(구분선) · --vnr-sub(나레이션) · --vnr-accent(화 머리) · --vnr-pick(선택지)
+       renderScroll 이 컨테이너에 .vnr-scroll 을 붙여 주므로 호스트는 선택자를 몰라도 된다. */
+    ".vnr-scroll{max-width:820px;margin:0 auto;",
+    "padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);",
+    "padding-bottom:calc(44px + env(safe-area-inset-bottom))}",
+    ".vnr-scroll .cut img{width:100%;display:block}",
+    ".vnr-scroll .say{padding:12px 18px;border-bottom:1px solid var(--vnr-line,#453828);",
+    "line-height:1.6;word-break:keep-all;overflow-wrap:anywhere}",
+    ".vnr-scroll .say b{font-weight:800}",
+    ".vnr-scroll .say .nar{color:var(--vnr-sub,#A79680);font-style:italic;display:block;",
+    "text-align:center}",
+    ".vnr-scroll .say .pick{color:var(--vnr-pick,#D9A441)}",
+    ".vnr-scroll .ep{padding:20px 18px 9px;color:var(--vnr-accent,#5FB39A);font-weight:800;",
+    "font-size:13px;letter-spacing:.06em;border-bottom:1px solid var(--vnr-line,#453828)}",
+    "@media(max-width:720px){.vnr-scroll .say{padding:11px 14px}",
+    ".vnr-scroll .ep{padding:16px 14px 8px}}",
+    /* 폰(터치): 툴바는 한 줄을 넘지 않는다 — 3줄로 접혀 그림 상단을 상시 덮던 문제.
+       보조 버튼은 [⋯] 안으로 들어가고(.vnr-more), 남은 것은 3초 뒤 스스로 물러난다. */
+    "@media(pointer:coarse){",
+    ".vnr-bar{flex-wrap:nowrap;gap:5px;max-width:none;",
+    "left:calc(8px + env(safe-area-inset-left));right:calc(8px + env(safe-area-inset-right))}",
+    ".vnr-bar>.vnr-btn{padding:8px 10px;font-size:12px;white-space:nowrap;flex:0 0 auto}",
+    ".vnr-bar>.vnr-chip{padding:6px 9px;font-size:11.5px;white-space:nowrap;",
+    "flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}",
+    "}"
   ].join("");
 
   var cssDone = false;
@@ -262,6 +301,21 @@
     return { title: String(d.title || ""), scenes: scenes, dating: dating, episodes: eps };
   }
 
+  /* Tab 가둠 — 열린 상자 밖으로 포커스가 새지 않게 한다.
+   * mount 밖(모듈 최상위)에 둔 이유: 스튜디오의 오버레이(라이트박스·세로 스크롤·재인증 안내)도
+   * 같은 규칙을 써야 하는데, 규칙이 두 벌이 되면 반드시 한쪽만 고쳐진다.
+   * VNRuntime.trapTab(box, e) 로 노출한다 — 호스트는 keydown 에서 그대로 넘기면 된다.
+   */
+  function trapTab(box, e) {
+    if (!box || !e || e.key !== "Tab") return;
+    var f = Array.prototype.slice.call(box.querySelectorAll(FOCUSABLE))
+      .filter(function (n) { return n.offsetWidth > 0 || n.offsetHeight > 0; });
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1], cur = D.activeElement;
+    if (e.shiftKey && (cur === first || !box.contains(cur))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (cur === last || !box.contains(cur))) { e.preventDefault(); first.focus(); }
+  }
+
   /** 이름표 글자색 자동 — 배경 밝기에 따라 검정/흰색 (WCAG 대비 확보) */
   function readableInk(hex) {
     var h = String(hex || "").replace("#", "");
@@ -288,6 +342,8 @@
   function renderScroll(data, container, opts) {
     if (!container || !container.appendChild) return null;
     opts = opts || {};
+    injectCss();                       // 구조 CSS 는 엔진이 들고 있다(호스트엔 팔레트 토큰만)
+    container.classList.add("vnr-scroll");
     var d = normData(data);
     var imgOf = (typeof opts.imageSrc === "function")
       ? opts.imageSrc : function (sc) { return (sc && sc.img) || ""; };
@@ -407,7 +463,7 @@
     // ---- 상태 ----
     var vi = 0, di = 0, ended = false, revealing = false, fullText = "", awaiting = false, hintLeft = 0;
     var autoOn = false, skipOn = false, isOpen = false;
-    var revealTimer = null, autoTimer = null, affTimer = null, wakeLock = null;
+    var revealTimer = null, autoTimer = null, affTimer = null, wakeLock = null, idleTimer = null;
     var aff = 0, navStack = [], backlog = [], backlogKeys = new Set(), seen = new Set();
     var preloaded = new Set(), lastFocus = null, returnFocus = null;
     var SET = { textSpeed: 26, autoDelay: 1500, fs: 17, skipAll: false, cinema: false };
@@ -551,15 +607,39 @@
     E.bAuto.setAttribute("aria-pressed", "false");
     E.bSkip.setAttribute("aria-pressed", "false");
     // 호스트 전용 버튼(감상본의 [스크롤] 처럼)은 여기로 끼운다 — 툴바가 두 벌로 갈리지 않게.
-    var barKids = [E.chip, E.aff, E.bAuto, E.bSkip, E.bScenes, E.bLog, E.bSet, E.bHide, E.bFull];
+    var extraKids = [];
     (Array.isArray(opts.extraButtons) ? opts.extraButtons : []).forEach(function (x) {
       if (!x || !x.label) return;
-      barKids.push(mkBtn(String(x.label), x.title || "", function () {
+      extraKids.push(mkBtn(String(x.label), x.title || "", function () {
         if (typeof x.onClick === "function") x.onClick();
       }));
     });
-    barKids.push(E.bExit);
-    barKids.forEach(function (n) { E.bar.appendChild(n); });
+    /* 폰(coarse)에서는 버튼 10~11개가 360px 안에서 두세 줄로 접혀 그림 위를 상시 덮었다.
+       한 줄에 남는 것은 진행률·호감도·[자동]·[장면]·[⋯]·[닫기] 뿐이고, 나머지는 같은 버튼
+       노드를 [⋯] 메뉴로 옮겨 담는다(버튼을 새로 만들지 않으므로 동작·단축키가 갈리지 않는다). */
+    E.more = el("div", "vnr-more");
+    E.more.hidden = true;
+    E.more.setAttribute("role", "group");
+    E.more.setAttribute("aria-label", "다른 도구");
+    E.bMore = mkBtn("⋯", "다른 도구", function () { toggleMore(); });
+    E.bMore.setAttribute("aria-haspopup", "true");
+    E.bMore.setAttribute("aria-expanded", "false");
+    E.bMore.setAttribute("aria-label", "다른 도구");
+    if (COARSE) {
+      [E.chip, E.aff, E.bAuto, E.bScenes, E.bMore, E.bExit].forEach(function (n) {
+        E.bar.appendChild(n);
+      });
+      [E.bLog, E.bSet, E.bSkip, E.bHide, E.bFull].concat(extraKids).forEach(function (n) {
+        E.more.appendChild(n);
+      });
+      E.bar.appendChild(E.more);
+      // 메뉴에서 무엇을 고르든 메뉴는 닫는다(버튼 자신의 동작이 먼저 실행된 뒤 버블로 도달).
+      E.more.addEventListener("click", function () { closeMore(); });
+    } else {
+      [E.chip, E.aff, E.bAuto, E.bSkip, E.bScenes, E.bLog, E.bSet, E.bHide, E.bFull]
+        .concat(extraKids).concat([E.bExit])
+        .forEach(function (n) { E.bar.appendChild(n); });
+    }
 
     E.dlg = el("div", "vnr-dlg");
     E.dlg.setAttribute("role", "group");
@@ -669,9 +749,46 @@
     function applyFs() { E.stage.style.setProperty("--vnr-fs", SET.fs + "px"); }
     function applyCinema() { E.fx.hidden = !SET.cinema; }
     function uiHidden() { return E.stage.classList.contains("vnr-uihidden"); }
+    function barIdle() { return E.stage.classList.contains("vnr-baridle"); }
+    /** 툴바가 보이지 않을 때는 포커스·스크린리더에서도 빼 둔다(숨김 두 갈래를 한 곳에서 반영) */
+    function syncBarInert() { E.bar.inert = uiHidden() || barIdle(); }
     function setUiHidden(h) {
       E.stage.classList.toggle("vnr-uihidden", h);
-      E.bar.inert = h;
+      if (h) closeMore();
+      syncBarInert();
+    }
+    function setBarIdle(on) {
+      E.stage.classList.toggle("vnr-baridle", !!on);
+      if (on) closeMore();
+      syncBarInert();
+    }
+    /* 폰에서 툴바는 3초 쉬면 스스로 물러나고, 화면을 건드리면(탭·스와이프·키) 돌아온다.
+       대사창은 건드리지 않는다 — 읽는 중에 글이 사라지면 안 된다. */
+    function wakeBar() {
+      if (!COARSE) return;
+      clearTimeout(idleTimer);
+      setBarIdle(false);
+      if (!isOpen) return;
+      idleTimer = setTimeout(function () {
+        if (!isOpen || uiHidden() || panelOpen() || !E.end.hidden || !E.more.hidden) return;
+        setBarIdle(true);
+      }, BAR_IDLE_MS);
+    }
+    function closeMore() {
+      if (!E.more || E.more.hidden) return;
+      E.more.hidden = true;
+      E.bMore.setAttribute("aria-expanded", "false");
+    }
+    function toggleMore() {
+      if (!E.more) return;
+      var open = E.more.hidden;
+      E.more.hidden = !open;
+      E.bMore.setAttribute("aria-expanded", open ? "true" : "false");
+      wakeBar();
+      if (open) {
+        var f = E.more.querySelector("button");
+        if (f && f.focus) f.focus();
+      }
     }
     function toggleFull() {
       var s = E.stage;
@@ -687,7 +804,7 @@
     function updateAff(delta) {
       if (!data.dating) { E.aff.hidden = true; E.affFloat.hidden = true; return; }
       E.aff.hidden = false;
-      E.aff.textContent = "♥ " + aff + " / " + affMax();
+      E.aff.textContent = COARSE ? ("♥" + aff + "/" + affMax()) : ("♥ " + aff + " / " + affMax());
       if (!delta) return;
       E.affFloat.textContent = (delta > 0 ? "+♥ " : "−♥ ") + Math.abs(delta);
       E.affFloat.className = "vnr-afffloat " + (delta > 0 ? "vnr-up" : "vnr-down");
@@ -710,8 +827,12 @@
 
     function updateProg() {
       var sc = data.scenes[vi], dl = dlen(sc), total = data.scenes.length || 1;
-      E.chip.textContent = (sc && sc.ep ? sc.ep + "화 · " : "") + (vi + 1) + " / " + total
+      var full = (sc && sc.ep ? sc.ep + "화 · " : "") + (vi + 1) + " / " + total
         + (dl > 1 ? "  ·  " + (di + 1) + "/" + dl : "");
+      // 폰에서는 한 줄 툴바의 폭을 버튼에 양보한다(전체 표기는 title 로 남긴다)
+      E.chip.textContent = COARSE
+        ? ((sc && sc.ep ? sc.ep + "화 " : "") + (vi + 1) + "/" + total) : full;
+      E.chip.title = full;
       var p = ended ? 1 : Math.max(0, Math.min(1, (vi + (di + 1) / dl) / total));
       E.progFill.style.width = (p * 100).toFixed(2) + "%";
     }
@@ -949,6 +1070,8 @@
       var eps = presentEps();
       if (eps.length > 1) parts.push(eps.length + "화");
       E.endSub.textContent = parts.join("   ·   ");
+      closeMore();
+      setBarIdle(false);              // 엔딩 카드 위에서 툴바가 사라져 있지 않게
       E.end.hidden = false;
       releaseWake();
       say("엔딩 — " + nm);
@@ -1013,10 +1136,12 @@
       syncExpanded();
       if (was && lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) { /* 사라진 노드 */ } }
       lastFocus = null;
+      if (was) wakeBar();                 // 패널이 닫혔으니 툴바 유휴 시계를 다시 건다
       if ((autoOn || skipOn) && !revealing && !ended && !awaiting) onShown();
     }
     function togglePanel(p) {
       var wasOpen = !p.hidden;
+      closeMore();
       closePanels();
       if (wasOpen) return;
       clearTimeout(autoTimer);
@@ -1030,16 +1155,6 @@
       var close = p.querySelector(".vnr-close");
       if (close && close.focus) close.focus();
     }
-    function trapTab(box, e) {
-      if (e.key !== "Tab") return;
-      var f = Array.prototype.slice.call(box.querySelectorAll(FOCUSABLE))
-        .filter(function (n) { return n.offsetWidth > 0 || n.offsetHeight > 0; });
-      if (!f.length) return;
-      var first = f[0], last = f[f.length - 1], cur = D.activeElement;
-      if (e.shiftKey && (cur === first || !box.contains(cur))) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && (cur === last || !box.contains(cur))) { e.preventDefault(); first.focus(); }
-    }
-
     function renderLog() {
       E.logInner.replaceChildren();
       if (!backlog.length) {
@@ -1192,6 +1307,7 @@
       E.stage.classList.add("on");
       E.stage.setAttribute("aria-hidden", "false");
       E.stage.focus();
+      wakeBar();                       // 폰: 툴바는 3초 뒤 스스로 물러난다(탭하면 돌아온다)
       preloaded = new Set();
       renderImg();
       showLine();
@@ -1203,7 +1319,10 @@
       setAuto(false); setSkip(false);
       hideChoices();
       hideEnd();
+      closeMore();
       closePanels();
+      clearTimeout(idleTimer);         // 유휴 시계는 닫는 순간 멈춘다(닫힌 뒤 도는 타이머 없음)
+      setBarIdle(false);               // 다음에 열 때 툴바가 사라진 채로 시작하지 않게
       releaseWake();
       isOpen = false;
       E.stage.classList.remove("on");
@@ -1220,24 +1339,42 @@
       if (uiHidden()) { setUiHidden(false); return; }
       advance(1);
     }
-    var swallowClick = false, tx = 0, ty = 0;
-    E.click.addEventListener("click", function () {
+    var swallowClick = false, swallowTimer = null, tx = 0, ty = 0;
+    function onTap() {
+      wakeBar();
+      closeMore();
       if (!swallowClick) tap();
       swallowClick = false;
-    });
-    E.dlg.addEventListener("click", function () { advance(1); });
-    E.click.addEventListener("touchstart", function (e) {
+    }
+    function onTouchStart(e) {
       var t = e.changedTouches[0];
       tx = t.clientX; ty = t.clientY;
-    }, { passive: true });
-    E.click.addEventListener("touchend", function (e) {
+    }
+    function onTouchEnd(e) {
       var t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+      var adx = Math.abs(dx), ady = Math.abs(dy);
+      // 뒤따라 올 click 은 이 손짓의 그림자다. 시계는 **마지막** 손짓 기준으로 다시 건다 —
+      // 예전에는 연달아 넘길 때 앞 손짓의 타이머가 먼저 풀려 click 이 한 번 더 진행시켰다.
       swallowClick = true;
-      setTimeout(function () { swallowClick = false; }, 450);
+      clearTimeout(swallowTimer);
+      swallowTimer = setTimeout(function () { swallowClick = false; }, 450);
+      wakeBar();
+      closeMore();
       if (uiHidden()) { setUiHidden(false); return; }
-      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) advance(dx < 0 ? 1 : -1);
-      else if (Math.abs(dx) < 14 && Math.abs(dy) < 14) advance(1);
-    }, { passive: true });
+      // 가로로 TAP_R 을 넘게 끌면 스와이프, 그 안이면 탭. 두 판정이 맞닿아 있어 무반응 구간이 없다.
+      if (adx > TAP_R && adx > ady) { advance(dx < 0 ? 1 : -1); return; }
+      if (adx <= TAP_R && ady <= TAP_R) advance(1);
+      // 세로로 크게 끈 손짓은 대사·선택지 스크롤이다 — 이야기를 넘기지 않는다.
+    }
+    /* 대사창(.vnr-dlg, z-index:2)이 아래 클릭판(.vnr-click, z-index:1)을 덮고 있다.
+       엄지가 놓이는 화면 하단은 거의 항상 대사창이므로, 같은 손짓 판정을 대사창에도 단다 —
+       예전에는 그 자리에서 시작한 스와이프가 방향과 무관하게 앞으로만 넘어갔다. */
+    [E.click, E.dlg].forEach(function (n) {
+      n.addEventListener("click", onTap);
+      n.addEventListener("touchstart", onTouchStart, { passive: true });
+      n.addEventListener("touchend", onTouchEnd, { passive: true });
+    });
+    E.bar.addEventListener("touchstart", function () { wakeBar(); }, { passive: true });
 
     var FORM_TAGS = { INPUT: 1, TEXTAREA: 1, SELECT: 1, OPTION: 1 };
     function typingTarget(e) {
@@ -1245,8 +1382,14 @@
       if (!t || !t.tagName) return false;
       return FORM_TAGS[t.tagName] === 1 || t.isContentEditable === true;
     }
+    /** 지금 눌러 볼 수 있는 툴바 버튼(숨은 것·[⋯] 안에 접힌 것 제외) — 화살표 이동의 대상 */
+    function barButtons() {
+      return Array.prototype.slice.call(E.bar.querySelectorAll("button"))
+        .filter(function (b) { return !b.disabled && (b.offsetWidth > 0 || b.offsetHeight > 0); });
+    }
     function onKeyDown(e) {
       if (!isOpen) return;
+      wakeBar();
       // 엔딩 카드가 떠 있으면 버튼으로만 진행 — Space/Enter 가 카드를 지나쳐 닫지 않게
       if (!E.end.hidden) {
         if (e.key === "Escape") { hideEnd(); exit(); }
@@ -1269,6 +1412,12 @@
         }
         return;
       }
+      if (!E.more.hidden && e.key === "Escape") {   // [⋯] 메뉴가 열려 있으면 Esc 는 메뉴만 닫는다
+        e.preventDefault();
+        closeMore();
+        if (E.bMore.focus) E.bMore.focus();
+        return;
+      }
       if (e.key === "Escape") {
         if (awaiting) {                       // 선택 대기 중에 뷰어가 통째로 닫히지 않게
           var f = E.choices.firstElementChild;
@@ -1282,6 +1431,22 @@
       }
       // 선택지·툴바 버튼 위의 Space/Enter 는 버튼 활성화에 양보한다
       if ((e.key === " " || e.key === "Enter") && e.target && e.target.tagName === "BUTTON") return;
+      /* role="toolbar" 규약: 툴바 안에서는 ←/→ 가 이야기가 아니라 버튼 사이를 옮긴다.
+         (예전에는 [자동] 에 포커스를 둔 채 ← 를 누르면 대사가 되감겼다 — 선언과 동작이 어긋났다) */
+      if (e.target && E.bar.contains(e.target)
+        && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End")) {
+        var tb = barButtons();
+        if (tb.length) {
+          e.preventDefault();
+          var at = tb.indexOf(e.target), to;
+          if (e.key === "Home") to = 0;
+          else if (e.key === "End") to = tb.length - 1;
+          else if (e.key === "ArrowRight") to = (at + 1) % tb.length;
+          else to = (at <= 0 ? tb.length - 1 : at - 1);
+          if (tb[to] && tb[to].focus) tb[to].focus();
+          return;
+        }
+      }
       if (awaiting) {                          // 선택지: 위아래로 고른다
         var bs = Array.prototype.slice.call(E.choices.querySelectorAll("button"));
         if (!bs.length || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
@@ -1355,5 +1520,7 @@
     };
   }
 
-  global.VNRuntime = { mount: mount, renderScroll: renderScroll, schema: 1 };
+  // trapTab 도 함께 내보낸다 — 스튜디오의 오버레이(라이트박스·세로 스크롤·재인증 안내)가
+  // 같은 규칙으로 포커스를 가둘 수 있게. 규칙이 두 벌이 되면 반드시 한쪽만 고쳐진다.
+  global.VNRuntime = { mount: mount, renderScroll: renderScroll, trapTab: trapTab, schema: 1 };
 })(typeof window !== "undefined" ? window : this);

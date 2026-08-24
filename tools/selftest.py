@@ -25,6 +25,8 @@
     쓴다(Box._web 재사용). 그래서 기동 비용은 실행당 한 번뿐이고, 러너는 그 시간을 테스트
     시간에서 빼서 따로 보여 준다 — 첫 웹 테스트가 느린 것처럼 보이던 착시를 없앤다.
   * 확실히 존재하는 모듈은 optional 로 눅이지 않는다(REQUIRED_MODULES · meta T01 이 감시).
+  * 코드만 검사 대상이 아니다 — 문서가 코드 상수를 복제한 자리(SCHEMA.md)도 기계가 대조한다
+    (arch L06). 산문은 조용히 거짓말을 시작하고, 사용자는 그 산문대로 손을 댄다.
   * 테스트는 서로의 뒷정리에 기대지 않는다 — 상태를 바꾸면 픽스처가 반드시 원상 복구한다.
   * 한 테스트에서 난 예외는 그 테스트의 FAIL 로만 귀속된다(전체 실행이 멈추지 않는다).
 
@@ -75,12 +77,56 @@ REQUIRED_MODULES = (
     "vn_core", "advance_scene", "scene_ops", "talk_store", "prompt_build", "local_llm",
     "webapp", "vn_compose", "export_viewer", "makefun_client", "scene_lint",
     "secret_scan", "xai_client", "backup_project", "print_preflight", "gen_jobs",
+    # 여기 없으면 '구문 검사만 받고 아무도 부르지 않는' 상태가 조용히 유지된다.
+    # doctor 는 README·start_studio.ps1·복구 런북이 안내하는 1차 진단 도구이고,
+    # export_pwa 는 살아 있는 라우트(/api/export-pwa)가 직접 부른다.
+    "doctor", "export_pwa", "make_grok_input", "print_export", "grok_api",
 )
 
+# REQUIRED_MODULES 밖에 있어도 되는 유일한 목록 — 이유를 함께 적는다(T01 이 나머지를 잡는다).
+NOT_IMPORTED = {
+    "check_protocol": "도구가 고칠 수 없는 판정자 — 자가진단도 서브프로세스로만 부른다"
+                      "(P01·P02·C01~C06). 소스는 읽되 import 하지 않는다.",
+}
+
 # 저장소가 선언한 계층(vn_core.py 머리말: vn_core ← scene_ops ← advance_scene ← webapp).
-# 숫자가 작을수록 아래층이고, **아래층은 위층을 import 하지 않는다**(지연 import 포함).
-# 여기 없는 모듈은 이 검사의 대상이 아니다 — 위치를 선언한 것만 기계로 강제한다.
-LAYER = {"vn_core": 0, "talk_store": 1, "scene_ops": 1, "advance_scene": 2, "webapp": 4}
+# 숫자가 작을수록 아래층이고, **아래층은 위층을 import 하지 않는다** — 함수 본문의 지연
+# import 도 같은 무게로 센다(예외는 그 도구의 CLI 진입점뿐이다. CLI_ENTRY 참조).
+#
+# 예전에는 다섯 모듈만 여기 있었다 — 나머지 그래프는 '순환이 되어야만' 걸렸고, 순환이 아닌
+# 역방향 의존(예: export_viewer 가 webapp 을 부르는 식)은 아무 검사도 받지 않았다.
+# 이제 모든 도구가 위치를 갖고(L01 이 미부여를 잡는다), 방향이 기계로 강제된다.
+LAYER = {
+    # 0 기반 — 도구를 부르지 않는다. 검사기(check_protocol)가 여기 있는 이유는 그것이
+    #   도구가 고칠 수 없는 판정자이기 때문이다(도구를 import 하면 도구 쪽 전역 상태가
+    #   판정에 섞인다 — 그래서 부르는 쪽도 서브프로세스로만 부른다).
+    "vn_core": 0, "xai_client": 0, "check_protocol": 0,
+    # 1 저장소·전송 계층 — vn_core 만 본다.
+    "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1,
+    "make_grok_input": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
+    # 2 조립·전이 계층
+    "advance_scene": 2, "prompt_build": 2, "gen_jobs": 2, "scene_lint": 2, "export_pwa": 2,
+    # 3 외부 연동·오케스트레이션
+    "makefun_client": 3, "vn_compose": 3, "grok_api": 3,
+    # 4 최상위 진입점 — 아무도 이들을 import 하지 않는다.
+    "webapp": 4, "doctor": 4,
+}
+
+# 계층을 부여하지 않는 모듈과 그 이유. 비워 두면(=이름을 안 적으면) L01 이 미부여로 잡는다.
+UNLAYERED = {
+    "print_preflight": "makefun_client 와 서로를 안내문으로만 인용하는 지연 고리가 남아 있다"
+                       "(LAZY_CYCLE_OK 참조) — 둘 중 어느 쪽도 위에 놓을 수 없다.",
+}
+
+# 서로를 함수 본문에서 지연 import 하는 것이 **설계인** 쌍. 양쪽 다 상대의 판정을 안내문으로
+# 인용할 뿐이고(크기 상한 ↔ 인화 규격), import 시점 고리를 만들지 않는다. 여기 없는 새 고리는
+# L02 가 떨어뜨린다 — 허용 목록은 이 한 쌍뿐이다.
+LAZY_CYCLE_OK = {frozenset({"makefun_client", "print_preflight"})}
+
+# 그 모듈의 CLI 진입점 — 라이브러리 경로가 아니라 '그 도구를 직접 실행한 사람'이다.
+# 여기 안의 import 는 계층·순환 판정에서 뺀다(모듈을 import 해도 실행되지 않으므로
+# import 시점 고리를 만들 수 없다). 대신 최상위·다른 함수 본문의 import 는 전부 센다.
+CLI_ENTRY = ("main",)
 
 # 새 장면을 만들며 찍는 초기 상태. 이 두 값에는 사람 승인 게이트가 걸려 있지 않다.
 # 나머지 상태(IMAGE·REVIEW_HUMAN·REVISE·APPROVED)는 scene_ops 만 쓸 수 있다(L03).
@@ -643,13 +689,18 @@ def cli_scene(b: Box, stage: str = "PLAN", images: int = 2):
 # ============================================================ meta (자가진단 자신)
 @test("meta", "T01 필수 모듈은 전부 존재·적재되고, SKIP 으로 되돌아가지 않는다")
 def t01(b: Box):
-    """커버리지 공백을 조용하게 만드는 두 경로를 동시에 막는다.
+    """커버리지 공백을 조용하게 만드는 세 경로를 동시에 막는다.
 
     (1) 파일이 사라지거나 import 가 깨져도 '없으니 SKIP' 으로 넘어가는 것,
-    (2) 이관이 끝난 모듈을 optional=True 로 되돌려 놓는 것.
+    (2) 이관이 끝난 모듈을 optional=True 로 되돌려 놓는 것,
+    (3) **새 도구가 목록 밖에서 태어나는 것** — 적재조차 되지 않으면 그 파일이 받는 검사는
+        구문 오류 확인(T02)뿐이다. 실제로 doctor(507줄)가 그 상태로 오래 있었다.
     """
     absent = [n for n in REQUIRED_MODULES if not b.p(f"tools/{n}.py").exists()]
     eq(absent, [], "필수 모듈 파일 누락")
+    uncovered = sorted(n for n in tool_names(b)
+                       if n not in REQUIRED_MODULES and n not in NOT_IMPORTED)
+    eq(uncovered, [], "REQUIRED_MODULES 밖의 도구 — 목록에 넣거나 NOT_IMPORTED 에 이유를 남긴다")
     for n in REQUIRED_MODULES:
         ok(b.mod(n) is not None, f"{n} 적재 결과가 비어 있음")   # 적재 실패는 mod() 가 FAIL
     src = b.p("tools/selftest.py").read_text(encoding="utf-8")
@@ -690,17 +741,39 @@ def tool_ast(b: Box, name: str) -> ast.Module:
     return _AST_CACHE[name]
 
 
+def _import_sites(tree: ast.Module) -> dict[int, str]:
+    """import 노드 id → '모듈 수준' | '함수 본문' | 'CLI 진입점'.
+
+    바깥쪽 함수까지 따라 올라가 판정한다 — main() 안에 정의된 중첩 함수의 import 도
+    'CLI 진입점' 이다(그 함수는 main 을 통해서만 도달한다).
+    """
+    sites: dict[int, str] = {}
+
+    def visit(node, stack: list[str]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.Import, ast.ImportFrom)):
+                sites[id(child)] = ("모듈 수준" if not stack
+                                    else "CLI 진입점" if stack[0] in CLI_ENTRY else "함수 본문")
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                visit(child, stack + [child.name])
+            else:
+                visit(child, stack)
+
+    visit(tree, [])
+    return sites
+
+
 def tool_imports(b: Box, name: str) -> dict[str, str]:
-    """{불러온 도구 모듈: '모듈 수준'|'함수 본문'} — 함수 안의 지연 import 도 놓치지 않는다.
+    """{불러온 도구 모듈: '모듈 수준'|'함수 본문'|'CLI 진입점'} — 지연 import 도 놓치지 않는다.
 
     지연 import 는 순환을 '동작하게' 만들 뿐 의존 방향을 되돌리지는 못한다. 계층 검사에서
-    빼 두면 규약이 함수 본문으로 숨는다 — 그래서 같은 무게로 센다.
+    빼 두면 규약이 함수 본문으로 숨는다 — 그래서 같은 무게로 센다. 예외는 그 도구의 CLI
+    진입점(main)뿐이다: 라이브러리로 import 될 때는 실행되지 않아 고리를 만들 수 없다.
     """
     tools = set(tool_names(b))
     tree = tool_ast(b, name)
-    deferred = {id(sub) for node in ast.walk(tree)
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                for sub in ast.walk(node) if isinstance(sub, (ast.Import, ast.ImportFrom))}
+    sites = _import_sites(tree)
+    rank = {"모듈 수준": 0, "함수 본문": 1, "CLI 진입점": 2}
     out: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -709,11 +782,32 @@ def tool_imports(b: Box, name: str) -> dict[str, str]:
             mods = [(node.module or "").split(".")[0]] if not node.level else []
         else:
             continue
-        how = "함수 본문" if id(node) in deferred else "모듈 수준"
+        how = sites.get(id(node), "모듈 수준")
         for m in mods:
-            if m in tools and m != name and out.get(m) != "모듈 수준":
-                out[m] = how
+            cur = out.get(m)
+            if m in tools and m != name and (cur is None or rank[how] < rank[cur]):
+                out[m] = how       # 같은 모듈을 여러 번 부르면 '가장 이른 자리'가 이긴다
     return out
+
+
+def _find_cycles(graph: dict[str, list[str]]) -> list[list[str]]:
+    """방향 그래프의 고리 목록(노드 이름 순환 경로). 같은 고리가 여러 번 나올 수 있다."""
+    cycles: list[list[str]] = []
+    state: dict[str, int] = {}
+
+    def walk(node: str, path: list[str]) -> None:
+        state[node] = 1
+        for nxt in graph.get(node, []):
+            if state.get(nxt) == 1:
+                cycles.append(path[path.index(nxt):] + [nxt] if nxt in path else [node, nxt])
+            elif state.get(nxt, 0) == 0:
+                walk(nxt, path + [nxt])
+        state[node] = 2
+
+    for m in sorted(graph):
+        if state.get(m, 0) == 0:
+            walk(m, [m])
+    return cycles
 
 
 def func_body(b: Box, mod: str, name: str) -> list:
@@ -782,15 +876,20 @@ def _status_writes(b: Box, name: str) -> list[tuple[int, Any]]:
     return out
 
 
-@test("arch", "L01 계층 방향 — vn_core 는 도구를 부르지 않고, 아래층은 위층을 import 하지 않는다")
+@test("arch", "L01 계층 방향 — 모든 도구가 층을 갖고, 아래층은 위층을 import 하지 않는다")
 def l01(b: Box):
     """선언만 있고 강제가 없던 규약(vn_core ← scene_ops ← advance_scene ← webapp)을 잠근다.
 
     scene_ops 가 advance_scene 을 부르는 순간(과거 상태) 이 검사가 떨어진다 — 지연 import
     로 숨겨도 마찬가지다. webapp 은 아무도 import 하지 않는다(서버가 라이브러리가 되면
     라우트·인증·로깅이 CLI 에 딸려 들어온다).
+
+    **층 미부여도 실패다.** 새 모듈이 LAYER 밖에 있으면 그 모듈의 방향은 아무 검사도 받지
+    않는다(고리가 되어야만 L02 에 걸린다) — 커버리지 공백이 조용히 늘어나던 자리다.
     """
     names = tool_names(b)
+    unlayered = sorted(m for m in names if m not in LAYER and m not in UNLAYERED)
+    eq(unlayered, [], "계층 미부여 — selftest.LAYER 에 위치를 적거나 UNLAYERED 에 이유를 남긴다")
     bad: list[str] = []
     for m in names:
         imports = tool_imports(b, m)
@@ -803,38 +902,32 @@ def l01(b: Box):
         if m not in LAYER:
             continue
         for t, how in sorted(imports.items()):
+            if how == "CLI 진입점":      # 그 도구를 직접 실행한 사람 — 라이브러리 경로가 아니다
+                continue
             if t in LAYER and LAYER[t] >= LAYER[m]:
                 bad.append(f"{m}(계층 {LAYER[m]}) → {t}(계층 {LAYER[t]}) ({how})")
     eq(sorted(set(bad)), [], "계층 위반")
 
 
-@test("arch", "L02 모듈 수준 순환 import 0 — 서버가 import 시점에 죽는 고리가 없다")
+@test("arch", "L02 순환 import — 모듈 수준 0 · 지연 고리는 문서화된 한 쌍만")
 def l02(b: Box):
-    """모든 변이 모듈 수준인 고리만 센다. 그런 고리는 import 순서에 따라 그 자리에서
-    ImportError 를 내고 스튜디오가 뜨지 않는다.
+    """모든 변이 모듈 수준인 고리는 import 순서에 따라 그 자리에서 ImportError 를 내고
+    스튜디오가 뜨지 않는다 — 무조건 실패다.
 
-    (한 변이 함수 본문 지연 import 인 고리는 여기서 세지 않는다 — local_llm ↔ prompt_build
-     하위호환 통로가 그 형태이고, 방향 규약은 L01 이 따로 잠근다.)
+    한 변이 함수 본문 지연 import 인 고리도 이제 센다. 예전에는 그것이 통째로 예외였고
+    (local_llm ↔ prompt_build 하위호환 통로), 그 예외 아래에서 새 고리가 얼마든지 생길 수
+    있었다. 그 통로가 사라진 지금은 **LAZY_CYCLE_OK 에 적힌 한 쌍만** 허용한다.
+    (CLI 진입점 안의 import 는 그래프에 넣지 않는다 — import 만으로는 실행되지 않는다.)
     """
-    graph = {m: [t for t, how in tool_imports(b, m).items() if how == "모듈 수준"]
-             for m in tool_names(b)}
-    cycles: list[str] = []
-    state: dict[str, int] = {}
+    imports = {m: tool_imports(b, m) for m in tool_names(b)}
+    hard = {m: [t for t, how in d.items() if how == "모듈 수준"] for m, d in imports.items()}
+    eq(sorted({" → ".join(c) for c in _find_cycles(hard)}), [], "모듈 수준 순환")
 
-    def walk(node: str, path: list[str]) -> None:
-        state[node] = 1
-        for nxt in graph.get(node, []):
-            if state.get(nxt) == 1:
-                cycle = path[path.index(nxt):] + [nxt] if nxt in path else [node, nxt]
-                cycles.append(" → ".join(cycle))
-            elif state.get(nxt, 0) == 0:
-                walk(nxt, path + [nxt])
-        state[node] = 2
-
-    for m in sorted(graph):
-        if state.get(m, 0) == 0:
-            walk(m, [m])
-    eq(sorted(set(cycles)), [], "모듈 수준 순환")
+    lazy = {m: [t for t, how in d.items() if how in ("모듈 수준", "함수 본문")]
+            for m, d in imports.items()}
+    unknown = {" → ".join(c) for c in _find_cycles(lazy)
+               if frozenset(c) not in LAZY_CYCLE_OK}
+    eq(sorted(unknown), [], "문서화되지 않은 지연 import 고리(설계라면 LAZY_CYCLE_OK 에 이유와 함께)")
 
 
 @test("arch", "L03 장면 status — 승인 게이트가 걸린 상태는 scene_ops 만 쓴다")
@@ -879,13 +972,19 @@ def l04(b: Box):
         eq(src.count(marker), 0, f"프롬프트 조각 {marker!r} 이 webapp 으로 복사됨")
 
 
-@test("arch", "L05 vn_core 단일 출처 — ending_of·norm_episode·CROP_ANCHORS 를 다시 만들지 않는다")
+@test("arch", "L05 vn_core 단일 출처 — 훑기·선택본·완성 판정을 소비자가 다시 만들지 않는다")
 def l05(b: Box):
     """같은 규칙이 모듈마다 한 벌씩 있으면 주석으로만 동기화된다(엔딩 이름·화 번호가 실제로
     화면마다 갈렸던 사고). 이름을 이어 주는 별칭(`ending_of = vn_core.ending_of`)은 허용하고,
-    **자체 구현**(def · 리터럴 재정의)만 떨어뜨린다."""
+    **자체 구현**(def · 리터럴 재정의)만 떨어뜨린다.
+
+    iter_scenes·selected_of·is_deliverable 이 여기 있는 이유: '어떤 컷이 완성본인가' 를
+    export_viewer·print_export·print_preflight·prompt_build·makefun_client·webapp 이 각자
+    판정하던 자리다. 조건 하나만 어긋나면 감상본에는 있는데 인화 목록에는 없는 컷이 생긴다.
+    """
     vc = b.mod("vn_core")
-    want = ("ending_of", "norm_episode", "CROP_ANCHORS")
+    want = ("ending_of", "norm_episode", "CROP_ANCHORS",
+            "iter_scenes", "selected_of", "is_deliverable")
     arrived = [n for n in want if hasattr(vc, n)]
     dups = []
     for m in tool_names(b):
@@ -911,6 +1010,131 @@ def l05(b: Box):
     missing = [n for n in want if n not in arrived]
     if missing:
         raise Gap(f"vn_core 에 아직 없음: {', '.join(missing)} — 통합 대기(도착하면 자동 잠금)")
+
+
+# ------------------------------------------------------------ 문서 판독(SCHEMA.md)
+_TICK = re.compile(r"`([^`]+)`")
+
+
+def doc_text(b: Box) -> str:
+    p = b.p("docs/SCHEMA.md")
+    if not p.exists():
+        raise Failed("docs/SCHEMA.md 가 없습니다 — 스키마 문서가 사라졌습니다")
+    return p.read_text(encoding="utf-8")
+
+
+def doc_names(cell: str) -> set[str]:
+    """표 칸(또는 문장) 안의 `백틱` 이름들."""
+    return {n.strip() for n in _TICK.findall(cell) if n.strip()}
+
+
+def doc_line(text: str, needle: str) -> str:
+    """그 문구가 든 첫 줄. 없으면 실패(문서 구조가 바뀐 것)."""
+    for line in text.splitlines():
+        if needle in line:
+            return line
+    raise Failed(f"SCHEMA.md 에서 {needle!r} 줄을 찾지 못했습니다"
+                 " — 문서 구조를 바꿨다면 이 검사의 앵커도 함께 고치세요")
+
+
+def doc_field_row(text: str, *needles: str) -> set[str]:
+    """표에서 조건에 맞는 줄을 찾아, **이름이 가장 많이 든 칸**의 백틱 이름 집합을 준다.
+
+    한 줄을 통째로 훑으면 설명 칸의 `scene_ops` 같은 이름까지 섞인다 — 목록이 든 칸만 고른다.
+    (칸 안의 이스케이프된 파이프 `\\|` 는 칸 구분자가 아니라 열거 기호다 — 먼저 지운다.)
+    """
+    for line in text.splitlines():
+        if line.lstrip().startswith("|") and all(n in line for n in needles):
+            return max((doc_names(c) for c in line.replace("\\|", " ").split("|")),
+                       key=len, default=set())
+    raise Failed("SCHEMA.md 에서 표 줄을 찾지 못했습니다: " + " · ".join(needles)
+                 + " — 문서 구조를 바꿨다면 이 검사의 앵커도 함께 고치세요")
+
+
+def a2_required_keys(b: Box) -> list[str]:
+    """check_protocol 이 실제로 요구하는 A2 필수 키 목록(소스에서 읽는다)."""
+    for node in ast.walk(tool_ast(b, "check_protocol")):
+        if not isinstance(node, ast.For) or not isinstance(node.iter, (ast.Tuple, ast.List)):
+            continue
+        elts = node.iter.elts
+        keys = [e.value for e in elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if len(keys) != len(elts) or not keys:
+            continue
+        said = " ".join(str(c.value) for c in ast.walk(node)
+                        if isinstance(c, ast.Constant) and isinstance(c.value, str))
+        if "필수 키 없음" in said:
+            return keys
+    raise Failed("check_protocol 에서 A2 필수 키 목록을 찾지 못했습니다(구조가 바뀌었습니다)")
+
+
+@test("arch", "L06 문서↔코드 상수 동기화 — SCHEMA.md 가 코드를 복제한 자리를 기계가 지킨다")
+def l06(b: Box):
+    """SCHEMA.md 는 코드 상수 열 몇 개를 산문으로 복제한다(편집 가능 필드·보호 필드·A2 필수
+    키·카메라 표준 어휘). 지금까지 그것을 지켜 주는 기계가 없어서, 코드를 고치면 문서가 조용히
+    거짓말을 시작했다 — 사용자는 문서대로 손으로 고치고 검사기 FAIL 을 만난다.
+
+    문서를 파싱해 집합으로 비교한다. 목록을 늘릴 때 **코드를 먼저 고치고 표를 맞추면** 통과다.
+    """
+    doc = doc_text(b)
+    so = b.mod("scene_ops")
+    vc = b.mod("vn_core")
+    sl = b.mod("scene_lint")
+
+    # (1) §2.1 편집 가능 / 도구 전용 — scene_ops 의 두 상수가 정본이다
+    editable = doc_field_row(doc, "편집 가능")
+    missing = sorted(f for f in so.EDITABLE_FIELDS if f not in editable)
+    eq(missing, [], "EDITABLE_FIELDS 인데 SCHEMA §2.1 '편집 가능' 표에 없는 필드")
+    protected = doc_field_row(doc, "PROTECTED_FIELDS") - {"PROTECTED_FIELDS"}
+    eq(sorted(protected), sorted(so.PROTECTED_FIELDS), "SCHEMA §2.1 '도구 전용' 목록 ≠ PROTECTED_FIELDS")
+
+    # (2) §2.4 A2 필수 키 — 검사기 소스가 정본이다
+    said = re.search(r"A2 가 키 존재를 요구하는[^)]*\)", doc, re.S)
+    ok(said is not None, "SCHEMA §2.4 의 'A2 가 키 존재를 요구하는 …' 문장을 찾지 못함")
+    eq(sorted(doc_names(said.group(0))), sorted(a2_required_keys(b)),
+       "SCHEMA §2.4 의 A2 필수 키 목록 ≠ check_protocol 이 실제로 요구하는 키")
+
+    # (3) §2.2 카메라 표준 어휘 — scene_lint 가 정본이다
+    block = re.search(r"```[^\n]*\n(\s*shot\s*:.*?)```", doc, re.S)
+    ok(block is not None, "SCHEMA §2.2 의 카메라 표준 어휘 코드블록을 찾지 못함")
+    cam = re.search(r"shot\s*:(.*?)angle\s*:(.*)", block.group(1), re.S)
+    ok(cam is not None, "코드블록에서 shot/angle 목록을 가르지 못함")
+    for label, raw, std in (("shot", cam.group(1), sl.STD_SHOTS), ("angle", cam.group(2), sl.STD_ANGLES)):
+        listed = sorted(w.strip() for w in raw.replace("\n", " ").split("/") if w.strip())
+        eq(listed, sorted(std), f"SCHEMA §2.2 의 camera.{label} 표준 어휘 ≠ scene_lint.STD_{label.upper()}S")
+
+    # (4) §2.6 자산 — 확장자 목록과 task 보존 개수
+    exts = {n for n in doc_names(doc_line(doc, "허용 확장자")) if n.startswith(".")}
+    eq(sorted(exts), sorted(vc.IMAGE_EXTS), "SCHEMA §2.6 허용 확장자 ≠ vn_core.IMAGE_EXTS")
+    kept = re.search(r"\*{0,2}(\d+)\s*개\*{0,2}\s*까지 보관", doc_line(doc, "까지 보관하고"))
+    ok(kept is not None, "SCHEMA §2.6 의 makefun_tasks 보존 개수 문장을 찾지 못함")
+    eq(int(kept.group(1)), int(so.GEN_TASKS_MAX), "SCHEMA §2.6 보존 개수 ≠ scene_ops.GEN_TASKS_MAX")
+
+    # (5) §2.7 검수 값 · §2.8 인화 크롭 — 열거를 손대면 문서와 코드 중 한쪽만 바뀐다
+    eq(sorted(doc_names(doc_line(doc, "허용 값:"))), sorted(checker_const(b, "REVIEW_STATES")),
+       "SCHEMA §2.7 허용 값 ≠ check_protocol.REVIEW_STATES")
+    eq(sorted(doc_field_row(doc, "crop_anchor") - {"crop_anchor"}), sorted(vc.CROP_ANCHORS),
+       "SCHEMA §2.8 crop_anchor 열거 ≠ vn_core.CROP_ANCHORS")
+    eq(sorted(doc_field_row(doc, "crop_mode") - {"crop_mode"}), sorted(vc.CROP_MODES),
+       "SCHEMA §2.8 crop_mode 열거 ≠ vn_core.CROP_MODES")
+
+    # (6) 나머지 산문 복제 — id 형식과 상태 열거는 이름이 문서에 그대로 있어야 한다
+    has(doc, vc.SCENE_ID_RE.pattern, "SCENE_ID_RE 정규식이 문서와 다름")
+    absent = [s for s in checker_const(b, "SCENE_STATES") if s not in doc]
+    eq(absent, [], "check_protocol.SCENE_STATES 에 있는데 SCHEMA 가 설명하지 않는 상태")
+
+
+def checker_const(b: Box, name: str) -> list[str]:
+    """check_protocol 의 최상위 문자열 열거 상수(소스에서 읽는다 — import 하지 않는다).
+
+    검사기는 도구가 고칠 수 없는 판정자라 자가진단도 그 파일을 실행하지 않고 읽기만 한다.
+    """
+    for node in tool_ast(b, "check_protocol").body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                return [e.value for e in node.value.elts
+                        if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    raise Failed(f"check_protocol.{name} 을 찾지 못했습니다(구조가 바뀌었습니다)")
 
 
 # ============================================================ pipeline (CLI)
@@ -1111,6 +1335,60 @@ def p16(b: Box):
     eq(rc2, 0, f"정상 형식까지 막힘 — {out2[:200]}")
 
 
+@test("pipeline", "P17 doctor --json — 진단 구조를 내고, 읽기 전용이고, 문제를 실제로 잡는다")
+def p17(b: Box):
+    """doctor 는 README·start_studio.ps1·복구 런북이 여섯 곳에서 안내하는 1차 진단 도구인데
+    지금까지 구문 검사 외 커버리지가 0이었다. 크래시하면 사용자는 '왜 안 되지?' 를 좁힐
+    첫 수단을 잃는다.
+
+    로컬 LLM 주소는 죽은 포트로 고정한다 — 이 PC 에 모델이 떠 있든 말든 결과가 같아야 한다.
+    (유료 API 는 호출하지 않는다: doctor 는 토큰이 '있는지'만 본다.)
+    """
+    env = dict(b.env)
+    env["LOCAL_LLM_URL"] = "http://127.0.0.1:59997/v1"
+    before = _tree_sums(b.root)
+    rc, out = b.run("tools/doctor.py", "--json", env=env)
+    after = _tree_sums(b.root)
+    hasnt(out, "Traceback", "traceback")
+    ok(rc in (0, 1), f"rc={rc} — {out[:300]}")
+    ok("{" in out, f"JSON 이 없음 — {out[:300]}")
+    data, _n = json.JSONDecoder().raw_decode(out[out.index("{"):])
+    ok(isinstance(data.get("errors"), int), f"errors 구조 — {str(data)[:200]}")
+    ok(isinstance(data.get("warnings"), int), "warnings 구조")
+    rows = data.get("results")
+    ok(isinstance(rows, list) and len(rows) >= 8, f"진단 항목 {len(rows or [])}건")
+    ok(all(isinstance(r, dict) and {"section", "name", "level"} <= set(r) for r in rows),
+       "항목 구조(section/name/level)")
+    eq(sorted({r["level"] for r in rows} - {"OK", "경고", "문제"}), [], "알 수 없는 판정값")
+    eq(data["errors"], sum(1 for r in rows if r["level"] == "문제"), "errors 집계가 항목과 다름")
+    eq(after, before, "doctor 가 project/·images/ 를 건드림(진단은 읽기 전용이어야 한다)")
+    # 떨어뜨리는 능력 — 매니페스트가 없으면 '문제' 로 보고하고 exit 1
+    with hidden(b.p("project/manifest.json")):
+        rc2, out2 = b.run("tools/doctor.py", "--json", env=env)
+    bad, _n2 = json.JSONDecoder().raw_decode(out2[out2.index("{"):])
+    eq(rc2, 1, "매니페스트가 없는데 exit 0")
+    ok(bad["errors"] > data["errors"],
+       f"매니페스트 부재를 새 문제로 잡지 못함(기준선 {data['errors']} → {bad['errors']})")
+    has(out2, "manifest", "무엇이 없는지 안내")
+
+
+@test("pipeline", "P18 make_grok_input — 앵커를 원문 그대로 싣고 형제 장면이 손상돼도 조립된다")
+def p18(b: Box):
+    """수동 모드(구독 0원 경로)의 입구다. 여기서 앵커가 빠지면 사람이 그대로 복붙하고,
+    돌아온 프롬프트는 A6 FAIL 이 된다 — 원인이 두 단계 떨어져 있어 찾기 어렵다."""
+    mgi = b.mod("make_grok_input")
+    anchor_c, anchor_l = b.anchors()
+    with fresh_scene(b) as sid:
+        text = mgi.build_input(sid)
+        has(text, sid, "장면 id")
+        has(text, anchor_c, "인물 앵커 원문")
+        has(text, anchor_l, "장소 앵커 원문")
+        with fresh_scene(b) as other, corrupted(b.scene_path(other)):
+            text2 = mgi.build_input(sid)
+        has(text2, anchor_c, "형제 장면 하나가 손상되자 앵커가 빠짐")
+    raises(lambda: mgi.build_input("SCENE-404"), FileNotFoundError, "없는 장면")
+
+
 # ============================================================ template (새 작품 시작)
 # 지금까지 자가진단은 examples/ 만 픽스처로 썼다 — templates/ 는 **한 번도 실행되지 않았다**.
 # 그래서 templates/scene.json 에 박혀 있던 print.crop_anchor 나 talk.relationship:"" 같은
@@ -1178,9 +1456,9 @@ def tpl02(b: Box):
 def tpl03(b: Box):
     """talk.relationship 처럼 템플릿이 빈 값으로 두면 '상대는 너의 .' 같은 문장이 모델에
     간다. 새 작품의 첫 대화가 이 문장으로 시작한다 — 자동으로 걸려야 하는 자리다."""
-    llm = b.mod("local_llm")
+    pb = b.mod("prompt_build")          # 페르소나 문장의 정본(전송 계층 local_llm 이 아니다)
     with template_project(b) as mf:
-        sysmsg, meta = llm.persona_prompt()
+        sysmsg, meta = pb.persona_prompt()
     ok(isinstance(sysmsg, str) and sysmsg.strip(), "시스템 메시지가 비어 있음")
     eq(meta.get("name"), "하늘", "인물 이름")
     has(sysmsg, "하늘", "이름이 페르소나에 반영되지 않음")
@@ -2310,6 +2588,41 @@ def v04(b: Box):
     eq(entry.get("ending_label"), "호감 엔딩", "ending_label")
 
 
+@test("viewer", "V05 export_pwa — 설치형 번들 한 벌(오프라인 자기완결 · 주입 API 0)")
+def v05(b: Box):
+    """살아 있는 라우트(/api/export-pwa)가 부르는데 지금까지 구문 검사 외 커버리지가 0이었다.
+    이 번들은 폰 홈 화면에 설치돼 **오프라인에서** 도는 결과물이라, 외부를 한 번이라도
+    참조하면 비행기 모드에서 백지가 된다."""
+    ep = b.mod("export_pwa")
+    out = b.p("output") / "pwa"
+    try:
+        with approved_scene(b), quiet():
+            got = ep.export(False, 640, 70)
+        eq(Path(got).resolve(), out.resolve(), "산출 폴더")
+        for name in ("index.html", "manifest.webmanifest", "sw.js", "icon-192.png", "icon-512.png"):
+            ok((out / name).exists(), f"{name} 없음 — {[p.name for p in out.glob('*')]}")
+        for name in ("icon-192.png", "icon-512.png"):
+            eq((out / name).read_bytes()[:8], b"\x89PNG\r\n\x1a\n", f"{name} 이 PNG 가 아님")
+        wm = json.loads((out / "manifest.webmanifest").read_text(encoding="utf-8"))
+        eq(wm.get("start_url"), "./index.html", "start_url")
+        eq(wm.get("display"), "standalone", "display")
+        ok(str(wm.get("name") or "").strip(), f"앱 이름이 비어 있음 — {wm}")
+        ok(len(wm.get("icons") or []) >= 2, "아이콘 선언")
+        html = (out / "index.html").read_text(encoding="utf-8")
+        has(html, "manifest.webmanifest", "매니페스트 링크")
+        has(html, "serviceWorker", "서비스워커 등록")
+        has(html, "data:image", "이미지 내장")
+        ok(not re.search(r"<script\b[^>]*\ssrc=", html, re.I),
+           "외부 스크립트를 참조 — 오프라인에서 재생이 죽는다")
+        for api in BANNED_DOM:
+            eq(html.count(api), 0, f"PWA 번들이 {api} 사용")
+        sw = (out / "sw.js").read_text(encoding="utf-8")
+        hasnt(sw, "__VER__", "치환되지 않은 캐시 버전 자리표시자")
+        has(sw, "index.html", "오프라인 캐시 목록")
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
 # ============================================================ JS 구문 게이트
 def _scripts(html: str) -> list[str]:
     return [s for s in re.findall(r"<script\b[^>]*>(.*?)</script>", html, re.S | re.I) if s.strip()]
@@ -2405,7 +2718,151 @@ def j04(b: Box):
         eq(html.count(api), 0, f"감상본이 {api} 사용")
 
 
+# ============================================================ ux (폰 손짓 · 가독성)
+# 화면에서만 드러나는 회귀도 소스로 잠글 수 있는 것들이 있다: 손짓 리스너가 어디 붙었는지,
+# 글자색이 배경과 몇 대 몇인지. 둘 다 "폰에서 써 보면 아는" 종류라 자동 검사가 없으면
+# 조용히 되돌아간다(실제로 스와이프가 대사창 위에서 죽어 있던 자리다).
+_CSS_BLOCK = re.compile(r"([^{}]+)\{([^{}]*)\}", re.S)
+_CSS_VAR = re.compile(r"(--[\w-]+)\s*:\s*([^;{}]+)")
+_CSS_COLOR = re.compile(r"(?<![-\w])color\s*:\s*var\(\s*(--[\w-]+)")
+_CSS_BG = re.compile(r"(?<![-\w])background(?:-color)?\s*:[^;]*?(var\(\s*--[\w-]+|#[0-9a-fA-F]{3,8})")
+
+
+def css_tokens(css: str) -> dict[str, str]:
+    """:root 에 선언된 CSS 변수 {이름: 값}."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r":root\s*\{([^}]*)\}", css, re.S):
+        for name, val in _CSS_VAR.findall(m.group(1)):
+            out[name] = val.strip()
+    return out
+
+
+def css_hex(name: str, tokens: dict[str, str], depth: int = 0) -> str:
+    """토큰 이름 → #rrggbb (한 단계 var() 참조도 따라간다). 색이 아니면 ""."""
+    val = (name if name.startswith("#") else tokens.get(name, "")).strip()
+    m = re.fullmatch(r"var\(\s*(--[\w-]+)\s*(?:,[^)]*)?\)", val)
+    if m and depth < 4:
+        return css_hex(m.group(1), tokens, depth + 1)
+    return val if re.fullmatch(r"#[0-9a-fA-F]{3,8}", val) else ""
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG 명도 대비(1~21). 본문 글자는 4.5:1 이상이어야 읽힌다."""
+    def lum(h: str) -> float:
+        h = h.lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        ch = []
+        for i in (0, 2, 4):
+            c = int(h[i:i + 2], 16) / 255
+            ch.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+    a, c = lum(fg), lum(bg)
+    return (max(a, c) + 0.05) / (min(a, c) + 0.05)
+
+
+def swipe_targets(src: str) -> set[str]:
+    """touchend 리스너가 **실제로 붙는 요소** 이름들.
+
+    `E.click.addEventListener("touchend", …)` 같은 직접 형태와,
+    `[E.click, E.dlg].forEach(function (n) { n.addEventListener("touchend", …) })` 처럼
+    묶어 다는 형태를 모두 편다 — 뒤 형태를 못 읽으면 "n" 하나만 보고 통과해 버린다.
+    """
+    out: set[str] = set()
+    for m in re.finditer(r"([\w.$]+)\s*\.addEventListener\(\s*[\"']touchend[\"']", src):
+        recv = m.group(1)
+        if "." in recv or recv in ("document", "window"):
+            out.add(recv)
+            continue
+        head = src[max(0, m.start() - 500):m.start()]          # 반복 변수 → 묶음의 원소들
+        loop = None
+        for arr in re.finditer(r"\[([^\][]*)\]\s*\.forEach", head):
+            loop = arr
+        if loop:
+            out |= {x.strip() for x in loop.group(1).split(",") if x.strip()}
+        else:
+            out.add(recv)
+    return out
+
+
+@test("ux", "X01 스와이프가 대사창 위에서도 먹는다(엄지가 놓이는 자리는 거의 항상 대사창)")
+def x01(b: Box):
+    """대사창(.vnr-dlg)은 클릭판(.vnr-click) 위에 떠 있다. 손짓 리스너를 클릭판에만 달면
+    **화면 아래 절반에서 시작한 스와이프가 전부 '탭'으로 처리돼 앞으로만 넘어간다** —
+    되돌아가려고 오른쪽으로 쓸면 한 장 더 나가는, 폰에서만 드러나는 회귀다."""
+    p = b.p("tools/vn_runtime.js")
+    if not p.exists():
+        raise Gap("tools/vn_runtime.js 아직 없음 — 공용 재생 엔진 이관 대기")
+    src = p.read_text(encoding="utf-8")
+    targets = swipe_targets(src)
+    ok(targets, "touchend 리스너가 하나도 없음 — 폰 스와이프가 통째로 죽었다")
+    ok(re.search(r"addEventListener\(\s*[\"']touchstart[\"']", src),
+       "touchend 만 있고 touchstart 가 없음 — 손짓의 시작 좌표가 없다")
+    if not (targets & {"E.dlg", "E.stage", "E.root", "E.wrap", "document", "window"}):
+        raise Gap("스와이프(touchend)가 " + ", ".join(sorted(targets)) + " 에만 걸려 있다 — "
+                  "대사창(E.dlg)이 클릭판을 덮고 있어 화면 아래에서 시작한 스와이프가 먹지 않는다")
+    has(src, "swallowClick", "스와이프 뒤따라 오는 click 을 억제하지 않음(한 번에 두 장 넘어간다)")
+    ok(re.search(r"a?dx\s*>\s*a?dy|Math\.abs\(dy\)", src),
+       "가로·세로 성분을 비교하지 않음 — 대사 스크롤이 장면 넘김으로 오인된다")
+
+
+@test("ux", "X02 글자색 대비 — 스튜디오의 모든 텍스트 색이 배경과 4.5:1 이상")
+def x02(b: Box):
+    """도장 빨강(--seal)은 테두리로는 훌륭하지만 어두운 배경 위 **글자로는 3.2:1** 이라
+    작은 배지·스탬프에서 읽기 어렵다. 텍스트에는 대비를 통과하는 변형(--seal-ink)을 쓴다.
+
+    규칙 블록마다 그 블록이 선언한 배경을 기준으로 재고, 배경 선언이 없으면 페이지 바탕을
+    쓴다. 색 토큰을 손보다 대비가 무너지면 여기서 바로 걸린다.
+    """
+    css = b.p("tools/studio.html").read_text(encoding="utf-8")
+    js = b.p("tools/studio.js").read_text(encoding="utf-8") if b.p("tools/studio.js").exists() else ""
+    tokens = css_tokens(css)
+    for need in ("--bg", "--ink"):
+        ok(need in tokens, f"{need} 토큰이 없음 — 색 체계가 바뀌었다면 이 검사도 함께 고칠 것")
+    ok(contrast_ratio(css_hex("--ink", tokens), css_hex("--bg", tokens)) >= 7.0,
+       "본문 글자(--ink)와 바탕(--bg)의 대비가 무너짐")     # 판독기 자체의 자기검증
+
+    plain = re.sub(r"/\*.*?\*/", " ", css + "\n" + js, flags=re.S)
+    weak: dict[str, str] = {}
+    checked = 0
+    for sel, body in _CSS_BLOCK.findall(plain):
+        bg = _CSS_BG.search(body)
+        ground = "--bg"
+        if bg:
+            tok = bg.group(1)
+            ground = re.search(r"--[\w-]+", tok).group(0) if tok.startswith("var(") else tok
+        gh = css_hex(ground, tokens)
+        for name in _CSS_COLOR.findall(body):
+            fh = css_hex(name, tokens)
+            if not fh or not gh:                 # rgba()·gradient 등은 판정하지 않는다
+                continue
+            checked += 1
+            ratio = contrast_ratio(fh, gh)
+            if ratio < 4.5:
+                weak[name] = (f"{ratio:.2f}:1  {name} on {ground}"
+                              f"  ({' '.join(sel.split())[-40:]})")
+    ok(checked >= 10, f"검사한 글자색 규칙이 {checked}개뿐 — 판독기가 CSS 를 못 읽고 있다")
+    pending = {n for n in weak if n == "--seal"}   # 텍스트용 변형(--seal-ink)이 오면 사라진다
+    eq(sorted(weak[n] for n in weak if n not in pending), [], "글자색 대비 4.5:1 미달")
+    if pending:
+        raise Gap("도장색을 글자에 그대로 쓰는 자리가 남아 있다 — "
+                  + " / ".join(weak[n] for n in sorted(pending))
+                  + " (텍스트용 대비 변형 도착 대기)")
+
+
 # ============================================================ 보안
+def drain_request(handler) -> None:
+    """모의 서버가 요청 본문을 끝까지 읽게 한다.
+
+    읽지 않고 응답해 버리면 클라이언트가 본문을 쓰는 도중에 연결이 끊겨(Windows 에서
+    WinError 10053) 검사가 의도한 경로(302 차단·비JSON 응답) 대신 소켓 오류로 흔들린다.
+    """
+    with contextlib.suppress(Exception):
+        n = int(handler.headers.get("Content-Length") or 0)
+        if n:
+            handler.rfile.read(n)
+
+
 @test("security", "S01 A8 — 심어 둔 키 패턴을 검사기가 검출")
 def s01(b: Box):
     fake = "xai-" + "abcdefghij0123456789" + "KLMN"     # 런타임 조립(이 파일 자체가 걸리지 않게)
@@ -2427,6 +2884,7 @@ def s02(b: Box):
 
         def do_POST(self):
             attacker["auth"] = self.headers.get("Authorization")
+            drain_request(self)
             raw = json.dumps({"choices": [{"message": {"content": "leaked"}}]}).encode()
             self.send_response(200)
             self.send_header("Content-Length", str(len(raw)))
@@ -2441,9 +2899,11 @@ def s02(b: Box):
             pass
 
         def do_POST(self):
+            drain_request(self)
             self.send_response(302)
             self.send_header("Location",
                              f"http://127.0.0.1:{atk.server_address[1]}/v1/chat/completions")
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
     rd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redir)
@@ -2471,6 +2931,7 @@ def s03(b: Box):
             pass
 
         def do_POST(self):
+            drain_request(self)
             if mode["v"] == "null":
                 raw = json.dumps({"choices": [{"message": {"content": None}}]}).encode()
                 ct = "application/json"
@@ -2594,9 +3055,10 @@ def u02(b: Box):
 @test("unit", "U03 로컬 LLM — 서버가 꺼져 있으면 status.up=False + 페르소나 생성")
 def u03(b: Box):
     llm = b.mod("local_llm")
+    pb = b.mod("prompt_build")
     with env_var("LOCAL_LLM_URL", "http://127.0.0.1:59999/v1"):   # 죽은 포트
         st = llm.status()
-        sysmsg, meta = llm.persona_prompt()
+        sysmsg, meta = pb.persona_prompt()    # 서버가 없어도 페르소나 조립은 성립해야 한다
     eq(st.get("up"), False, "서버 off 판정")
     ok(isinstance(sysmsg, str) and sysmsg.strip(), "시스템 메시지")
     ok(bool(meta.get("name")), "인물 이름")
@@ -2605,17 +3067,17 @@ def u03(b: Box):
 
 @test("unit", "U04 앨범 사진 — 태그 파싱 · '없다' 억제 · 키워드 폴백 · 요청 아님")
 def u04(b: Box):
-    llm = b.mod("local_llm")
+    pb = b.mod("prompt_build")          # 사진 규칙도 프롬프트 계층 소관이다
     album = {"SCENE-001": {"rel": "images/raw/SCENE-001/a.png", "label": "카페에서 만나는 장면"},
              "SCENE-005": {"rel": "images/raw/SCENE-005/a.png", "label": "노을 강변 산책"}}
-    c1, p1 = llm.resolve_photos("이거 봐~ [사진:SCENE-005]", album, "노을 사진 보여줘")
+    c1, p1 = pb.resolve_photos("이거 봐~ [사진:SCENE-005]", album, "노을 사진 보여줘")
     ok(p1 and p1[0]["scene_id"] == "SCENE-005", "태그 파싱")
     hasnt(c1, "사진:", "태그가 본문에 남음")
-    _c2, p2 = llm.resolve_photos("그 사진은 지금 없네~", album, "수영복 사진 보여줘")
+    _c2, p2 = pb.resolve_photos("그 사진은 지금 없네~", album, "수영복 사진 보여줘")
     eq(len(p2), 0, "'없다' 응답인데 사진을 붙임")
-    _c3, p3 = llm.resolve_photos("응 좋았지!", album, "카페에서 찍은 사진 보여줘")
+    _c3, p3 = pb.resolve_photos("응 좋았지!", album, "카페에서 찍은 사진 보여줘")
     ok(p3 and p3[0]["scene_id"] == "SCENE-001", "키워드 폴백")
-    _c4, p4 = llm.resolve_photos("오늘 날씨 좋다", album, "그냥 잡담")
+    _c4, p4 = pb.resolve_photos("오늘 날씨 좋다", album, "그냥 잡담")
     eq(len(p4), 0, "요청이 아닌데 사진을 붙임")
 
 
@@ -2875,38 +3337,240 @@ def u11(b: Box):
                         p.unlink()
 
 
-@test("unit", "U12 persona_prompt 이관 — 새 자리·옛 이름이 같은 문장을 만든다(하위호환)")
+def str_consts(b: Box, mod: str) -> list[str]:
+    """모듈의 **문자열 리터럴**(독스트링 제외). 설명문과 실제로 모델에 가는 문장을 가른다."""
+    tree = tool_ast(b, mod)
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            first = node.body[0] if getattr(node, "body", None) else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                    and isinstance(first.value.value, str):
+                docs.add(id(first.value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs]
+
+
+@test("unit", "U12 전송 계층(local_llm)에 모델 프롬프트 문자열 0 — 조립은 prompt_build 담당")
 def u12(b: Box):
-    """프롬프트 조립이 prompt_build 로 옮겨 갔어도 옛 이름(local_llm.persona_prompt)으로
-    부르는 곳(webapp·CLI·이 자가진단 U03)이 그대로 살아 있어야 한다. 그리고 두 이름이
-    **각자 한 벌씩** 문장을 만들면 곧 갈린다 — 한쪽은 통로여야 한다."""
+    """local_llm 은 '서버에 붙어 글자를 받아 오는' 계층이다. 여기에 프롬프트 문장이 한 줄이라도
+    남으면 같은 문구가 두 벌이 되고(prompt_build 와), 조용히 갈린 쪽이 사용자 화면에 나온다.
+
+    예전 이 자리는 '옛 이름(local_llm.persona_prompt)이 살아 있는가' 를 계약으로 검사했다.
+    그 재수출이 prompt_build → local_llm → prompt_build 고리를 만들던 마지막 조각이라
+    이번 라운드에 걷어냈다 — 원래 지키려던 것(문구가 한 벌인가)으로 검사를 옮긴다.
+    """
     llm = b.mod("local_llm")
     pb = b.mod("prompt_build")
-    new = need_attr(pb, "persona_prompt", "페르소나 프롬프트 조립의 새 자리")
-    old = need_attr(llm, "persona_prompt", "옛 이름으로 부르는 곳(webapp·CLI)")
-    s_new, m_new = new()
-    s_old, m_old = old()
-    eq(m_old, m_new, "메타(인물·앨범)가 이름마다 다름")
-    def flat(s):        # 시각 블록의 숫자는 호출마다 달라진다 — 뭉개고 문장만 비교한다
-        return re.sub(r"\d+", "N", str(s))
+    persona = need_attr(pb, "persona_prompt", "페르소나 프롬프트 조립의 단일 출처")
+    sysmsg, meta = persona()
+    ok(isinstance(sysmsg, str) and sysmsg.strip(), "정본이 빈 페르소나를 돌려줌")
+    ok(bool(meta.get("name")), "인물 이름")
+    has(sysmsg, meta["name"], "페르소나에 이름이 반영되지 않음")
 
-    eq(flat(s_old), flat(s_new), "같은 이름으로 두 벌의 페르소나 문장이 만들어짐")
-    bodies = {n: len(func_body(b, m, "persona_prompt"))
-              for n, m in (("prompt_build", "prompt_build"), ("local_llm", "local_llm"))}
-    ok(min(bodies.values()) <= 3,
-       f"두 모듈 모두 자기 구현을 갖고 있음(문장 수 {bodies}) — 한쪽은 통로여야 한다")
-    # 같은 통로를 쓰는 다른 옛 이름도 함께(웹 사진 첨부 경로가 여기 걸린다)
-    ok(callable(getattr(llm, "resolve_photos", None)), "local_llm.resolve_photos 옛 이름이 끊김")
+    # (1) 모델 메시지 리터럴({"role":…, "content":"…"})이 전송 계층에 없다 — L04 와 같은 검사
+    bad = []
+    for node in ast.walk(tool_ast(b, "local_llm")):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = {k.value for k in node.keys if isinstance(k, ast.Constant)}
+        if not {"role", "content"} <= keys:
+            continue
+        for k, v in zip(node.keys, node.values):
+            if (isinstance(k, ast.Constant) and k.value == "content"
+                    and isinstance(v, ast.Constant) and str(v.value).strip()):
+                bad.append(f"local_llm.py:{node.lineno} {str(v.value)[:60]!r}")
+    eq(bad, [], "전송 계층이 모델 메시지 문장을 직접 들고 있음")
+
+    # (2) 프롬프트 조각이 문자열로 복사되지도 않았다(독스트링의 '무엇을 옮겼다' 설명은 제외)
+    said = "\n".join(str_consts(b, "local_llm"))
+    for marker in ("[말투 규칙]", "[관계]", "1인칭", "SCENES_JSON_ONLY", "NEGATIVE_PROMPT",
+                   "[사진", "너는 '"):
+        eq(said.count(marker), 0, f"프롬프트 조각 {marker!r} 이 local_llm 으로 복사됨")
+
+    # (3) 조립 함수 자체가 남아 있지 않다 — 통로로라도 남으면 import 고리가 되살아난다
+    for gone in ("persona_prompt", "resolve_photos", "album_list", "memory_digest",
+                 "story_system_message", "compose_image_prompt"):
+        ok(not hasattr(llm, gone),
+           f"local_llm.{gone} 가 아직 있음 — 프롬프트 계층의 이름은 prompt_build 에만 둔다")
+    where = tool_imports(b, "local_llm").get("prompt_build", "없음")
+    ok(where in ("없음", "CLI 진입점"),      # 이 파일의 CLI(main)가 페르소나를 시연하는 것은 예외
+       f"local_llm 이 라이브러리 경로({where})에서 prompt_build 를 부름 — 마지막 import 고리")
+
+    # (4) 사라진 게 아니라 옮겨졌다 — 정본에 그 문구가 실제로 있다
+    moved = "\n".join(str_consts(b, "prompt_build"))
+    for marker in ("[말투 규칙]", "[관계]"):
+        ok(marker in moved, f"이관처(prompt_build)에 {marker!r} 이 없음 — 문구가 사라졌다")
+
+
+@test("unit", "U13 vn_core — 장면 훑기·선택본·완성 판정의 단일 출처(손상 파일·승인 게이트)")
+def u13(b: Box):
+    """'감상본과 인화 목록에 다른 컷이 실린다'는 사고의 뿌리는 이 판정이 여덟 벌이었다는 것이다.
+    판정을 하나로 모은 뒤에는 **그 하나**를 잠근다 — 손상 파일 관용, 승인 게이트, --all 의 의미."""
+    vc = b.mod("vn_core")
+    it = need_attr(vc, "iter_scenes", "장면 훑기의 단일 출처")
+    sel = need_attr(vc, "selected_of", "선택 이미지 판독")
+    deliv = need_attr(vc, "is_deliverable", "감상본·인화에 실릴 컷의 정의")
+
+    eq(sel({}), "", "assets 가 없는 장면")
+    eq(sel({"assets": None}), "", "assets 가 dict 가 아닌 장면")
+    eq(sel({"assets": {"selected_image": None}}), "", "selected_image=null")
+    eq(sel({"assets": {"selected_image": "   "}}), "", "공백만 있는 경로를 '이미지 있음' 으로 셈")
+    eq(sel({"assets": {"selected_image": " images/raw/a.png "}}), "images/raw/a.png", "앞뒤 공백 정리")
+    eq(sel("장면이 아님"), "", "dict 가 아닌 입력")
+
+    done = {"status": "APPROVED", "assets": {"selected_image": "images/raw/a.png"}}
+    draft = {"status": "PROMPT", "assets": {"selected_image": "images/raw/a.png"}}
+    ok(deliv(done), "승인 + 선택본인데 완성본이 아님")
+    ok(not deliv({"status": "APPROVED"}), "선택본 없는 승인 장면이 완성본으로 셈")
+    ok(not deliv(draft), "승인 전 컷이 감상본·인화에 실림(사람 승인 게이트 우회)")
+    ok(deliv(draft, include_all=True), "--all 인데 빠짐")
+    ok(not deliv({"status": "APPROVED", "assets": {}}, include_all=True),
+       "--all 이어도 이미지가 없으면 실을 것이 없다")
+    ok(not deliv(None) and not deliv([]), "장면이 dict 가 아닐 때 크래시·오판")
+
+    with approved_scene(b) as sid:
+        pairs = it()
+        ok(all(isinstance(p, Path) and isinstance(s, dict) for p, s in pairs), "(경로, 장면) 형태")
+        ok(any(p.stem == sid for p, _s in pairs), "만든 장면이 훑기에 없음")
+        ok(any(deliv(s) for _p, s in pairs), "승인 장면이 완성본 판정을 받지 못함")
+        with fresh_scene(b) as broken, corrupted(b.scene_path(broken)):
+            got = it()
+            ok(all(p.stem != broken for p, _s in got), "손상 장면이 관대 훑기에 섞임")
+            ok(any(p.stem == sid for p, _s in got), "손상 파일 하나에 전체 훑기가 죽음")
+            raises(lambda: it(strict=True), Exception, "strict 인데 손상 파일을 그냥 지나침")
+
+
+@test("unit", "U14 scene_ops.create_scene — 생성은 한 곳 · 손상 파일이 있어도 덮어쓰지 않는다")
+def u14(b: Box):
+    """생성이 세 벌이던 시절, 그중 하나(대화→장면)에는 존재 확인이 없었다. 손상된 장면 파일이
+    하나 있으면 같은 번호가 다시 뽑혀 **기존 장면을 조용히 덮어썼다** — 되돌릴 수 없는 사고다.
+    여기서는 그 하나를 잠그고, 세 경로가 정말 그 하나를 거치는지 소스로 확인한다."""
+    so = b.mod("scene_ops")
+    vc = b.mod("vn_core")
+    err = getattr(so, "VNError", RuntimeError)
+    create = need_attr(so, "create_scene", "장면 생성의 유일한 구현")
+    made: list[str] = []
+    stray = None
+    try:
+        base = read_json(b.scene_path("SCENE-001"))
+        sc = create()
+        made.append(sc["scene_id"])
+        ok(vc.is_scene_id(sc["scene_id"]), f"형식이 틀린 id — {sc['scene_id']!r}")
+        ok(b.scene_path(sc["scene_id"]).exists(), "돌려줬는데 파일이 없음")
+        eq(b.scene(sc["scene_id"])["scene_id"], sc["scene_id"], "파일명과 scene_id 불일치(A2)")
+        eq(sc["status"], "SCENE_PLAN", "새 장면 시작 상태")
+        eq(sc["review"]["human"], "PENDING", "승인 도장이 미리 찍혀 있음")
+        eq(sc["assets"]["selected_image"], "", "선택 이미지가 미리 지정돼 있음")
+
+        # 이미 있는 번호는 덮어쓰지 않는다(원본 소실 방지)
+        raises(lambda: create("SCENE-001"), err, "존재하는 장면 번호로 생성")
+        eq(read_json(b.scene_path("SCENE-001")), base, "거부됐는데 기존 장면이 바뀜")
+        raises(lambda: create("SCENE-1"), err, "형식이 틀린 id")
+        raises(lambda: create("../etc"), err, "경로 탈출 id")
+
+        # **손상된 장면 파일도 '존재하는 번호'다** — 읽지 못한다고 그 자리를 재사용하면 덮어쓴다
+        nxt, _order = b.next_ids()
+        stray = b.scene_path(nxt)
+        stray.write_text('[{"scene_id":"BROKEN"}]', encoding="utf-8")
+        raw = stray.read_text(encoding="utf-8")
+        sc2 = create()
+        made.append(sc2["scene_id"])
+        ok(sc2["scene_id"] != nxt, f"손상 파일의 번호({nxt})를 다시 씀")
+        eq(stray.read_text(encoding="utf-8"), raw, "손상된 장면 파일을 덮어씀(원본 소실)")
+        raises(lambda: create(nxt), err, "손상 파일이 있는 번호에 덮어쓰기")
+        stray.unlink()
+        stray = None
+
+        # 내용·화 승계
+        sc3 = create(fields={"purpose": "생성 경로 확인", "episode": 3})
+        made.append(sc3["scene_id"])
+        eq(b.scene(sc3["scene_id"])["purpose"], "생성 경로 확인", "fields 병합")
+        eq(sc3.get("episode"), 3, "episode 지정")
+        sc4 = create()
+        made.append(sc4["scene_id"])
+        eq(sc4.get("episode"), 3, "마지막 장면의 화를 승계하지 않음(감상본 화 선택에서 빠진다)")
+        sc5 = create(episode=None)
+        made.append(sc5["scene_id"])
+        ok("episode" not in sc5, "화를 쓰지 않는 작품인데 episode 가 붙음")
+        # 승인 게이트·자산은 생성으로도 만들 수 없다
+        raises(lambda: create(fields={"status": "APPROVED"}), err, "APPROVED 로 태어나기")
+        raises(lambda: create(fields={"review": {"human": "PASS"}}), err, "검수 결과를 갖고 태어나기")
+        raises(lambda: create(fields={"assets": {"selected_image": "x.png"}}), err, "자산을 갖고 태어나기")
+        raises(lambda: create(fields={"없는필드": 1}), err, "화이트리스트 밖 필드")
+        rc, out = b.checker()
+        eq(rc, 0, f"create_scene 이 만든 장면들이 검사기를 통과하지 못함 — "
+                  f"{[l for l in out.splitlines() if 'FAIL' in l][:3]}")
+    finally:
+        if stray is not None:
+            with contextlib.suppress(OSError):
+                stray.unlink()
+        for sid in reversed(made):      # LIFO — scene_order 1..N 연속을 유지한 채 되돌린다
+            with contextlib.suppress(OSError):
+                b.scene_path(sid).unlink()
+
+    # 세 생성 경로가 전부 그 하나를 거치는가(원문 문자열이 아니라 실제 호출로 확인)
+    for mod, fn in (("advance_scene", "cmd_new"), ("vn_compose", "_create_scenes_from_items"),
+                    ("vn_compose", "scene_from_talk")):
+        if not func_body(b, mod, fn):
+            raise Gap(f"{mod}.{fn} 이 없음 — 생성 경로의 이름이 바뀌었다(검사 앵커도 함께 고칠 것)")
+        calls = func_calls(b, mod, fn)
+        ok(any(c.split(".")[-1] == "create_scene" for c in calls),
+           f"{mod}.{fn} 이 create_scene 을 거치지 않음 — 부르는 것: {sorted(calls)}")
+        for direct in ("adv.save", "save", "atomic_write_json", "vn_core.atomic_write_json"):
+            ok(direct not in calls, f"{mod}.{fn} 이 장면 파일을 직접 씀({direct}) — 두 번째 생성 경로")
+
+
+@test("unit", "U15 scene_ops — 생성 task 기록과 승인 잠금 문구가 각각 한 곳에서만 나온다")
+def u15(b: Box):
+    """task id 는 '이미 지출한 돈'의 영수증이다 — 다운로드만 실패했을 때 재생성(재과금) 없이
+    다시 받아오는 유일한 근거라, 쓰기 경로가 둘로 갈려 한쪽이 덮어쓰면 그대로 손실이다.
+    승인 잠금 문구도 한 벌이어야 한다(화면마다 다음에 할 일이 보였다 안 보였다 하던 자리)."""
+    so = b.mod("scene_ops")
+    err = getattr(so, "VNError", RuntimeError)
+    rec = need_attr(so, "record_generation_tasks", "생성 task 기록의 유일한 통로")
+    mutable = need_attr(so, "assert_mutable", "승인 잠금 사전 점검(문구 한 벌)")
+    cap = int(getattr(so, "GEN_TASKS_MAX", 20))
+    with fresh_scene(b) as sid:
+        before = b.scene(sid)
+        res = rec(sid, ["task_a", "task_b"], {"width": 832, "height": 1248})
+        sc = b.scene(sid)
+        tasks = (sc.get("assets") or {}).get("makefun_tasks")
+        ok(isinstance(tasks, list) and len(tasks) == 2, f"기록 결과 {tasks}")
+        eq([t.get("task_id") for t in tasks], ["task_a", "task_b"], "task id 기록")
+        eq(res.get("count"), 2, f"반환 요약 — {res}")
+        eq(sc["status"], before["status"], "기록이 장면 상태를 움직임")
+        eq(sc["assets"]["raw_images"], before["assets"]["raw_images"], "기록이 후보 목록을 건드림")
+        rec(sid, ["task_a"])                     # 같은 id 는 두 번 쌓지 않는다
+        eq(len(b.scene(sid)["assets"]["makefun_tasks"]), 2, "중복 기록")
+        rec(sid, [f"t{i}" for i in range(cap + 5)])
+        eq(len(b.scene(sid)["assets"]["makefun_tasks"]), cap, f"보존 상한({cap}) 초과")
+        got = mutable(sid, "이미지를 생성하려면")
+        eq(got.get("scene_id"), sid, "assert_mutable 이 장면을 돌려주지 않음")
+        raises(lambda: rec("../etc", ["x"]), err, "장면 ID 형식 검증")
+        raises(lambda: rec("SCENE-404", ["x"]), err, "없는 장면")
+    with cli_scene(b, "APPROVED") as sid2:
+        e = raises(lambda: mutable(sid2, "이미지를 생성하려면"), err, "APPROVED 인데 통과")
+        has(str(e), "APPROVED", "무엇 때문에 막혔는지")
+        has(str(e), "이미지를 생성하려면", "무엇을 하려다 막혔는지")
+        has(str(e), "revise", "다음에 할 일(revise) 안내")
+    # 생성 클라이언트는 장면 파일을 직접 쓰지 않는다 — 통로는 scene_ops 하나다
+    calls = func_calls(b, "makefun_client", "record_tasks")
+    ok(calls, "makefun_client.record_tasks 가 없음 — 생성 기록 경로의 이름이 바뀌었다")
+    ok(any(c.split(".")[-1] == "record_generation_tasks" for c in calls),
+       f"생성 클라이언트가 scene_ops 를 거치지 않음 — 부르는 것: {sorted(calls)}")
+    for direct in ("atomic_write_json", "vn_core.atomic_write_json", "_save"):
+        ok(direct not in calls, f"생성 클라이언트가 장면 파일을 직접 씀({direct})")
 
 
 # ============================================================ 러너
 GROUPS = ["meta", "arch", "pipeline", "template", "checker", "webapp", "auth", "makefun",
-          "backup", "print", "viewer", "js", "security", "unit"]
+          "backup", "print", "viewer", "js", "ux", "security", "unit"]
 
 # --list 에서 각 그룹이 무엇을 잠그는지 한 줄로 보여 준다(부분 실행을 고르기 쉽게).
 GROUP_NOTE = {
     "meta": "자가진단 자신 — 필수 모듈·구문(가장 빠름)",
-    "arch": "계층 규약을 소스로 강제(import 방향·상태 대입·프롬프트 위치)",
+    "arch": "계층 규약을 소스로 강제(import 방향·상태 대입·프롬프트 위치·문서↔코드 상수)",
     "pipeline": "CLI 상태 전이 · 승인 게이트",
     "template": "templates/ 로 시작한 새 작품(사용자의 첫 5분)",
     "checker": "검사기가 '떨어뜨리는 능력'(부정 픽스처)",
@@ -2917,6 +3581,7 @@ GROUP_NOTE = {
     "print": "인화 규격·마스터",
     "viewer": "감상본 데이터·분기",
     "js": "브라우저 코드 문법 + 주입 API 0",
+    "ux": "폰 손짓·글자 대비 — 화면에서만 드러나던 회귀를 소스로 잠근다",
     "security": "키 유출·리다이렉트·비밀 스캔",
     "unit": "순수 함수 단위(서버 없이 가장 빠름)",
 }

@@ -38,17 +38,19 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
     sys.path.insert(0, str(_HERE))
 
+import vn_core                                                 # noqa: E402
 from vn_core import (IMAGE_EXTS, WRITE_LOCK, VNError,          # noqa: E402
                      atomic_write_bytes, atomic_write_json, is_scene_id,
-                     load_json, load_json_safe)
+                     iter_scenes, load_json, load_json_safe, selected_of)
 
-# 경로 이름은 vn_core 규약을 따르되 값은 이 파일 위치에서 계산한다.
-# (자가진단이 저장소를 복제해 이 모듈만 적재하므로 — 그때도 자기 트리 안만 읽고 쓴다.)
-ROOT = _HERE.parent
-MANIFEST = ROOT / "project" / "manifest.json"     # 테스트가 갈아끼우므로 함수는 호출 시점에 읽는다
-SCENES_DIR = ROOT / "project" / "scenes"
-RAW_DIR = ROOT / "images" / "raw"
-USAGE_LOG = ROOT / "logs" / "makefun_usage.jsonl"
+# 경로는 vn_core 하나에서 온다. vn_core 도 자기 파일 위치(_HERE 와 같은 tools/)에서 계산하므로
+# 자가진단이 저장소를 복제해 이 모듈만 적재해도 그대로 **그 복제본 안**만 읽고 쓴다.
+# (예전에는 같은 값을 여기서 다시 조립했다 — 한쪽 폴더 이름이 바뀌면 조용히 갈리는 5벌이었다.)
+ROOT = vn_core.ROOT
+MANIFEST = vn_core.MANIFEST        # 테스트가 갈아끼우므로 함수는 호출 시점에 읽는다
+SCENES_DIR = vn_core.SCENES
+RAW_DIR = vn_core.IMAGES_RAW
+USAGE_LOG = vn_core.LOGS / "makefun_usage.jsonl"
 META_NAME = "_gen_meta.json"
 TOKEN_ENV = "MAKEFUN_API_TOKEN"
 DEFAULT_BASE = "https://makefun.ai"
@@ -72,7 +74,7 @@ SIZE_HARD_MAX_PX = 4096
 NEGATIVE_PHRASES = ("no text", "no letters", "no speech bubbles", "no watermark", "no signature")
 
 META_MAX_ENTRIES = 200      # _gen_meta.json 무한 증식 방지
-TASKS_MAX = 20              # 장면 assets.makefun_tasks 보존 개수
+# 장면 assets.makefun_tasks 의 보존 개수는 그 파일을 쓰는 쪽(scene_ops.GEN_TASKS_MAX)이 정한다.
 
 # 대장·메타·장면 JSON 의 read-modify-write 직렬화는 저장소 전역 잠금(vn_core.WRITE_LOCK)을 쓴다.
 # 예전처럼 이 파일만의 잠금을 따로 두면 웹에서 장면을 저장하는 순간과 task_id 를 적는 순간이
@@ -394,29 +396,19 @@ def record_tasks(scene_id: str, task_ids: list[str], width: int = 0, height: int
     """생성 task id 를 장면 assets.makefun_tasks 에 남긴다(10).
 
     다운로드만 실패했을 때 재생성(재과금) 없이 fetch_task_images 로 다시 받기 위한 기록.
+
+    **쓰기는 scene_ops 가 한다.** 생성 클라이언트가 장면 파일을 직접 고쳐 쓰면 잠금과
+    정규화를 각자 한 벌씩 갖게 되고, 그중 하나만 어긋나도 이미 과금된 task 기록이
+    덮여 사라진다(= 재수령 불가 = 금전 손실). 여기 남는 것은 호출과 실패 기록뿐이다.
     """
     if not scene_id or not task_ids:
         return
     try:
-        with WRITE_LOCK:          # 장면 저장(scene_ops)과 같은 잠금 — 기록이 서로를 덮지 않는다
-            path = _scene_path(scene_id)
-            sc = _load_scene(scene_id)
-            assets = sc.get("assets")
-            if not isinstance(assets, dict):
-                assets = {}
-                sc["assets"] = assets
-            tasks = assets.get("makefun_tasks")
-            if not isinstance(tasks, list):
-                tasks = []
-            known = {t.get("task_id") for t in tasks if isinstance(t, dict)}
-            for tid in task_ids:
-                if not tid or tid in known:
-                    continue
-                known.add(tid)
-                tasks.append({"task_id": tid, "created_at": _now(), "width": width, "height": height})
-            del tasks[:-TASKS_MAX]
-            assets["makefun_tasks"] = tasks
-            atomic_write_json(path, sc)
+        # 지연 import: 이 모듈만 복제된 환경(자가진단 등)에서 scene_ops 가 없어도 생성 자체는
+        # 계속되어야 한다 — 기록 실패는 아래에서 경고로 남는다(gen_jobs 와 같은 태도).
+        import scene_ops
+        scene_ops.record_generation_tasks(scene_id, list(task_ids),
+                                          {"width": width, "height": height})
     except Exception as exc:
         # 기록 실패로 이미 과금된 생성을 중단시키지는 않는다. 다만 이 기록이 없으면
         # 나중에 재수령(무과금 회수)을 못 하므로 무슨 일이 있었는지는 남긴다.
@@ -717,8 +709,14 @@ def claim_scene(scene_id: str, label: str = "생성"):
 
 # --- 배치(13) ---------------------------------------------------------------
 
-def _has_images(scene_id: str, assets: dict) -> bool:
-    if (assets.get("raw_images") or []) or str(assets.get("selected_image", "") or "").strip():
+def _has_images(scene_id: str, sc: dict) -> bool:
+    """이 장면에 이미 이미지가 있는가 — 있으면 과금 대상에서 뺀다(중복 과금 방지).
+
+    선택본 판정은 vn_core.selected_of 하나를 쓴다(assets 가 손상돼 dict 가 아닌 장면에서도
+    예외 없이 "" 로 떨어진다 — 여기서 터지면 배치 생성이 통째로 멈춘다).
+    """
+    assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
+    if (assets.get("raw_images") or []) or selected_of(sc):
         return True
     folder = RAW_DIR / scene_id
     if folder.exists():   # 미등록 파일이 이미 있으면 중복 과금을 피한다
@@ -727,18 +725,18 @@ def _has_images(scene_id: str, assets: dict) -> bool:
 
 
 def pending_scenes() -> list[str]:
-    """프롬프트가 있고 아직 이미지가 없는 장면(승인 잠금 제외)."""
+    """프롬프트가 있고 아직 이미지가 없는 장면(승인 잠금 제외).
+
+    훑기는 vn_core.iter_scenes 하나를 쓴다 — 손상 파일을 건너뛰는 태도까지 저장소 공통이라,
+    같은 프로젝트가 화면마다 다른 개수로 보이지 않는다(그리고 과금 대상 판단은 멈추지 않는다).
+    """
     out = []
-    if not SCENES_DIR.exists():
-        return out
-    for p in sorted(SCENES_DIR.glob("SCENE-*.json")):
-        sc = load_json_safe(p, {})      # 손상 파일은 건너뛴다(과금 대상 판단을 멈추지 않는다)
-        if not sc or sc.get("status") == "APPROVED":
+    for p, sc in iter_scenes():
+        if sc.get("status") == "APPROVED":
             continue
         if not str((sc.get("prompt", {}) or {}).get("grok_output", "")).strip():
             continue
-        assets = sc.get("assets", {}) or {}
-        if _has_images(p.stem, assets):
+        if _has_images(p.stem, sc):
             continue
         out.append(p.stem)
     return out

@@ -30,6 +30,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:          # 도구 모듈(vn_core·secret_scan·scene_lint)을 직접 부르기 위해
     sys.path.insert(0, str(_HERE))
 
+import vn_core                       # noqa: E402
 from vn_core import load_json_safe   # noqa: E402  (import 만으로 콘솔 인코딩 방어가 걸린다)
 
 ROOT = _HERE.parent                  # vn_core 규약과 같은 값 — 복제본에서도 자기 트리를 본다
@@ -285,7 +286,7 @@ def check_scenes(mf: dict | None = None) -> None:
         add("프로젝트", "장면 폴더", ERR, "project/scenes/ 가 없습니다",
             "폴더를 만들고 templates/scene.json 으로 첫 장면을 작성하세요.")
         return
-    files = sorted(SCENES.glob("SCENE-*.json"))
+    files = vn_core.scene_files()     # 목록은 vn_core 단일 출처(정렬·대상 파일명 규약이 한 곳)
     if not files:
         add("프로젝트", "장면", WARN, "장면 파일이 없습니다 — 스토리라인부터 시작하세요")
         return
@@ -310,7 +311,7 @@ def check_scenes(mf: dict | None = None) -> None:
             no_episode.append(f.stem)
         st = str(sc.get("status", "?"))
         status_count[st] = status_count.get(st, 0) + 1
-        sel = str(sc.get("assets", {}).get("selected_image", "") or "").strip()
+        sel = vn_core.selected_of(sc)      # 선택 이미지 판독은 vn_core 단일 출처
         if sel and not (ROOT / sel).exists():
             missing_img.append(f"{f.stem}→{sel}")
 

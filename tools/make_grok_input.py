@@ -56,8 +56,7 @@ def _prev_scene(sc: dict) -> dict | None:
         s = vn_core.load_json_safe(guess, {})
         if s.get("scene_order") == want:
             return s
-    for f in sorted(SCENES.glob("SCENE-*.json")):
-        s = vn_core.load_json_safe(f, {})   # 무관한 형제 장면이 손상돼도 조립은 계속된다
+    for _f, s in vn_core.iter_scenes():   # 무관한 형제 장면이 손상돼도 조립은 계속된다
         if s.get("scene_order") == want:
             return s
     return None
@@ -154,13 +153,11 @@ def build_input(sid: str) -> str:
     add(f"==== 이번 장면: {sid} (order {sc.get('scene_order')}) ====")
     if sc.get("episode"):
         add_kv("화", f"{sc.get('episode')}화")
-    # 엔딩 표기는 감상본(export_viewer.ending_of)과 같은 규칙으로 읽는다:
-    # ending 은 참/거짓, 이름은 ending_label. 옛 데이터의 문자열 ending 도 이름으로 받는다.
-    raw_end = sc.get("ending")
-    end_label = str(sc.get("ending_label") or "").strip()
-    if isinstance(raw_end, str):
-        end_label = end_label or raw_end.strip()
-    if raw_end:
+    # 엔딩 표기 규칙의 정본은 vn_core.ending_of 하나다(감상본·스튜디오·여기가 같은 답).
+    # 예전에는 이 자리에서 같은 규칙을 손으로 다시 구현했고, 규칙이 갈리면 그록에게는
+    # 결말이라고 알려 준 컷이 감상본에서는 평범한 장면으로 지나간다.
+    is_end, end_label = vn_core.ending_of(sc)
+    if is_end:
         add_kv("결말 컷", (end_label or "이 경로의 마지막 장면")
                + " — 이야기가 여기서 닫히므로 여운이 남는 구도로")
     add_kv("목적", sc.get("purpose"))
@@ -181,8 +178,7 @@ def build_input(sid: str) -> str:
         add_kv("행동", prev.get("action_beat"))
         add_kv("감정", prev.get("emotion"))
         add_kv("화풍", prev.get("visual_style"))
-        assets = prev.get("assets") if isinstance(prev.get("assets"), dict) else {}
-        sel = str(assets.get("selected_image", "") or "").strip()
+        sel = vn_core.selected_of(prev)
         if sel:
             add(f"- 확정 이미지: {Path(sel).name} (이 장면과 시각적으로 이어져야 함)")
     else:

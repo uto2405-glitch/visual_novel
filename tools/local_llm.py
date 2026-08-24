@@ -6,11 +6,17 @@ xai_client 와 별개(그록은 연출/프롬프트용, 로컬 LLM 은 인물 �
 
 **이 모듈에는 프롬프트 문자열이 없다.** 인물 페르소나·말투 규칙·장기 기억·앨범 사진 규칙은
 prompt_build 가 조립한다(저장소 규약: 모델 프롬프트는 prompt_build 와 vn_compose 에만 둔다).
-여기 남은 것은 주소 검증 · 상태 조회 · 전송뿐이고, 의존은 vn_core 하나다.
-옛 이름(local_llm.persona_prompt · local_llm.resolve_photos)으로 부르던 곳을 위해 파일 끝에
-얇은 재수출만 남겨 둔다.
+여기 남은 것은 주소 검증 · 상태 조회 · 전송뿐이고, **의존은 vn_core 하나다**.
+예전에는 옛 이름(persona_prompt·resolve_photos)을 위한 재수출이 파일 끝에 있었고, 그것이
+prompt_build 를 함수 안에서 되받아 `prompt_build → local_llm → prompt_build` 고리를 만들었다.
+호출부는 webapp 두 줄뿐이었고 webapp 은 이미 prompt_build 를 import 하므로 통로를 걷어냈다 —
+프롬프트가 필요한 곳은 prompt_build 를 직접 부른다(이 파일의 CLI 도 main 안에서만 부른다).
 
 설정 우선순위: 환경변수 LOCAL_LLM_URL > manifest.talk.base_url > 기본값.
+
+전송 방식: :func:`chat` 은 기본이 비스트리밍(응답 전문을 한 번에 받는다)이고, ``on_token``
+콜백을 주면 SSE 스트리밍으로 바뀌어 **첫 글자가 나오는 즉시** 조각을 흘려 준다. 콜백이
+없을 때의 동작은 예전과 한 글자도 다르지 않다(하위호환).
 
 주소 규칙(중요): 인물 대화 전문이 나가는 통로이므로 **루프백·사설망만** 허용한다.
 scheme 이 https 라고 통과시키지 않는다 — 그 한 줄이 오타 하나로 대화 전체를 외부
@@ -109,16 +115,98 @@ def status() -> dict:
         return {"up": False, "url": url, "error": str(exc)}
 
 
-def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320) -> str:
-    """대화 메시지 → 응답 텍스트. 실패는 RuntimeError(사유 포함)."""
+def _chunk_text(chunk) -> str:
+    """스트리밍 조각 하나에서 늘어난 글자만 꺼낸다.
+
+    OpenAI 호환 서버는 ``choices[0].delta.content`` 를 쓰지만, llama.cpp 의 판본에 따라
+    ``message.content`` 나 ``content`` 로 오는 경우가 있다. 셋 다 받아 준다 — 서버를
+    올리는 사람이 판본을 신경 쓰지 않아도 되게.
+    """
+    try:
+        ch = chunk["choices"][0]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    if not isinstance(ch, dict):
+        return ""
+    for key in ("delta", "message"):
+        part = ch.get(key)
+        if isinstance(part, dict) and isinstance(part.get("content"), str):
+            return part["content"]
+    return ch["content"] if isinstance(ch.get("content"), str) else ""
+
+
+def _read_stream(resp, on_token) -> str:
+    """SSE 응답을 읽어 조각마다 on_token 을 부르고, 이어붙인 전문을 돌려준다.
+
+    한 줄이 깨졌다고 대화를 끊지 않는다(그 줄만 건너뛴다). 중간에 연결이 끊긴 경우
+    **이미 흘려보낸 글자는 살려서 돌려준다** — 사용자는 그 글자들을 이미 화면에서 봤고,
+    거기서 예외를 던지면 눈으로 본 답장이 통째로 사라진다.
+
+    stream 요청을 무시하고 통짜 JSON 으로 답하는 서버(구판 llama.cpp)도 받아 준다 —
+    그 경우 조각이 하나뿐인 스트림처럼 다룬다. 스트리밍 지원 여부로 대화가 막히지 않게.
+    """
+    parts: list[str] = []
+    plain: list[str] = []         # SSE 가 아닌 본문(위 폴백용). 첫 조각이 오면 더 모으지 않는다.
+    try:
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            if not line.startswith("data:"):
+                if not parts and len(plain) < 400:
+                    plain.append(line)   # 주석(:)·event: 는 규격상 무시 대상이라 폴백에서만 쓰인다
+                continue
+            payload = line[len("data:"):].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload)
+            except ValueError:
+                continue
+            piece = _chunk_text(chunk)
+            if not piece:
+                continue
+            parts.append(piece)
+            on_token(piece)
+    except OSError as exc:        # 읽는 도중 끊김(타임아웃·소켓)
+        if not parts:
+            raise VNError(f"로컬 LLM 응답이 중간에 끊겼습니다({exc}).")
+    if not parts and plain:
+        try:                      # JSON 문자열은 줄을 넘지 못하므로 줄을 그냥 이어 붙여도 된다
+            piece = _chunk_text(json.loads("".join(plain)))
+        except ValueError:
+            piece = ""
+        if piece.strip():
+            on_token(piece)
+            return piece.strip()
+    return "".join(parts).strip()
+
+
+def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
+         on_token=None) -> str:
+    """대화 메시지 → 응답 텍스트. 실패는 RuntimeError(사유 포함).
+
+    on_token 을 주면 SSE 스트리밍으로 받아 조각(str)마다 그 콜백을 부른다. 반환값은
+    두 방식 모두 **완성된 전문**이라 호출부를 바꾸지 않고도 붙일 수 있다.
+    콜백이 없으면 요청 본문의 stream 까지 예전 그대로다(하위호환).
+    """
     url = base_url()
     _validate(url)
+    stream = on_token is not None
     body = json.dumps({"messages": messages, "temperature": temperature,
-                       "max_tokens": max_tokens, "stream": False}).encode("utf-8")
+                       "max_tokens": max_tokens, "stream": stream}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if stream:
+        headers["Accept"] = "text/event-stream"
     req = urllib.request.Request(url + "/chat/completions", data=body,
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers=headers, method="POST")
     try:
         with _OPENER.open(req, timeout=TIMEOUT) as r:
+            if stream:
+                content = _read_stream(r, on_token)
+                if not content:
+                    raise VNError("로컬 LLM 응답에 텍스트가 없습니다.")
+                return content
             raw = r.read()
     except urllib.error.HTTPError as e:
         raise VNError(f"로컬 LLM HTTP {e.code} — 서버/모델 상태를 확인하세요.")
@@ -135,24 +223,11 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320) 
     return content.strip()
 
 
-# ------------------------------------------------- 하위호환 재수출 (정본은 prompt_build)
-# prompt_build 가 이 모듈을 import 하므로 최상단에서 되받으면 순환이다 — 호출 시점에 가져온다.
-def _prompts():
-    import prompt_build
-    return prompt_build
-
-
-def persona_prompt(character_id: str | None = None) -> tuple[str, dict]:
-    """→ prompt_build.persona_prompt. 옛 이름으로 부르는 곳(webapp·selftest)을 위한 통로."""
-    return _prompts().persona_prompt(character_id)
-
-
-def resolve_photos(reply: str, album: dict, last_user: str = ""):
-    """→ prompt_build.resolve_photos. 옛 이름으로 부르는 곳을 위한 통로."""
-    return _prompts().resolve_photos(reply, album, last_user)
-
-
 def main() -> int:
+    # 프롬프트 조립은 prompt_build 담당이고 그쪽이 이 모듈을 import 한다 — 모듈 수준에서
+    # 되받으면 순환이므로, **CLI 로 쓸 때만** 여기서 가져온다(라이브러리 경로는 무관).
+    import prompt_build
+
     st = status()
     print(f"로컬 LLM: {'ON' if st['up'] else 'OFF'} ({st['url']})")
     if not st["up"]:
@@ -161,18 +236,23 @@ def main() -> int:
         return 1
     print(f"  모델: {', '.join(m for m in st['models'] if m) or '(미표시)'}")
     if len(sys.argv) > 1 and sys.argv[1] == "--memory":   # 지난 대화 요약 갱신(장기 기억)
-        ok = _prompts().refresh_memory(sys.argv[2] if len(sys.argv) > 2 else None)
+        ok = prompt_build.refresh_memory(sys.argv[2] if len(sys.argv) > 2 else None)
         print("기억 요약을 갱신했습니다." if ok else "요약할 지난 대화가 없거나 요약에 실패했습니다.")
         return 0
     if len(sys.argv) > 1:
         try:
-            sysmsg, meta = persona_prompt()
+            sysmsg, meta = prompt_build.persona_prompt()
+            # CLI 는 글자가 나오는 대로 흘려 준다 — 320토큰을 다 만들 때까지 빈 화면으로
+            # 기다리던 자리다(스트리밍 콜백의 첫 사용처).
+            print(f"\n{meta['name']}: ", end="", flush=True)
             reply = chat([{"role": "system", "content": sysmsg},
-                          {"role": "user", "content": " ".join(sys.argv[1:])}])
+                          {"role": "user", "content": " ".join(sys.argv[1:])}],
+                         on_token=lambda piece: print(piece, end="", flush=True))
         except VNError as exc:
-            print(f"오류: {exc}")
+            print(f"\n오류: {exc}")
             return 1
-        print(f"\n{meta['name']}: {reply}")
+        if not reply.endswith("\n"):
+            print()
     return 0
 
 

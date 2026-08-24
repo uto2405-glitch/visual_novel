@@ -42,9 +42,39 @@ function busy(node,label){
   if(text!=null)node.textContent=text;
   return Math.round((Date.now()-t0)/1000)}}}
 const took=s=>" · "+s+"초 걸림";
+// ---- 오버레이 3종(세로 스크롤·라이트박스·재인증 안내)의 공용 규칙 ----
+// 재생 엔진은 무대에 포커스 가둠(trapTab)과 배경 inert 를 갖췄는데 스튜디오 오버레이에는
+// 둘 다 없어 Tab 이 뒤 화면으로 샜다(라이트박스는 aria-modal 선언만 해 놓은 상태였다).
+// 규칙을 복제하지 않고 엔진이 내보낸 VNRuntime.trapTab 을 그대로 쓴다 — 한 벌만 존재한다.
+const OVERLAYS=["scrollView","lightbox","authGate"];   // 아래→위(z-index) 순
+const ovInert=new Set();     // 우리가 잠근 노드만 기억해 두고 우리만 푼다(엔진 것을 빼앗지 않게)
+const ovReturn=new Map();    // 오버레이 → 그것을 연 자리(겹쳐 열려도 각자 제 자리로 돌아간다)
+function topOverlay(){for(let i=OVERLAYS.length-1;i>=0;i--){const n=$(OVERLAYS[i]);
+  if(n&&!n.hidden)return n}
+ return null}
+function syncOverlay(){const top=topOverlay();
+ for(const n of document.querySelectorAll("body > *")){
+  if(n.classList.contains("vnr"))continue;        // 재생 무대는 엔진이 자기 방식으로 잠근다
+  const mine=ovInert.has(n);
+  if(!top||n===top){if(mine){n.inert=false;ovInert.delete(n)}continue}
+  if(!mine&&n.inert)continue;                     // 엔진이 잠근 것은 우리 것이 아니다 — 손대지 않는다
+  n.inert=true;ovInert.add(n)}}
+function openOverlay(node,focus){
+ if(!node||!node.hidden)return;                   // 이미 열려 있으면 포커스를 빼앗지 않는다
+ ovReturn.set(node,document.activeElement);
+ node.hidden=false;syncOverlay();
+ const f=focus||node.querySelector("button");
+ if(f&&f.focus)f.focus()}
+function closeOverlay(node){
+ if(!node||node.hidden)return;
+ node.hidden=true;syncOverlay();
+ const back=ovReturn.get(node);ovReturn.delete(node);
+ if(back&&back.isConnected&&back.focus)back.focus()}
+document.addEventListener("keydown",e=>{const top=topOverlay();if(!top)return;
+ const rt=window.VNRuntime;
+ if(rt&&typeof rt.trapTab==="function")rt.trapTab(top,e)});
 // PIN 세션이 끊기면(401 auth_required) 요청마다 실패 문구만 뿌리지 말고 재인증 경로를 준다
-function showAuthGate(){const g=$("authGate");if(!g||!g.hidden)return;
- g.hidden=false;const b=$("authReload");if(b&&b.focus)b.focus()}
+function showAuthGate(){openOverlay($("authGate"),$("authReload"))}
 async function api(path,body){
  let r;
  try{r=await fetch(path,body?{method:"POST",
@@ -580,16 +610,74 @@ function sceneCard(sc){
  for(const n of scPrint(sc))card.appendChild(n);
  return card}
 
+// ---- 장면 목록: 화·상태 필터 + 화 머리말 + 빈 상태 ----
+// 카드 한 장이 textarea 3개 + 버튼 6~7개다. 30장을 한꺼번에 펼치면 주 작업면이 잠기므로
+// 지금 손댈 것만 남기고, 어디까지 왔는지는 화 머리말이 말해 준다.
+const scFilter={ep:"",status:""};
+const scEpOf=sc=>{const n=parseInt(sc&&sc.episode,10);return (n>0)?n:0};
+function scEpLabel(ep){if(!ep)return "화 미지정";
+ const e=(S.episodes||[]).find(x=>+x.episode===ep);
+ return ep+"화"+(e&&e.title?" · "+e.title:"")}
+function scPass(sc){
+ if(scFilter.ep&&String(scEpOf(sc))!==scFilter.ep)return false;
+ switch(scFilter.status){
+  case "APPROVED": return sc.status==="APPROVED";
+  case "noprompt": return !sc.prompt;
+  case "noimg":    return !sc.selected_image;
+  case "ready":    return sc.status!=="APPROVED"&&!!sc.selected_image;
+  default:         return true}}
+// 매니페스트가 없으면 제목·인물·장소 기준정보가 통째로 비어 장면 작업이 전부 실패한다 —
+// 카드 없는 빈 화면만 남기지 말고 무엇이 없는지 말해 준다.
+function syncScNotice(){const n=$("scNotice");if(!n)return;
+ n.hidden=S.manifest!==false;
+ if(!n.hidden)n.textContent="⚠ project/manifest.json 을 읽지 못했습니다 — 제목·인물·장소 기준정보가 "
+  +"없어 장면 구성·프롬프트 생성·검사가 모두 실패합니다. 파일을 복구한 뒤 새로고침 하세요."}
+function syncScEpSel(){const sel=$("scFilterEp");if(!sel)return;
+ const lab=document.querySelector('label[for="scFilterEp"]');
+ const eps=[...new Set((S.scenes||[]).map(scEpOf))].sort((a,b)=>a-b);
+ const many=eps.length>1;            // 화 구분이 없는 작품에서는 이 칸 자체가 소음이다
+ sel.hidden=!many;if(lab)lab.hidden=!many;
+ if(!many){scFilter.ep="";sel.value="";return}
+ const want=eps.join(",");
+ if(sel.dataset.eps!==want){         // 목록이 그대로면 다시 만들지 않는다(선택이 튀지 않게)
+  sel.replaceChildren();
+  const o0=el("option",null,"전체");o0.value="";sel.appendChild(o0);
+  for(const n of eps){const o=el("option",null,scEpLabel(n));o.value=String(n);sel.appendChild(o)}
+  sel.dataset.eps=want}
+ if(scFilter.ep&&eps.indexOf(+scFilter.ep)<0)scFilter.ep="";
+ sel.value=scFilter.ep}
 // 카드를 scene_id 로 기억해 둔다 — 한 장면을 조작해도 나머지 카드는 건드리지 않는다.
 const sceneCards=new Map();
 function renderScenes(){const box=$("sceneList");box.replaceChildren();sceneCards.clear();
- for(const sc of S.scenes){const c=sceneCard(sc);sceneCards.set(sc.scene_id,c);box.appendChild(c)}}
-// 한 장면만 교체. 목록 자체가 달라졌으면 false 를 돌려 호출부가 전면 재구성하게 한다.
+ syncScNotice();syncScEpSel();
+ const all=S.scenes||[],list=all.filter(scPass),on=!!(scFilter.ep||scFilter.status);
+ $("btnScFilterReset").hidden=!on;
+ $("scFilterMsg").textContent=!all.length?""
+  :(on?"표시 "+list.length+" / 전체 "+all.length+"개":all.length+"개");
+ if(!all.length){box.appendChild(el("p","small",
+  "아직 장면이 없습니다 — 위 [스토리라인 → 장면 구성](또는 [⚡ 그록 수동])으로 첫 장면을 만드세요."));
+  return}
+ if(!list.length){box.appendChild(el("p","small",
+  "이 조건에 맞는 장면이 없습니다 — [필터 해제]를 누르면 전체가 다시 보입니다."));return}
+ const headed=new Set(all.map(scEpOf)).size>1;   // 화가 하나뿐이면 머리말은 소음이다
+ let curEp=null;
+ for(const sc of list){
+  const ep=scEpOf(sc);
+  if(headed&&ep!==curEp){curEp=ep;box.appendChild(el("div","ephead",scEpLabel(ep)))}
+  const c=sceneCard(sc);sceneCards.set(sc.scene_id,c);box.appendChild(c)}}
+$("scFilterEp").onchange=e=>{scFilter.ep=e.target.value;renderScenes()};
+$("scFilterStatus").onchange=e=>{scFilter.status=e.target.value;renderScenes()};
+$("btnScFilterReset").onclick=()=>{scFilter.ep="";scFilter.status="";
+ $("scFilterEp").value="";$("scFilterStatus").value="";renderScenes();
+ $("scFilterStatus").focus()};
+// 한 장면만 교체. 목록 자체가 달라졌으면(필터에서 빠졌거나 장면이 늘고 줄었으면)
+// false 를 돌려 호출부가 전면 재구성하게 한다.
 function renderScene(sid){
  const old=sceneCards.get(sid);
  if(!old||!old.isConnected)return false;
- if(S.scenes.length!==sceneCards.size)return false;
- const sc=S.scenes.find(s=>s.scene_id===sid);
+ const list=(S.scenes||[]).filter(scPass);
+ if(list.length!==sceneCards.size)return false;
+ const sc=list.find(s=>s.scene_id===sid);
  if(!sc)return false;
  const fresh=sceneCard(sc);
  sceneCards.set(sid,fresh);old.replaceWith(fresh);
@@ -685,14 +773,15 @@ $("btnFavPrint").onclick=async()=>{
 let lbList=[],lbIdx=-1;
 function openLightbox(i){lbList=galList();lbIdx=i;
  if(lbIdx<0||lbIdx>=lbList.length)return;
- const sc=lbList[lbIdx],box=$("lightbox"),im=$("lbImg");
+ const sc=lbList[lbIdx],im=$("lbImg");
  if(sc.image_url){im.hidden=false;im.src=sc.image_url;im.alt=sc.purpose||sc.scene_id}
  else{im.hidden=true;im.removeAttribute("src")}
  $("lbCap").textContent=(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id)+"  ·  "+sc.scene_id
   +(sc.image_url?"":"  (이미지 없음)");
  $("lbPrev").disabled=lbIdx<=0;$("lbNext").disabled=lbIdx>=lbList.length-1;
- box.hidden=false;$("lbClose").focus()}
-function closeLightbox(){$("lightbox").hidden=true;lbIdx=-1}
+ // 이동(◀▶)으로 다시 부를 때는 이미 열려 있으므로 포커스를 빼앗지 않는다
+ openOverlay($("lightbox"),$("lbClose"))}
+function closeLightbox(){closeOverlay($("lightbox"));lbIdx=-1}
 function lbMove(step){if(lbIdx<0)return;const n=lbIdx+step;
  if(n>=0&&n<lbList.length)openLightbox(n)}
 $("lbClose").onclick=closeLightbox;
@@ -856,9 +945,9 @@ function openScrollView(){
   scroller:$("scrollView"),
   storageKey:"vn"});          // 저장 키는 예전과 같다(vn:scroll:<제목>) — 읽던 위치가 이어진다
  if(!svHandle||!svHandle.count){alert("표시할 장면이 없습니다.");return}
- $("scrollView").hidden=false;
+ openOverlay($("scrollView"),$("btnSvClose"));   // 보이게 한 뒤 복원해야 높이 계산이 맞는다
  svHandle.restore()}
-function closeScrollView(){if(svHandle)svHandle.save();$("scrollView").hidden=true}
+function closeScrollView(){if(svHandle)svHandle.save();closeOverlay($("scrollView"))}
 $("btnScrollView").onclick=async()=>{await refresh();openScrollView()};
 $("btnSvClose").onclick=closeScrollView;
 $("btnSvTop").onclick=()=>{$("scrollView").scrollTop=0;if(svHandle)svHandle.save()};
@@ -1001,7 +1090,7 @@ function initTab(){let saved="";
  try{saved=localStorage.getItem(TAB_KEY)||""}catch(e){saved=""}
  selectTab(tabFromHash()||($("tab-"+saved)?saved:"")||"story",true)}
 $("authReload").onclick=()=>{location.reload()};
-$("authDismiss").onclick=()=>{$("authGate").hidden=true};
+$("authDismiss").onclick=()=>{closeOverlay($("authGate"))};
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab));
 $("btnCheck").onclick=async()=>{const d=await api("/api/check",{});
  $("checkOut").textContent=d.output};

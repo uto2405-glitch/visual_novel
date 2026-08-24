@@ -41,6 +41,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
     sys.path.insert(0, str(_HERE))
 
+import vn_core                                                              # noqa: E402
 from vn_core import VNError, atomic_write_json, load_json_safe, safe_path   # noqa: E402
 
 # 경로 이름은 vn_core 규약을 따르되 값은 이 파일 위치에서 계산한다.
@@ -137,7 +138,14 @@ def _project_files() -> list[Path]:
 
 
 def _approved_images() -> list[Path]:
-    """승인(APPROVED) 장면이 실제 쓰는 이미지 — 유일본이라 소실되면 재생성 비용이 든다."""
+    """감상본·인화에 실릴 컷이 쓰는 이미지 — 유일본이라 소실되면 재생성 비용이 든다.
+
+    '실릴 컷인가'의 판정은 vn_core.is_deliverable 하나뿐이다(상태를 추가해도 여기는 그대로).
+    다만 **훑기는 이 파일의 ROOT 아래에서 한다** — 백업·복원은 대상 트리를 인자로 받는
+    도구라서(테스트·복제본이 ROOT 를 갈아끼운다) 저장소 전역 폴더를 보면 엉뚱한 트리의
+    이미지를 담는다. 그래서 iter_scenes 대신 같은 순서로 자기 트리를 읽는다.
+    후보(raw_images)까지 담는 것은 의도다 — 선택본만으로는 다른 컷을 다시 고를 수 없다.
+    """
     out: list[Path] = []
     seen: set[Path] = set()
     sdir = ROOT / "project" / "scenes"
@@ -145,15 +153,13 @@ def _approved_images() -> list[Path]:
         return out
     for sp in sorted(sdir.glob("*.json")):
         data = _load_json(sp)
-        if data.get("status") != "APPROVED":
+        if not vn_core.is_deliverable(data):
             continue
-        assets = data.get("assets") or {}
+        assets = data.get("assets")
         if not isinstance(assets, dict):
             continue
         cands = list(assets.get("raw_images") or [])
-        sel = assets.get("selected_image")
-        if sel:
-            cands.append(sel)
+        cands.append(vn_core.selected_of(data))
         for rel in cands:
             if not isinstance(rel, str) or not rel.strip():
                 continue

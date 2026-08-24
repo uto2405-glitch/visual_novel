@@ -28,14 +28,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vn_core  # noqa: E402
 
-ROOT = vn_core.ROOT
-SCENES = vn_core.SCENES
-MANIFEST = vn_core.MANIFEST
+MANIFEST = vn_core.MANIFEST      # 장면 폴더 상수는 두지 않는다 — 훑기는 iter_scenes 하나뿐
 
 RUN_LIMIT = 3          # 같은 값 연속 허용 한도
 LONG_LINE = 60         # 대사 한 줄 권장 상한(글자)
-DEFAULT_START_AFFECTION = 30   # manifest.dating.start_affection 이 없을 때(감상본 뷰어와 동일)
-DEFAULT_MAX_AFFECTION = 100
+
+# 호감도 눈금(시작·상한)의 단일 출처는 **매니페스트**다.
+# 린터가 기본값을 따로 들고 있으면(예전의 30/100 리터럴 — 같은 값이 vn_compose 에도 있었다)
+# 작품이 눈금을 바꿔도 린터만 옛 값으로 채점해, 실제로는 닿는 분기를 '도달 불가'라고 한다.
+# project/manifest.json 이 값을 비워 두면 배포 기본 매니페스트를 기본값으로 읽는다.
+TEMPLATE_MANIFEST = vn_core.TEMPLATES / "manifest.json"
 
 # 카메라 표준 어휘 — 표기가 흔들리면 같은 샷 연속 감지(_runs)도, 프롬프트 문구도 함께 흔들린다.
 STD_SHOTS = ("extreme-wide", "wide", "full", "medium-wide", "medium",
@@ -89,11 +91,8 @@ def _i(v, default: int = 0) -> int:
 
 
 def _load_scenes():
-    out = []
-    for f in sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []:
-        sc = vn_core.load_json_safe(f, {})
-        if sc:
-            out.append(sc)
+    """모든 장면을 진행 순서대로. 훑기·손상 파일 처리는 vn_core 단일 출처(iter_scenes)."""
+    out = [sc for _f, sc in vn_core.iter_scenes()]
     out.sort(key=lambda s: _i(s.get("scene_order")))
     return out
 
@@ -275,6 +274,25 @@ def _branch(sc) -> list:
     return [b for b in v if isinstance(b, dict)] if isinstance(v, list) else []
 
 
+def _affection_scale(mf: dict):
+    """(시작 호감도, 상한) — 어디에도 선언이 없으면 (None, None).
+
+    감상본은 dating 을 쓰지 않는 작품에서도 내부적으로 호감도를 굴린다. 그 눈금을 여기서
+    지어내지 않고 매니페스트에서만 읽는다 — 읽지 못하면 호감도에 기대는 규칙만 건너뛴다
+    (없는 눈금으로 채점하면 '절대 도달 불가' 같은 확신에 찬 오경고가 나온다).
+    """
+    d = mf.get("dating") if isinstance(mf.get("dating"), dict) else {}
+    base = vn_core.load_json_safe(TEMPLATE_MANIFEST, {})
+    t = base.get("dating") if isinstance(base.get("dating"), dict) else {}
+    top = _i(d.get("max")) or _i(t.get("max"))    # 0·null·형식 오류 → 배포 기본값(엔진과 같은 규칙)
+    if top < 1:
+        return None, None
+    start = d.get("start_affection")
+    if start is None:                       # 없거나 null → 배포 기본값(감상본 엔진의 폴백과 같은 값)
+        start = t.get("start_affection")
+    return max(0, min(top, _i(start))), top
+
+
 def _has_flow(scenes) -> bool:
     """분기 작품인지 — 선형 작품에 '엔딩이 없다'고 잔소리하지 않기 위한 관문."""
     return any(_choices(sc) or _branch(sc) or sc.get("ending") for sc in scenes)
@@ -385,10 +403,11 @@ def _check_branching(scenes, mf, add) -> None:
     if not _has_flow(scenes):
         return          # 선형 작품 — 아래 규칙(엔딩·호감도)은 분기 작품에만 의미가 있다
 
-    dating = mf.get("dating") if isinstance(mf.get("dating"), dict) else {}
-    start_aff = _i(dating.get("start_affection"), DEFAULT_START_AFFECTION)
-    aff_max = _i(dating.get("max"), DEFAULT_MAX_AFFECTION) or DEFAULT_MAX_AFFECTION
-    best, worst = _reach(scenes, idx, start_aff, aff_max)
+    start_aff, aff_max = _affection_scale(mf)
+    scaled = aff_max is not None      # 매니페스트가 호감도 눈금을 선언했는가
+    # 눈금이 없어도 도달성(unreachable-scene·open-branch)은 그대로 본다 — 경로 구조는
+    # 호감도와 무관하다. 호감도 값에 기대는 판정만 아래에서 건너뛴다.
+    best, worst = _reach(scenes, idx, start_aff or 0, aff_max or 0)
 
     for i, sc in enumerate(scenes):
         sid = _s(sc.get("scene_id", "?"))
@@ -409,7 +428,7 @@ def _check_branching(scenes, mf, add) -> None:
             # 언제나 성립하는 조건이 마지막이 아니면 그 뒤는 죽은 길이다
             # (순서가 이미 뒤집혔다면 위 경고로 충분하므로 겹쳐 말하지 않는다)
             w = worst[i]
-            if w is not None and not disordered:
+            if scaled and w is not None and not disordered:
                 for k, m in enumerate(mins[:-1]):
                     if m <= w:
                         add("warn", "branch-order",
@@ -419,7 +438,7 @@ def _check_branching(scenes, mf, add) -> None:
 
             # 5) affection-unreachable — 도달 가능한 최고 호감도로도 넘길 수 없는 문턱
             hi = best[i]
-            if hi is not None:
+            if scaled and hi is not None:
                 for k, b in enumerate(br, 1):
                     m = _i(b.get("min"))
                     if m > hi:

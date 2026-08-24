@@ -40,6 +40,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
     sys.path.insert(0, str(_HERE))
 
+import vn_core                                                    # noqa: E402
 from vn_core import (VNError, atomic_write_json, load_json_safe,   # noqa: E402
                      safe_slug)
 
@@ -70,8 +71,8 @@ def _require_pil():
 # (자가진단이 저장소를 복제해 이 모듈만 적재하므로 — 그때도 자기 트리 안에만 쓴다.)
 ROOT = _HERE.parent
 MANIFEST = ROOT / "project" / "manifest.json"
-SCENES = ROOT / "project" / "scenes"
 OUT = ROOT / "output" / "print"          # 함수는 이 전역을 호출 시점에 읽는다(테스트가 갈아끼운다)
+# 장면 폴더 상수는 두지 않는다 — 훑기는 vn_core.iter_scenes 하나뿐이다.
 
 MM_PER_IN = 25.4
 
@@ -385,19 +386,19 @@ def export_one(scene_id: str, src_path: Path, short_in, long_in, dpi, bleed, anc
 
 
 def collect(scene_filter, include_all):
+    """인화 대상 장면 — 훑기와 '실릴 컷' 판정은 vn_core 단일 출처를 쓴다.
+
+    손상된 장면 한 개가 인화 배치를 통째로 막지 않는다(iter_scenes 가 건너뛴다).
+    --scene 으로 한 장을 지목한 경우는 사용자가 그 컷을 명시적으로 고른 것이므로
+    승인 여부를 묻지 않는다 — 감상본·프리플라이트와 같은 규약이다.
+    """
     if not MANIFEST.exists():
         raise PrintArgError("오류: project/manifest.json 이 없습니다.")
     out = []
-    for f in sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []:
-        sc = load_json_safe(f, {})       # 손상된 장면 한 개가 인화 배치를 통째로 막지 않게 한다
-        if not sc:
-            continue
+    for _f, sc in vn_core.iter_scenes():
         if scene_filter and sc.get("scene_id") != scene_filter:
             continue
-        sel = (sc.get("assets", {}).get("selected_image") or "").strip()
-        if not sel:
-            continue
-        if not include_all and sc.get("status") != "APPROVED" and not scene_filter:
+        if not vn_core.is_deliverable(sc, include_all or bool(scene_filter)):
             continue
         out.append(sc)
     return out
@@ -437,7 +438,7 @@ def contact_sheet(scenes, cols=3):
         x = pad + c * (cell_w + gap)
         y = pad + 90 + r * (cell_h + label_h + gap)
         draw.rectangle([x, y, x + cell_w, y + cell_h], fill=(225, 216, 198), outline=(180, 165, 140))
-        sel = (sc.get("assets", {}).get("selected_image") or "").strip()
+        sel = vn_core.selected_of(sc)
         p = ROOT / sel
         if sel and p.exists():
             try:
@@ -476,7 +477,7 @@ def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
         emit("재단선은 블리드가 있어야 그릴 수 있습니다 — --bleed 0.125 를 함께 주세요.")
     for sc in scenes:
         sid = sc.get("scene_id", "?")
-        sel = (sc.get("assets", {}).get("selected_image") or "").strip()
+        sel = vn_core.selected_of(sc)
         p = ROOT / sel
         if not p.exists():
             emit(f"[{sid}] 원본 없음: {sel}")

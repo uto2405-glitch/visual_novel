@@ -33,9 +33,10 @@
   * 프론트는 서버 데이터를 innerHTML 로 넣지 않는다(studio.html 안전 규약).
   * 쓰기 요청은 vn_core.WRITE_LOCK 으로 직렬화된다.
 
-계층: vn_core(경로·JSON·원자적 쓰기) ← advance_scene(저장소) ← scene_ops(상태 전이)
+계층: vn_core(경로·JSON·원자적 쓰기·장면 훑기) ← scene_ops(상태 전이·장면 생성)
       ← webapp(HTTP). 이 파일에는 **전이 규칙도 도메인 로직도 없다** — 라우트는 아래를
-      부르는 얇은 어댑터다.
+      부르는 얇은 어댑터다. CLI(advance_scene)는 여기서 부르지 않는다 — 한동안 그쪽이
+      재수출한 이름으로 vn_core 를 썼는데, 계층 4가 계층 2를 지나 계층 0에 닿는 우회로였다.
         scene_ops    장면 상태 전이·필드 편집        vn_compose  장면 구성·대화→장면
         prompt_build 프롬프트 문자열(이미지·스토리챗)  gen_jobs    생성 작업 상태기계
         talk_store   대화 로그                        print_export/export_viewer  내보내기
@@ -80,7 +81,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import advance_scene as adv  # noqa: E402
 import gen_jobs  # noqa: E402
 import local_llm  # noqa: E402
 import make_grok_input  # noqa: E402
@@ -180,9 +180,10 @@ def _load_json_safe(path: Path) -> dict | None:
 
 # ---------------------------------------------------------------- 상태·도메인
 def scene_image_url(sc: dict) -> str | None:
-    rel = (sc.get("assets", {}).get("selected_image") or "").strip()
+    rel = vn_core.selected_of(sc)      # 선택본 판정의 단일 출처
     if not rel:
-        raws = sc.get("assets", {}).get("raw_images", [])
+        assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
+        raws = assets.get("raw_images") or []
         rel = raws[0] if raws else ""
     if rel and rel.startswith("images/") and (ROOT / rel).exists():
         return "/img/" + rel[len("images/"):]
@@ -220,7 +221,7 @@ def _print_measure(rel: str, key: tuple) -> dict:
 
 def scene_print(sc: dict) -> dict | None:
     """장면 선택 이미지의 인화 규격 요약(없으면 None). 실물 인화 목표용."""
-    sel = (sc.get("assets", {}).get("selected_image") or "").strip()
+    sel = vn_core.selected_of(sc)
     if not sel:
         return None
     anchor = (sc.get("print", {}) or {}).get("crop_anchor", "center")
@@ -250,22 +251,23 @@ def save_favorites(ids: list[str]) -> None:
 def state() -> dict:
     mf = _load_json_safe(MANIFEST) if MANIFEST.exists() else None
     scenes = []
-    for f in (sorted(adv.SCENES.glob("SCENE-*.json")) if adv.SCENES.exists() else []):
-        sc = _load_json_safe(f)
-        if sc is None:
-            continue  # 손상 장면은 건너뛰고 나머지 UI 는 살린다
-        is_end, end_label = vn_compose.ending_of(sc)
+    # 훑기·정렬·손상 파일 처리는 vn_core.iter_scenes 하나에 있다(손상 장면은 건너뛰고
+    # 나머지 UI 는 살린다). 도구마다 다르게 훑으면 같은 프로젝트가 화면마다 다른 개수로 보인다.
+    for _f, sc in vn_core.iter_scenes():
+        is_end, end_label = vn_core.ending_of(sc)
+        assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
         scenes.append({
             "scene_id": sc.get("scene_id"), "scene_order": sc.get("scene_order"),
             "status": sc.get("status"), "purpose": sc.get("purpose", ""),
             "dialogue": sc.get("dialogue", []),
-            "prompt": sc.get("prompt", {}).get("grok_output", ""),
-            "raw_images": sc.get("assets", {}).get("raw_images", []),
-            "selected_image": sc.get("assets", {}).get("selected_image", ""),
+            "prompt": (sc.get("prompt") or {}).get("grok_output", "")
+                      if isinstance(sc.get("prompt"), dict) else "",
+            "raw_images": assets.get("raw_images", []),
+            "selected_image": vn_core.selected_of(sc),
             "review": sc.get("review", {}), "image_url": scene_image_url(sc),
             "print": scene_print(sc),
             "choices": sc.get("choices", []), "branch": sc.get("branch", []),
-            # 엔딩 표기는 감상본과 같은 규칙으로 정규화한다(vn_compose.ending_of).
+            # 엔딩 표기는 감상본과 같은 규칙으로 정규화한다(vn_core.ending_of).
             # 화면은 ending_label → purpose 순으로 이름을 고른다.
             "ending": is_end, "ending_label": end_label,
             "episode": sc.get("episode"),   # 화 단위 선택(뷰어)용
@@ -348,7 +350,7 @@ def _require_scene(sid) -> Path:
     """
     if not vn_core.is_scene_id(sid):
         raise VNError(f"장면 ID 형식이 올바르지 않습니다(SCENE-001 형식): {sid!r}")
-    path = adv.scene_path(sid)
+    path = vn_core.scene_path(sid)
     if not path.exists():
         raise VNError(f"장면을 찾을 수 없습니다: {sid}")
     return path
@@ -356,7 +358,7 @@ def _require_scene(sid) -> Path:
 
 def _load_scene(sid) -> dict:
     """검증된 장면 읽기 — 손상 파일은 VNError(=400)로, 요청 스레드는 살아남는다."""
-    return adv.load(_require_scene(sid))
+    return vn_core.load_dict(_require_scene(sid))
 
 
 # ---------------------------------------------------------------- POST 라우팅
@@ -402,7 +404,7 @@ def r_set_prompt(b):
 
 def r_preflight(b):
     sc = _load_scene(b.get("scene_id"))
-    sel = (sc.get("assets", {}).get("selected_image") or "").strip()
+    sel = vn_core.selected_of(sc)
     if not sel:
         raise VNError("선택된 이미지가 없습니다. 먼저 이미지를 선택하세요.")
     size = print_preflight.image_size(ROOT / sel)
@@ -503,7 +505,7 @@ def r_approve(b):
 
 
 def r_check(b):
-    code, out = adv.run_checker()
+    code, out = vn_core.run_checker()
     return {"pass": code == 0, "output": out}
 
 
@@ -545,9 +547,9 @@ def r_gen_image(b):
     sync:true 면 예전처럼 끝날 때까지 기다렸다가 결과를 반환한다.
     """
     sid = b.get("scene_id")
-    sc = _load_scene(sid)
-    if sc.get("status") == "APPROVED":
-        raise VNError("APPROVED 장면입니다. 다시 생성하려면 먼저 revise 하세요.")
+    # 승인 잠금 안내는 scene_ops 하나가 낸다 — 라우트마다 다른 문장을 쓰면 같은 거절인데
+    # 다음에 할 일(revise 명령)이 화면마다 보이기도 하고 안 보이기도 한다.
+    sc = scene_ops.assert_mutable(sid, "이미지를 다시 생성하려면")
     n = max(1, min(int(b.get("n", 1) or 1), 4))
 
     def work():
@@ -566,9 +568,7 @@ def r_refetch(b):
     끊긴 경우, 과금을 다시 치르지 않고 결과만 회수하는 경로다.
     """
     sid = b.get("scene_id")
-    sc = _load_scene(sid)
-    if sc.get("status") == "APPROVED":
-        raise VNError("APPROVED 장면입니다. 후보를 다시 받으려면 먼저 revise 하세요.")
+    sc = scene_ops.assert_mutable(sid, "후보를 다시 받으려면")
 
     def work():
         gen_jobs.note(sid, "이미 만들어진 결과를 다시 받는 중… (무과금)")
@@ -610,7 +610,10 @@ def r_talk(b):
     incoming = [{"role": m.get("role"), "content": str(m.get("content", "") or "")}
                 for m in raw
                 if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
-    sysmsg, meta = local_llm.persona_prompt(b.get("character_id"))
+    # 프롬프트 조립은 prompt_build, 서버 전송은 local_llm — 두 일을 한 이름 뒤에 섞지 않는다.
+    # (예전에는 local_llm 이 prompt_build 를 되받아 넘겨주는 통로를 갖고 있었고, 그것이
+    #  이 저장소에 마지막으로 남은 import 순환이었다. 호출부는 이 두 줄뿐이었다.)
+    sysmsg, meta = prompt_build.persona_prompt(b.get("character_id"))
     cid = str(meta["character_id"])
     reset = bool(b.get("reset"))
     # 모델에 넘길 창은 병합 이력 기준 — 빈 화면에서 시작해도 대화가 이어진다.
@@ -622,7 +625,7 @@ def r_talk(b):
     reply = local_llm.chat([{"role": "system", "content": sysmsg}] + window)
 
     last_user = next((m["content"] for m in reversed(context) if m["role"] == "user"), "")
-    clean, photo_meta = local_llm.resolve_photos(reply, meta.get("album", {}), last_user)
+    clean, photo_meta = prompt_build.resolve_photos(reply, meta.get("album", {}), last_user)
     photos = [{"scene_id": p["scene_id"], "url": "/img/" + p["rel"][len("images/"):],
                "caption": p.get("caption", "")}
               for p in photo_meta if p["rel"].startswith("images/")]

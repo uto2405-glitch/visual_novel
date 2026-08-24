@@ -4,6 +4,8 @@
 서버·폰트·네트워크 없이 어디서든(폰 포함) 열리는 자족 파일. 이미지가 base64 로 내장되어
 파일 하나가 곧 디지털 소장본이다. VN 모드(타자기·자동/스킵·이어보기·선택지 affection·
 분기·엔딩·백로그·장면 이동·시네마틱·설정)와 세로 스크롤 웹툰 모드, 화(episode) 구분을 포함한다.
+폰에 복사해 '홈 화면에 추가'로 여는 쓰임이라 앱 겉모습(theme-color·홈 화면 아이콘·전체화면)도
+함께 넣는다 — 아이콘은 인라인 data URI 라 외부 요청 0 이라는 성질은 그대로다.
 
 재생 엔진은 스튜디오와 공용이다: ``tools/vn_runtime.js`` 를 빌드할 때 __RUNTIME__ 자리에
 그대로 인라인하므로 단일 HTML 자기완결 성질(외부 요청 0)은 그대로다. VN 재생(mount)뿐 아니라
@@ -30,18 +32,20 @@ import html as _html
 import io
 import json
 import re
+import struct
 import sys
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vn_core                                          # noqa: E402
 from vn_core import (VNError, atomic_write_text,        # noqa: E402
-                     load_json_safe, load_manifest, safe_slug)
+                     load_manifest, safe_slug)
 
 # 경로·JSON·원자적 쓰기·콘솔 방어는 vn_core 가 단일 출처다(import 만으로 콘솔 보호가 걸린다).
+# 장면 폴더는 여기서 다시 잡지 않는다 — 훑기는 vn_core.iter_scenes 하나만 쓴다.
 ROOT = vn_core.ROOT
 MANIFEST = vn_core.MANIFEST
-SCENES = vn_core.SCENES
 OUT_DIR = vn_core.OUTPUT / "viewer"
 # 스튜디오 뷰어와 공용인 VN 재생 엔진. 감상본은 이 파일을 인라인해 자기완결을 유지한다.
 RUNTIME_JS = vn_core.TOOLS / "vn_runtime.js"
@@ -51,6 +55,12 @@ CACHE_DIR = vn_core.OUTPUT / ".cache" / "viewer"
 CACHE_MAX = 160          # 오래된 항목부터 정리하는 상한(옵션을 바꿔가며 굽는 경우 대비)
 
 NAME_COLORS = ["#5FB39A", "#D9A441", "#C77DBB", "#6FA8DC", "#E07A5F", "#84C18B", "#B58BE0", "#E0A458"]
+
+# 폰 홈 화면에 놓이는 소장본의 겉모습 — 감상본 HTML 과 PWA 번들이 같은 값을 쓴다.
+# (export_pwa 가 여기서 가져간다. 두 벌이면 같은 작품인데 앱 색·아이콘이 달라진다.)
+THEME = "#17110D"          # TEMPLATE 의 --bg 와 같은 색: 주소창·상태바 색
+ACCENT = (224, 166, 75)    # TEMPLATE 의 --amber
+APPLE_ICON_PX = 180        # iOS 홈 화면 아이콘 기준 크기
 
 # 폰트 임베드(옵션) — 확장자 → (mime, css format)
 FONT_EXT = {".woff2": ("font/woff2", "woff2"), ".woff": ("font/woff", "woff"),
@@ -82,6 +92,45 @@ def char_color(cid: str) -> str:
     for c in str(cid):
         h = (h * 31 + ord(c)) & 0xFFFFFFFF
     return NAME_COLORS[h % len(NAME_COLORS)]
+
+
+# ------------------------------------------------------------ 앱 아이콘(외부 자원 0)
+_ICON_CACHE: dict[int, bytes] = {}
+
+
+def app_icon_png(size: int = APPLE_ICON_PX) -> bytes:
+    """방사형 그라데이션 앱 아이콘 PNG 바이트(투명 없음 — maskable 안전).
+
+    Pillow 없이 표준 라이브러리(zlib+struct)만으로 만든다. 감상본은 파일 하나가 곧
+    소장본이라 외부 이미지를 참조할 수 없고, PWA 번들도 같은 아이콘을 써야 폰 홈 화면에서
+    두 경로가 같은 작품으로 보인다. 같은 크기는 다시 굽지 않는다(감상본+PWA 연속 실행).
+    """
+    size = max(16, int(size))
+    if size in _ICON_CACHE:
+        return _ICON_CACHE[size]
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        c = tag + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+    cx = cy = size / 2
+    edge = (int(THEME[1:3], 16), int(THEME[3:5], 16), int(THEME[5:7], 16))
+    rows = bytearray()
+    for y in range(size):
+        rows.append(0)                       # PNG 행 필터(None)
+        for x in range(size):
+            t = min(1.0, ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 / (size / 2))
+            rows += bytes(int(ACCENT[i] * (1 - t) + edge[i] * t) for i in range(3))
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+           + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
+    _ICON_CACHE[size] = png
+    return png
+
+
+def app_icon_data_uri(size: int = APPLE_ICON_PX) -> str:
+    """감상본 head 에 인라인할 아이콘 — data URI 라 외부 요청이 0 인 성질을 깨지 않는다."""
+    return "data:image/png;base64," + base64.b64encode(app_icon_png(size)).decode("ascii")
 
 
 # ------------------------------------------------------------ 이미지 → data URI (+캐시)
@@ -268,16 +317,12 @@ def build_data(include_all: bool, max_edge: int, quality: int, cover_id: str | N
     fmt = "webp" if webp else "jpeg"
     scenes = []
     missing = []
-    for f in sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []:
-        sc = load_json_safe(f, {})
-        if not sc:
+    # 장면 훑기와 "감상본에 실릴 컷인가" 판정은 vn_core 단일 출처를 쓴다 —
+    # 인화(print_export)·프리플라이트·진단이 같은 함수를 보므로 목록이 서로 갈리지 않는다.
+    for f, sc in vn_core.iter_scenes():
+        if not vn_core.is_deliverable(sc, include_all):
             continue
-        assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
-        sel = str(assets.get("selected_image") or "").strip()
-        if not sel:
-            continue
-        if not include_all and sc.get("status") != "APPROVED":
-            continue
+        sel = vn_core.selected_of(sc)
         lines = []
         for d in (sc.get("dialogue") if isinstance(sc.get("dialogue"), list) else []):
             if not isinstance(d, dict):
@@ -420,6 +465,15 @@ TEMPLATE = """<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>__TITLE__</title>
+<!-- 앱 겉모습 — 폰에 복사해 '홈 화면에 추가'로 여는 소장본이라 스튜디오 문서와 같은
+     차림을 준다: 상태바 색·홈 화면 아이콘·주소창 없는 전체화면.
+     아이콘은 인라인 data URI 다(외부 요청 0 — 파일 하나만 옮겨도 그대로 보인다). -->
+<meta name="theme-color" content="__THEME__">
+<link rel="apple-touch-icon" href="__APPICON__">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="__TITLE__">
 <style>
 :root{--bg:#17110D;--ink:#EFE4D0;--sub:#A79680;--line:#3A2C1F;--amber:#E0A64B;
 --paper:#F2E8D5;--pink:#241C14}
@@ -452,19 +506,16 @@ border-radius:99px;padding:8px 14px;font-size:12.5px;font-weight:600}
 #scrim{position:absolute;inset:0;
 background:radial-gradient(115% 85% at 50% 38%,rgba(21,15,10,.42),rgba(14,10,6,.95))}
 #card>*:not(#cover):not(#scrim){position:relative;z-index:1}
-/* ---- 세로 스크롤 웹툰 모드 ---- */
+/* ---- 세로 스크롤 웹툰 모드 ----
+   컷·대사·화 머리의 **구조 CSS 는 공용 엔진(vn_runtime.js)이 들고 있다**(.vnr-scroll).
+   여기 남는 것은 이 파일에만 있는 껍데기(고정 오버레이·상단바)와 팔레트 토큰뿐이다 —
+   같은 규칙을 두 벌로 두면 스튜디오와 감상본의 스크롤 화면이 조용히 갈린다.
+   토큰은 자식으로 상속되므로 #scroll 한 곳에 둔다. 엔진이 없으면 토큰만 남고
+   글이 세로로 흐를 뿐, 이 껍데기 덕분에 화면이 깨지지는 않는다. */
 #scroll{position:fixed;inset:0;background:var(--bg);display:none;overflow-y:auto;z-index:4;
--webkit-overflow-scrolling:touch}
+-webkit-overflow-scrolling:touch;
+--vnr-line:var(--line);--vnr-sub:var(--sub);--vnr-accent:var(--amber);--vnr-pick:var(--amber)}
 #scroll.on{display:block}
-#cuts{max-width:820px;margin:0 auto}
-#scroll .cut img{width:100%;display:block}
-#scroll .say{padding:12px 18px;border-bottom:1px solid var(--line);
-word-break:keep-all;overflow-wrap:anywhere}
-#scroll .say b{font-weight:800}
-#scroll .say .nar{color:var(--sub);font-style:italic;text-align:center;display:block}
-#scroll .say .pick{color:var(--amber)}
-#scroll .ep{padding:20px 18px 9px;color:var(--amber);font-weight:800;font-size:13px;
-letter-spacing:.06em;border-bottom:1px solid var(--line)}
 #scroll .topbar{position:sticky;top:0;background:rgba(23,17,13,.9);backdrop-filter:blur(4px);
 padding:10px 14px;display:flex;justify-content:space-between;align-items:center;z-index:2;border-bottom:1px solid var(--line)}
 #scroll .topbar .b{background:rgba(30,24,18,.72);color:var(--ink);border:1px solid var(--line);
@@ -478,8 +529,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 #card{padding:calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
  calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left))}
 #scroll .topbar{padding-top:calc(10px + env(safe-area-inset-top))}
-#cuts{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
- padding-bottom:calc(44px + env(safe-area-inset-bottom))}
+/* 컷 목록(#cuts)의 safe-area 여백도 엔진의 .vnr-scroll 이 함께 처리한다. */
 </style></head><body>
 <div id="card">
 <img id="cover" alt="" hidden><div id="scrim"></div>
@@ -515,9 +565,9 @@ function hideShell(){$("card").classList.add("hide");$("scroll").classList.remov
 function showCard(){$("scroll").classList.remove("on");$("card").classList.remove("hide");
  var b=$("bStart");if(b&&b.focus)b.focus()}
 
-/* ---- 세로 스크롤 웹툰 모드 ---- 그리기는 공용 엔진의 renderScroll 이 맡는다.
-   스튜디오와 같은 DOM·같은 클래스(.cut/.ep/.say/.nar/.pick)로 그려지므로 이 파일의 CSS 는
-   그대로 두고 함수 호출만 넘긴다 — 두 벌이던 렌더러가 한 벌이 됐다. */
+/* ---- 세로 스크롤 웹툰 모드 ---- 그리기도 스타일도 공용 엔진(renderScroll)이 맡는다.
+   엔진이 컨테이너에 .vnr-scroll 을 붙이고 구조 CSS 를 넣으므로, 이 파일은 껍데기와
+   팔레트 토큰만 대고 함수를 부른다 — 두 벌이던 렌더러도 CSS 도 한 벌이 됐다. */
 var scrollBuilt=false,scrollView=null;
 function buildScroll(){
  if(scrollBuilt)return;
@@ -622,10 +672,13 @@ def build_html(include_all: bool, max_edge: int, quality: int,
     fcss = font_css(find_font(font_spec), used_text(data))
     parts = {"__TITLE__": html_escape(data["title"]),   # 꺾쇠·따옴표 든 제목이 문서를 깨지 않게
              "__FONTCSS__": fcss,
+             "__THEME__": THEME,
+             "__APPICON__": app_icon_data_uri(),        # 홈 화면 아이콘(인라인 — 외부 요청 0)
              "__RUNTIME__": load_runtime(),             # 감상본 자기완결: 엔진을 통째로 품는다
              "__DATA__": payload}
     # 한 번에 치환한다 — 순차 치환이면 앞서 넣은 값 안의 토큰이 다시 치환될 수 있다.
-    html = re.sub(r"__(?:TITLE|FONTCSS|RUNTIME|DATA)__", lambda m: parts[m.group(0)], TEMPLATE)
+    html = re.sub(r"__(?:TITLE|FONTCSS|THEME|APPICON|RUNTIME|DATA)__",
+                  lambda m: parts[m.group(0)], TEMPLATE)
     return data, html
 
 

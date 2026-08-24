@@ -86,6 +86,7 @@ copy templates\manifest.json project\manifest.json
 # manifest 에 제목·캐릭터·장소를 채운다 (prompt_anchor 는 필수 — 컷 간 일관성의 근거)
 # output.visual_style 에 작품 화풍을 적는다
 # 분기 없는 선형 작품이면 dating 블록을 지운다 (지우면 호감도 미터가 숨는다)
+# 실물 인화를 할 작품이면 output.min_long_edge_px 와 image_generator.max_long_edge_px 를 함께 올린다 (아래 ⚠)
 python tools/check_protocol.py
 ```
 

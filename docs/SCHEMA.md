@@ -278,9 +278,24 @@ FAIL 이 아니다.
 
 `status`·`review`·`assets` 는 상태 전이·승인 잠금·과금 복구(`makefun_tasks`)가 걸려 있어
 손으로 고치면 불변식이 깨진다. APPROVED 장면은 편집 경로에서도 거부되고, 먼저 `revise` 로
-되돌려야 한다.
+되돌려야 한다 — **예외는 `print` 하나뿐이다**(바로 아래).
 `prompt` 는 `scene_ops.set_prompt` 가 A6 앵커를 확인하며 쓰는 값이고,
 `version` 은 `scene_ops.revise` 가 되돌릴 때마다 1씩 올린다(그래서 편집 경로가 막혀 있다).
+
+> ### ⚠ 승인 잠금의 유일한 예외 — `print`(인화 크롭·여백)
+> **`print` 만 담은 편집은 APPROVED 장면에서도 통과한다.** 구현은
+> `scene_ops.update_fields` 의 `print_only`(요청 키가 정확히 `{print}` 일 때)이고,
+> 그 예외에 이름을 준 것이 `scene_ops.set_crop` = `POST /api/set-crop` =
+> 스튜디오 [✂ 크롭 미리보기] 의 **기준** 선택이다. 인화 크롭은 승인 게이트가 지키는
+> 창작 산출물이 아니라 출력 설정이고, 인화는 대개 승인한 **뒤에** 하기 때문이다.
+>
+> **그러니 승인 컷의 크롭을 바꾸려고 `revise` 를 부르지 마라.** `revise` 는 인화 설정 한 글자
+> 때문에 사람 승인 결과물을 통째로 날린다 — `status` 가 되돌아가고, `review.auto`·`review.human`
+> 이 둘 다 `PENDING` 이 되고, **`assets.selected_image` 가 지워진다**(§2.7 · `scene_ops.revise`).
+> 그 컷은 후보를 다시 고르고 다시 승인해야 원래 자리로 돌아온다.
+>
+> 예외는 `print` **단독**일 때만이다. `print` 에 대사·분기·카메라 같은 다른 필드를 섞어 보내면
+> `print_only` 가 아니게 되어 그 편집은 통째로 거부된다(승인 가드가 그대로 걸린다).
 
 ### 2.2 장면 계획 (프롬프트의 재료)
 
@@ -436,6 +451,7 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 서식이 `templates/review-report.json` 이다 — **장면 파일에는 들어가지 않는** 별도 기록이고,
 장면에 남는 것은 위 표의 `review` 블록뿐이다. `APPROVED` 장면의 `status`·`selected_image` 를
 바꾸려면 먼저 `revise` 로 되돌려야 한다 — `scene_ops` 가 모든 쓰기 경로에서 이를 막는다.
+(§2.1 의 `print` 예외도 **이 둘은 건드리지 않는다** — 인화 설정만 바꾸고 승인 기록은 그대로 둔다.)
 
 ### 2.8 `print` — 인화 규칙 (선택)
 
@@ -458,7 +474,48 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 > `--anchor`/`--mode`/`--bg` 를 쓴다(`export_batch`: `pol.get("crop_anchor", anchor)`).
 > 그래서 **필요한 컷에만** 적는다 — 모든 장면에 `"crop_anchor": "center"` 같은 기본값이
 > 박혀 있으면 `--anchor top` 이 아무 말 없이 무시된다. 같은 이유로
-> `templates/scene.json` 에는 `print` 블록을 두지 않는다(새 장면 전부에 복사되므로).
+> `templates/scene.json` 과 `examples/scenes/SCENE-001.json` 에는 `print` 블록을 두지 않는다
+> (둘 다 새 장면·데모 장면 전부에 그대로 복사되므로).
+
+**승인 후에도 크롭은 바꿀 수 있다 — `revise` 하지 마라(선택본이 지워진다).**
+`print` 만 바꾸는 편집은 APPROVED 장면에서도 통과하는 **승인 잠금의 유일한 예외**다(§2.1).
+크롭을 바꾸려고 `revise` 를 부르면 `status` 가 내려가고 `review` 가 `PENDING` 으로 돌아가고
+`assets.selected_image` 가 비워져서 **사람이 찍은 승인 도장이 사라진다.**
+스튜디오에서는 [✂ 크롭 미리보기] 의 **기준** 을 바꾸면 되고(`POST /api/set-crop`),
+파일을 직접 고칠 때도 `print` 블록만 고치면 된다.
+
+### 2.9 재생 엔진 전달 스키마 — 장면이 **감상 화면에 실릴 때**의 모양
+
+장면 파일은 재생 엔진(`tools/vn_runtime.js`)에 그대로 넘어가지 않는다. **짧은 전달 스키마**로
+한 번 접힌다 — 감상본은 이미지를 data URI 로 굽고, 스튜디오는 `/api/state` 의 장면을 URL 로
+가리키기 때문이다. 그 모양은 이렇다:
+
+```
+data  = {title, scenes:[…], dating:{max,start_affection}|null, episodes:[{ep,title}], cover?}
+scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, ending?, ending_label?}
+```
+
+| 어디 | 무엇 |
+|---|---|
+| **정본** | `export_viewer.build_data()` — 필드 이름·생략 규칙·정렬이 여기서 정해진다 |
+| 상세 주석 | `tools/vn_runtime.js` 파일 머리(`data`/`scene`/`choice`/`branch` 한 줄 규약) |
+| 두 번째 생산자 | `tools/studio.js` 의 `vnScene()`/`vnData()` — `/api/state` 장면을 같은 모양으로 조립 |
+
+`lines[]` 의 짧은 키는 `n`=화자 이름 · `c`=화자 색 · `t`=대사 · `p`=대사창 위치(§2.4).
+`img` 는 감상본에서 **data URI**, 스튜디오에서는 **이미지 URL** 이다 — 엔진은 둘을 구분하지
+않는다(호스트가 `imageSrc(sc, kind)` 로 준다). `cover` 는 감상본만 쓴다(표지로 쓸 장면 인덱스).
+
+**어떤 장면이 실리는가**: `selected_image` 가 있고 `status == "APPROVED"` 인 컷만.
+`--all`(감상본) · `include_all`(내부)이면 status 를 보지 않고 `selected_image` 만 본다.
+이 판정의 정본은 **`vn_core.is_deliverable(sc, include_all)`** 하나다 — 감상본·인화·미리보기가
+같은 답을 내야 "감상본에는 있는데 인화 목록에는 없는 컷"이 생기지 않는다.
+감상본에 실리지 않은 장면을 가리키는 `goto` 는 경고와 함께 떼어진다(§2.5).
+
+> ### ⚠ 생산자가 **둘**이다 — 새 필드는 두 곳을 함께 고친다
+> `build_data`(감상본)와 `vnScene`(스튜디오 뷰어)은 이 모양을 **각자 손으로 조립한다.**
+> 그래서 장면에 새 연출 필드를 넣고 한쪽만 고치면, 그 연출이 **스튜디오에서는 보이는데
+> 소장본에는 없거나 그 반대**가 된다 — 검사기도 자가진단도 "장면 파일에 값이 있다"까지만
+> 보므로 이 어긋남은 조용하다. 재생 화면에 보여야 하는 필드는 §5 의 체크리스트를 따른다.
 
 ---
 
@@ -475,6 +532,7 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 | `logs/makefun_usage.jsonl` | `makefun_client` | 사람 (비용 추적) | ✂ 제외 | **종량제 지출 이력** |
 | `logs/webapp.log` | 스튜디오 서버 | 사람 (장애 추적) | ✂ 제외 | 오류·생성 실패 기록 |
 | `logs/lan_pin.txt` | 스튜디오 `--lan` | 사람 (PIN 확인) | ✂ 제외 | 이번 실행의 접속 PIN |
+| `logs/gen_locks/<scene_id>.lock` | `gen_jobs.claim` (생성 선점) | `gen_jobs` — 웹·CLI 양쪽 | ✂ 제외 | 없음 — **지워도 된다**(§3.5) |
 | `project/grok_inputs/<scene_id>.txt` | `make_grok_input` | 사람 (grok.com 에 붙여넣는 입력) | ✂ 제외 | 없음 — 언제든 다시 만든다 |
 | `project/story/storyline.md` | 사람 + 로컬 LLM | 프롬프트 맥락 · 대화 페르소나 | ✔ 추적 | 작품 줄거리 |
 | `project/story/character_bible.md` | 사람 | 대화 페르소나 `[너에 대한 기록]` | ✔ 추적 | 인물의 취향·기념일·기억 |
@@ -549,6 +607,27 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 `print_export --only SCENE-003,SCENE-007` 로 이어진다. 형식이 깨져도 빈 목록으로 살아남고,
 `SCENE-\d{3,}` 형식이 아닌 값은 걸러진다.
 
+### 3.5 `logs/gen_locks/<scene_id>.lock` — 생성이 거부되는 이유
+
+§3 표의 파생물 중 **작업이 거부되는 원인이 되는 유일한 것**이라 따로 적어 둔다. 파일 하나가 곧
+"이 장면은 지금 어딘가에서 굽고 있다"는 표시다(`gen_jobs`). 웹 스튜디오와 CLI 는 다른
+프로세스라 메모리 표시를 공유하지 못하므로, **같은 장면을 두 번 굽는 이중 과금을 막는 것이
+이 파일 하나**다. 살아 있는 잠금을 만나면 생성이 이렇게 거부된다:
+
+```
+SCENE-007 이미지를 이미 생성 중입니다(생성 · pid 12345 · … 시작). 끝난 뒤 다시 시도하세요.
+```
+
+- **정말 굽고 있으면** 기다린다 — 끝나면 자동으로 풀린다. 서버를 Ctrl+C 로 정상 종료해도 즉시 풀린다.
+- **아무것도 굽고 있지 않은데 이 말이 나오면** 프로세스가 비정상 종료해 잠금이 남은 것이다.
+  Windows 에서는 pid 로 생존을 확인할 안전한 방법이 없어 **시각 기반 만료**로만 회수한다 —
+  마지막 진행 갱신에서 **20분**(`gen_jobs.STALE_SEC`)이 지나면 다음 시도가 알아서 회수한다.
+- 기다리기 싫으면 **그 `.lock` 파일을 지워도 된다.** 지워서 잃는 것은 없다(중복 방지 표시일 뿐).
+  단, 정말 생성 중인 장면의 잠금을 지우면 그 보호가 사라진다 — **같은 장면을 두 번 굽는 과금**이
+  그때 실제로 가능해진다.
+- `logs/` 에 쓸 수 없는 환경이면 잠금 파일이 아예 안 생기고 경고만 남는다(보호가 조용히
+  사라지지 않게). 그때는 프로세스 안에서만 중복이 막힌다.
+
 ---
 
 ## 4. `templates/` — 어떤 파일이 무엇인가
@@ -590,7 +669,10 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
    (새 작품이 구스키마로 시작되지 않도록). 캐릭터 필드를 바꿨다면 `templates/character.json` 도.
 3. `examples/` 도 맞춘다 — README 가 "데모로 초록불을 보라"고 안내하는 파일이고,
    `selftest` 가 이걸 복사해 검사기 PASS 를 확인한다.
-4. `python tools/check_protocol.py` → **RESULT: PASS**, `python tools/selftest.py` → 전체 통과.
+4. **감상 화면에 보여야 하면 두 생산자를 함께 고친다** — `export_viewer.build_data()` 와
+   `studio.js` 의 `vnScene()`. **한쪽만 고치면 스튜디오와 소장본의 연출이 갈린다**(§2.9).
+   필요하면 `vn_runtime.js` 머리의 규약 주석도 같이 고친다.
+5. `python tools/check_protocol.py` → **RESULT: PASS**, `python tools/selftest.py` → 전체 통과.
 
 `protocol/SCORECARD.md` 와 `tools/check_protocol.py` 는 에이전트가 수정할 수 없다.
 검사 기준 자체의 개정이 필요하면 CLAUDE.md 의 "채점표·검사기 개정 절차"를 따른다.

@@ -15,11 +15,12 @@
   "image_generator": {
     "provider": "MakeFun AI",
     "model": "a2e",
+    "max_long_edge_px": 2048,
     "api": {
       "base_url": "https://makefun.ai",
       "token_env": "MAKEFUN_API_TOKEN"
     },
-    "note": "토큰은 환경변수로만 주입한다. 이 파일에 값을 적지 않는다."
+    "note": "토큰은 환경변수로만 주입한다(이 파일에 값을 적지 않는다). max_long_edge_px 는 생성 요청 긴 변의 상한이다 — 인화하려면 output.min_long_edge_px 와 함께 올린다(4x6 1800 / 5x7 2250 / 8x10 3600, 하드 상한 4096). 한쪽만 올리면 요청이 이 값으로 깎인 채 과금되고 검사기 A3 도 FAIL 한다. 확인: python tools/makefun_client.py --check"
   },
   "output": {
     "mode": "visual_novel_scene_cards",

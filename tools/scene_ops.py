@@ -14,6 +14,7 @@ advance_scene 의 apply_prompt/cmd_add_images/cmd_select/do_approve/cmd_revise)�
 webapp 의 r_* 와 advance_scene 의 cmd_* 는 이 함수들을 부르는 얇은 어댑터만 남긴다.
 
 공개 API
+  create_scene(sid=None, fields=None, episode=...)  새 장면 파일 생성(생성 경로의 유일한 구현)
   set_prompt(sid, text, fix_anchors=False)        프롬프트 저장 → PROMPT + 자동 검사
   register_images(sid, run_check=True)            images/raw/<sid>/ 스캔 → 후보 등록·검사
   select_image(sid, rel)                          후보 1장을 selected_image 로
@@ -21,6 +22,8 @@ webapp 의 r_* 와 advance_scene 의 cmd_* 는 이 함수들을 부르는 얇은
   revise(sid, stage, note="")                     이전 단계로 되돌림(자료 보존)
   update_fields(sid, fields)                      장면 계획 필드 병합 저장(화이트리스트)
   set_crop(sid, anchor)                           인화 크롭 기준점(승인 잠금의 유일한 예외)
+  record_generation_tasks(sid, tasks, size=None)  생성 task id 기록(assets 쓰기의 유일한 통로)
+  assert_mutable(sid, what)                       승인 잠금 사전 점검(문구 한 벌) → 장면 dict
 
 CLI 어댑터를 위한 보조(웹은 쓰지 않는다)
   import_image_files(sid, paths, run_check=True)  외부 파일을 후보 폴더로 복사 후 등록
@@ -42,7 +45,7 @@ from __future__ import annotations
 import re
 import shutil
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -66,10 +69,24 @@ EDITABLE_FIELDS = ("purpose", "action_beat", "emotion", "time", "camera", "dialo
 # 이유는 오류 메시지 때문이다("오타난 필드"와 "건드리면 안 되는 필드"는 다른 사고다).
 PROTECTED_FIELDS = ("status", "review", "assets", "prompt", "scene_id", "scene_order", "version")
 CAMERA_KEYS = ("shot", "angle", "framing", "focus")
-PRINT_KEYS = ("crop_mode", "pad_color", "crop_anchor")
 # 크롭 집합의 정본은 vn_core 다(자르기 방식·웹 검증·여기가 같은 값을 봐야 한다).
 CROP_MODES = vn_core.CROP_MODES
 CROP_ANCHORS = vn_core.CROP_ANCHORS
+
+# 생성(create_scene)에만 허용되는 추가 필드 — 편집 경로(update_fields)에서는 여전히 금지다.
+# status/prompt 는 장면을 '어느 단계로 태어나게 할지'라서 만들 때 한 번은 정해야 한다.
+CREATE_ONLY_FIELDS = ("status", "prompt", "visual_style", "props")
+CREATABLE_FIELDS = EDITABLE_FIELDS + CREATE_ONLY_FIELDS
+# 생성 payload 에 있어도 **무시**하는 키 — 장면 dict 를 통째로 넘기는 호출부를 위해서다.
+# id·order 는 create_scene 이 계산한 값이 정본이고, assets·review·version 은 템플릿에서
+# 다시 만든다(비어 있지 않으면 위 _blank_meta 판정에 걸려 거부된다).
+IGNORED_ON_CREATE = ("scene_id", "scene_order", "assets", "review", "version")
+# 새로 태어나는 장면이 가질 수 있는 상태 — 이미지가 아직 없으므로 IMAGE 이후는 있을 수 없다.
+# (APPROVED 로 태어날 수 있으면 사람 승인 게이트를 생성 한 번으로 건너뛴다.)
+START_STATES = ("SCENE_PLAN", "PROMPT")
+GEN_TASKS_MAX = 20          # 장면당 보존하는 생성 task 기록 수(오래된 것부터 버린다)
+
+_INHERIT = ...              # create_scene(episode=...) 의 기본값 = "디스크에서 승계"
 
 _TEXT_LIMIT = 2000          # 한 필드에 들어갈 수 있는 글자 수 상한(장면 파일 비대화 방지)
 _MISSING = object()
@@ -140,6 +157,197 @@ def _deny_if_approved(sc: dict, sid: str, what: str) -> None:
     if sc.get("status") == "APPROVED":
         raise VNError(f"{sid} 는 APPROVED 입니다. {what} 먼저 되돌리세요:\n"
                       + _REVISE_HINT.format(sid=sid))
+
+
+def assert_mutable(sid: str, what: str) -> dict:
+    """장면을 읽어 돌려주되, APPROVED 면 **표준 문구**로 거절한다.
+
+    승인 잠금 안내 문장은 저장소에 한 벌만 있어야 한다. 예전에는 라우트마다 비슷하지만
+    다른 문장("승인된 장면입니다", "APPROVED 상태에서는…")을 직접 써서, 같은 거절인데
+    화면마다 다음에 할 일(revise 명령)이 보이기도 하고 안 보이기도 했다.
+
+    what 은 목적을 나타내는 어미까지 포함한 구절이다 — 예: "이미지를 생성하려면".
+    (완성 문장: "SCENE-007 는 APPROVED 입니다. 이미지를 생성하려면 먼저 되돌리세요: …")
+
+    **사전 점검이다.** 잠금을 들고 있지 않으므로, 여기를 통과한 뒤 실제 쓰기가 일어나기
+    전에 다른 요청이 승인할 수 있다. 진짜 가드는 각 전이 함수가 _LOCK 안에서 다시 한다.
+    호출부가 쓰기 전에 값싸게 실패하고 같은 문구를 보여주기 위한 것이지, 이 호출만으로
+    변경 권한이 확보되는 것은 아니다.
+    """
+    sc = _load(_require(sid))
+    _deny_if_approved(sc, sid, what)
+    return sc
+
+
+# ---------------------------------------------------------------- 장면 생성
+def _as_int(v: Any, fallback: int = 0) -> int:
+    """장면 파일의 숫자 필드는 문자열·null·실수로 손상돼 있을 수 있다 — 정수로만 받는다."""
+    if isinstance(v, bool):
+        return fallback
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _next_slot() -> tuple[str, int]:
+    """다음 (scene_id, scene_order). **반드시 _LOCK 안에서 부르고 그 안에서 저장해야 한다.**
+
+    번호는 **파일 이름**에서도 모은다. 예전 두 계산기(all_scenes 의 엄격 적재 /
+    next_scene_slot 의 관대 적재)는 둘 다 파일 안의 scene_id 만 봤다 — 그래서 손상되어
+    파싱되지 않는 SCENE-007.json 이 하나 있으면 다음 번호가 다시 7 로 계산되고,
+    존재 확인이 없는 경로에서는 그 파일을 **조용히 덮어썼다**. 파일명 기준으로 세면
+    손상 파일이 차지한 번호는 자연히 건너뛴다.
+
+    빈 번호(지운 장면의 자리)는 재사용하지 않는다 — 같은 id 가 다른 컷을 가리키면
+    이미지·프롬프트·검수 기록의 추적이 끊긴다(프로토콜: ID 임의 재사용 금지).
+    """
+    nums, order = [0], 0
+    for _f, sc in vn_core.iter_scenes():    # 관대 적재: 손상 파일도 아래 파일명 규칙으로 셈에 든다
+        m = re.fullmatch(r"SCENE-(\d+)", str(sc.get("scene_id", "")))
+        if m:
+            nums.append(int(m.group(1)))
+        order = max(order, _as_int(sc.get("scene_order"), 0))
+    for f in vn_core.scene_files():          # 파싱 실패한 파일까지 포함(번호 충돌 방지의 핵심)
+        m = re.fullmatch(r"SCENE-(\d+)", f.stem)
+        if m:
+            nums.append(int(m.group(1)))
+    return f"SCENE-{max(nums) + 1:03d}", max(order, 0) + 1
+
+
+def _seed_from_manifest(sc: dict, given: set) -> None:
+    """템플릿의 자리표시자 id(CHAR-001/LOC-001)를 실제 매니페스트의 첫 인물·장소로 바꾼다.
+
+    호출부가 직접 준 키는 건드리지 않는다. 이 보정이 없으면 '장면 하나 추가'로 만든 장면이
+    매니페스트에 없는 id 를 가리켜 검사기 A1 이 곧바로 FAIL 이고, 사용자는 왜 새 장면이
+    빨간지 알 수 없다.
+    """
+    mf = vn_core.load_manifest()
+    chars = [c.get("character_id") for c in mf.get("characters", []) or []
+             if isinstance(c, dict) and c.get("character_id")]
+    locs = [l.get("location_id") for l in mf.get("locations", []) or []
+            if isinstance(l, dict) and l.get("location_id")]
+    if chars and "characters" not in given:
+        sc["characters"] = chars[:1]
+        if "dialogue" not in given:
+            for line in (sc.get("dialogue") if isinstance(sc.get("dialogue"), list) else []):
+                if isinstance(line, dict):
+                    line["speaker_id"] = chars[0]
+    if locs and "location_id" not in given:
+        sc["location_id"] = locs[0]
+
+
+def _blank_meta(key: str, value: Any) -> bool:
+    """생성 payload 에 섞여 온 assets/review/version 이 '템플릿 기본값 그대로'인가.
+
+    장면 dict 를 통째로 넘기는 호출부(템플릿을 적재해 내용을 채우는 일괄 구성)가 있어서
+    이 세 키는 **내용 없이도** payload 에 들어온다. 비어 있으면 조용히 무시하고(어차피
+    템플릿에서 다시 만든다), 실제 데이터가 실려 있으면 거부한다 — 갓 태어난 장면에 후보
+    이미지나 사람 검수 결과가 있다는 건 버그이거나 승인 게이트를 건너뛰려는 시도다.
+    """
+    if key == "version":
+        return _as_int(value, 1) == 1
+    if not isinstance(value, dict):
+        return not value
+    if key == "assets":
+        return not (vn_core.selected_of({"assets": value}) or value.get("raw_images")
+                    or value.get("makefun_tasks"))
+    return (not value.get("notes")
+            and str(value.get("auto", "PENDING")) == "PENDING"
+            and str(value.get("human", "PENDING")) == "PENDING"
+            and not value.get("score"))
+
+
+def create_scene(sid: str | None = None, fields: dict | None = None,
+                 episode: Any = _INHERIT) -> dict:
+    """새 장면 파일 하나를 만든다 — **장면 생성의 유일한 구현**. 저장된 장면 dict 를 돌려준다.
+
+    예전에는 생성이 세 벌이었다(CLI 의 new, 스토리라인 일괄 구성, 대화→장면 1컷).
+    셋은 템플릿 적재·번호 계산·화 승계를 각자 했고, 결정적으로 **존재 확인이 갈렸다** —
+    CLI 는 잠금 안에서 두 번 확인했지만 대화→장면 경로에는 아예 없어서, 손상된 장면
+    파일이 하나 있으면 같은 번호가 다시 뽑혀 **기존 장면을 조용히 덮어썼다**.
+    되돌릴 수 없는 사고(원본 소실)이므로 생성은 여기 하나로 모은다.
+
+    순서: 템플릿 적재 → (fields 병합) → id·order 확정 → 화 승계 → **존재 확인** → 저장.
+    번호 계산부터 저장까지 전부 _LOCK 안이라, 동시에 눌러도 같은 번호가 두 번 나오지 않는다.
+
+    sid=None      다음 번호를 자동으로 고른다(파일명 기준 — 손상 파일의 번호도 건너뛴다).
+    sid="SCENE-012"  그 번호로 만든다. 형식이 틀리거나 **이미 있으면 VNError**(덮어쓰기 없음).
+    fields        장면 내용(CREATABLE_FIELDS). update_fields 와 **같은 정규화**를 거친다.
+                  템플릿을 적재해 채운 장면 dict 를 그대로 넘겨도 된다:
+                  scene_id·scene_order 는 무시하고 이 함수가 정하며(계산 결과가 정본),
+                  assets·review·version 은 **비어 있을 때만** 무시한다. 실제 자산이나
+                  검수 결과가 실려 있으면 거부한다 — 갓 만든 장면에 그런 값이 있을 수 없고,
+                  그 값들은 상태 전이 함수만이 만든다.
+    episode=...   (기본) fields 의 episode → 없으면 디스크의 마지막 장면에서 승계.
+                  승계가 없으면 3화 작업 중에 만든 장면에 화가 붙지 않아 감상본의 화
+                  선택에서 통째로 빠진다.
+    episode=None  화를 쓰지 않는 작품 — episode 키를 두지 않는다(없는 정보를 만들지 않는다).
+    episode=3     그 화로 고정(일괄 구성이 화 승계를 스스로 계산할 때 쓴다).
+
+    검사기는 여기서 돌리지 않는다 — 일괄 구성이 장면마다 서브프로세스를 띄우지 않도록,
+    검사는 호출부가 만들기를 끝낸 뒤 한 번만 한다.
+    """
+    if fields is None:
+        fields = {}
+    if not isinstance(fields, dict):
+        raise VNError("fields 는 객체({...})여야 합니다.")
+    blocked = sorted(k for k in ("assets", "review", "version")
+                     if k in fields and not _blank_meta(k, fields[k]))
+    if blocked:
+        raise VNError("장면 생성으로는 정할 수 없는 필드입니다: " + ", ".join(blocked)
+                      + " — 자산과 검수 결과는 상태 전이(add-images·select·approve)만이 만듭니다.")
+    unknown = sorted(k for k in fields
+                     if k not in CREATABLE_FIELDS and k not in IGNORED_ON_CREATE)
+    if unknown:
+        raise VNError("알 수 없는 장면 필드입니다: " + ", ".join(unknown)
+                      + " (가능: " + ", ".join(CREATABLE_FIELDS) + ")")
+    status = _text(fields.get("status", "SCENE_PLAN"), 20) or "SCENE_PLAN"
+    if status not in START_STATES:
+        raise VNError(f"새 장면은 {'/'.join(START_STATES)} 로만 만들 수 있습니다: {status!r} "
+                      "— 이미지가 없는 장면은 그 이후 단계일 수 없습니다.")
+    if "prompt" in fields and not isinstance(fields["prompt"], dict):
+        raise VNError("prompt 는 객체({...})여야 합니다.")
+
+    with _LOCK:
+        sc = _norm(vn_core.load_dict(vn_core.SCENE_TEMPLATE))
+        given = set(fields)
+        for key in EDITABLE_FIELDS:         # 요청 키 순서에 결과가 흔들리지 않게 항상 같은 순서로
+            if key in fields and key != "episode":
+                _apply_field(sc, key, fields[key])
+        if "visual_style" in fields:
+            sc["visual_style"] = _text(fields["visual_style"], 300)
+        if "props" in fields:
+            sc["props"] = _id_list(fields["props"], "props")
+        if "prompt" in fields:
+            prompt = dict(sc.get("prompt")) if isinstance(sc.get("prompt"), dict) else {}
+            for k, v in fields["prompt"].items():
+                # 이미지 프롬프트는 대사(_TEXT_LIMIT)보다 길 수 있다 — 잘라내면 앵커가 사라져
+                # A6 가 FAIL 이 나는데 원인은 화면 어디에도 보이지 않는다. 상한만 넉넉히 둔다.
+                prompt[str(k)[:40]] = v if isinstance(v, int) else _text(v, 8000)
+            sc["prompt"] = prompt
+        _seed_from_manifest(sc, given)
+        sc["status"] = status
+
+        new_sid, order = _next_slot()
+        sid = new_sid if sid is None else str(sid)
+        path = _scene_path(sid)             # 형식 검증 포함(경로 탈출 차단)
+        if path.exists():
+            raise VNError(f"{sid} 는 이미 존재합니다. 다른 번호를 쓰거나 기존 장면을 여세요.")
+        sc["scene_id"], sc["scene_order"] = sid, order
+
+        if episode is _INHERIT:      # norm_episode 는 양의 정수 아니면 None — or 로 이어도 안전
+            ep = vn_core.norm_episode(fields.get("episode")) or vn_core.last_episode()
+        else:
+            ep = vn_core.norm_episode(episode)
+        if ep is None:
+            sc.pop("episode", None)         # 화를 쓰지 않는 작품 — 키 자체를 두지 않는다
+        else:
+            sc["episode"] = ep
+
+        vn_core.SCENES.mkdir(parents=True, exist_ok=True)
+        _save(path, sc)
+    return sc
 
 
 # ---------------------------------------------------------------- 프롬프트
@@ -381,6 +589,55 @@ def select_image(sid: str, rel: str) -> dict:
             sc["review"]["auto"] = "FAIL"
             _save(path, sc)
     return {"scene_id": sid, "selected": rel, "auto_pass": code == 0, "fails": _fails(out)}
+
+
+def record_generation_tasks(sid: str, tasks: Any, size: dict | None = None) -> dict:
+    """외부 생성기의 task id 를 ``assets.makefun_tasks`` 에 남긴다. → {scene_id, added, count}
+
+    **왜 여기 있나**: assets 는 PROTECTED_FIELDS 다 — 편집 폼으로는 못 건드리고 상태 전이
+    함수만이 만든다. 그런데 생성 클라이언트(makefun_client)만은 장면 JSON 의 assets 를
+    직접 열어 쓰는 우회로를 갖고 있었다. 장면 쓰기가 두 모듈로 갈리면 정규화(_norm)와
+    저장 방식이 어긋나고, 나중에 assets 규약을 바꿀 때 한쪽만 고쳐진다. 통로를 하나로 만든다.
+
+    기록 자체의 값어치: 생성은 이미 과금된 뒤다. task id 가 남아 있어야 다운로드만
+    실패했을 때 **재생성(재과금) 없이** 이미지를 다시 받아올 수 있다.
+
+    tasks 는 task id 문자열 목록(또는 {"task_id": ...} 목록)이다. 이미 기록된 id 는 건너뛰고,
+    오래된 것부터 GEN_TASKS_MAX 개만 남긴다. size 는 {"width","height"} — 나중에 어떤 크기로
+    주문했는지 확인하는 용도라 없으면 0 이다.
+
+    APPROVED 장면도 막지 않는다. 이 기록은 창작물이 아니라 이미 지출한 생성의 회수 수단이고,
+    선택 이미지·후보 목록은 여기서 절대 바뀌지 않는다. 여기서 막으면 돈만 날아간다.
+    """
+    path = _require(sid)
+    ids: list[str] = []
+    for t in (tasks if isinstance(tasks, (list, tuple)) else []):
+        tid = t.get("task_id") if isinstance(t, dict) else t
+        tid = str(tid or "").strip()[:120]
+        if tid and tid not in ids:
+            ids.append(tid)
+    if not ids:
+        return {"scene_id": sid, "added": [], "count": 0}   # 적을 것이 없으면 파일을 건드리지 않는다
+    size = size if isinstance(size, dict) else {}
+    w, h = _as_int(size.get("width"), 0), _as_int(size.get("height"), 0)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    added: list[str] = []
+    with _LOCK:                 # 장면 저장과 같은 잠금 — 기록이 서로를 덮지 않는다
+        sc = _load(path)
+        tasks_now = sc["assets"].get("makefun_tasks")
+        if not isinstance(tasks_now, list):
+            tasks_now = []
+        known = {t.get("task_id") for t in tasks_now if isinstance(t, dict)}
+        for tid in ids:
+            if tid in known:
+                continue
+            known.add(tid)
+            tasks_now.append({"task_id": tid, "created_at": stamp, "width": w, "height": h})
+            added.append(tid)
+        del tasks_now[:-GEN_TASKS_MAX]      # 오래된 기록부터 버린다(장면 파일 비대화 방지)
+        sc["assets"]["makefun_tasks"] = tasks_now
+        _save(path, sc)
+    return {"scene_id": sid, "added": added, "count": len(tasks_now)}
 
 
 # ---------------------------------------------------------------- 승인·되돌림

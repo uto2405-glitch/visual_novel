@@ -14,6 +14,10 @@ CLI 사용법:
   compose_scenes / compose_from_json   스토리라인 → 장면 N개
   scene_from_talk                      인물과 나눈 대화 → 장면 1개 + 이미지 프롬프트
 
+다만 **장면 파일을 만드는 일 자체는 여기 없다** — 템플릿 적재·번호 확정·화 승계·존재
+확인·저장은 scene_ops.create_scene 하나가 한다. 이 파일이 하는 일은 모델의 자유 형식
+출력을 저장소 규약의 필드로 번역하는 것까지다(build_scene).
+
 분기 지시문은 **manifest.dating 의 눈금 위에서** 만들어진다. 호감도 범위와 branch.min
 예시를 리터럴로 박아 두면(예전의 -2~2 · min:3) start_affection 이 30 인 작품에서는
 두 번째 엔딩에 영영 도달하지 못한다 — 눈금은 작품마다 다르므로 매번 계산한다.
@@ -29,7 +33,6 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import advance_scene as adv  # noqa: E402
 import local_llm  # noqa: E402
 import prompt_build  # noqa: E402  (이미지 프롬프트 조립 — 대화→장면 경로가 바로 이어 쓴다)
 import scene_lint  # noqa: E402  (연출 규칙·카메라 표준 어휘의 단일 출처)
@@ -39,23 +42,23 @@ import xai_client  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
 ROOT = vn_core.ROOT
-SCENES = vn_core.SCENES
 MANIFEST = vn_core.MANIFEST
 STORY_DIR = vn_core.STORY
 BACKUPS = vn_core.BACKUPS
-TEMPLATE = vn_core.TEMPLATES / "scene.json"
 COMPOSE_MARK = "SCENES_JSON_ONLY"
 
 MAX_SCENES = 50        # 1회 구성 상한 — 통제 없는 호출 확대와 대량 파일 생성을 막는다
 BACKUP_KEEP = 5        # scenes_backup_* 보존 벌 수
 # 화풍 문구의 단일 출처는 vn_core 다(프롬프트 조립·웹 생성과 같은 문구여야 컷 화풍이 안 흔들린다).
 DEFAULT_VISUAL_STYLE = vn_core.DEFAULT_VISUAL_STYLE
-# 감상본 뷰어가 dating 없이도 쓰는 기본 눈금 — 지시문 계산의 출발점도 같아야 한다.
-DEFAULT_AFF_START = 30
-DEFAULT_AFF_MAX = 100
+# 호감도 기본 눈금의 정본은 **배포 기본 매니페스트**다(린터 scene_lint 도 같은 파일을 읽는다).
+# 예전에는 30/100 리터럴이 여기와 린터에 한 벌씩 있었다 — 작품이 눈금을 바꾸면 한쪽만 옛
+# 값으로 계산해서, 실제로 닿는 분기를 린터가 '도달 불가'라고 불렀다.
+DEFAULT_DATING_SOURCE = vn_core.TEMPLATES / "manifest.json"
+FALLBACK_AFF_MAX = 100   # 그 파일에도 dating 이 없을 때만 쓰는 마지막 그물(지시문에는 숫자가 필요하다)
 
 
-# 저장소 전역 쓰기 잠금 — 정본은 vn_core 하나다(advance_scene.WRITE_LOCK 도 같은 객체다).
+# 저장소 전역 쓰기 잠금 — 정본은 vn_core 하나다(RLock 이라 scene_ops 안에서 겹쳐 잡아도 안전).
 WRITE_LOCK = vn_core.WRITE_LOCK
 
 
@@ -118,13 +121,19 @@ def _dating_scale(mf: dict) -> dict:
 
     step  : 선택지 하나가 움직일 수 있는 최대 폭
     good_min: '좋은 결말' 분기의 문턱 예시 — 시작값에서 한 걸음이면 닿는 높이로 잡는다.
+
+    작품이 눈금을 말하지 않으면 **배포 기본 매니페스트**(templates/manifest.json)를 읽는다.
+    린터(scene_lint._affection_scale)도 같은 파일을 보므로, 지시문이 만든 min 과 린터가
+    '도달 불가'로 경고하는 문턱이 같은 눈금 위에 놓인다. 예전에는 양쪽이 30/100 리터럴을
+    각자 들고 있어서, 눈금을 바꾼 작품에서 방금 만든 분기를 린터가 죽은 분기라고 불렀다.
     """
     d = mf.get("dating") if isinstance(mf.get("dating"), dict) else {}
-    top = _as_order(d.get("max", DEFAULT_AFF_MAX), DEFAULT_AFF_MAX)
+    base = vn_core.load_json_safe(DEFAULT_DATING_SOURCE, {})
+    t = base.get("dating") if isinstance(base.get("dating"), dict) else {}
+    top = _as_order(d.get("max", t.get("max")), 0) or _as_order(t.get("max"), 0)
     if top < 2:
-        top = DEFAULT_AFF_MAX
-    start = max(0, min(top, _as_order(d.get("start_affection", DEFAULT_AFF_START),
-                                     DEFAULT_AFF_START)))
+        top = FALLBACK_AFF_MAX          # 어떤 매니페스트에도 눈금이 없을 때의 마지막 그물
+    start = max(0, min(top, _as_order(d.get("start_affection", t.get("start_affection")), 0)))
     unit = max(1, round(top / 20))
     return {"start": start, "max": top, "step": unit * 2,
             "good_min": min(top, start + unit)}
@@ -259,16 +268,24 @@ def norm_branch(v) -> list:
 
 def build_scene(it: dict, index: int, char_ids: list, loc_ids: set, locs: list,
                 episode=None) -> dict:
-    """장면 원소 1개 → 장면 dict. 어떤 필드가 잘못된 타입이어도 기본값으로 흡수(크래시 없음).
+    """LLM 이 준 장면 원소 1개 → **scene_ops.create_scene 에 넘길 필드 dict**.
+
+    어떤 필드가 잘못된 타입이어도 기본값으로 흡수한다(원소 하나가 구성 전체를 깨지 않는다).
+    여기가 하는 일은 '모델의 자유 형식 → 저장소 규약'의 번역뿐이다 — 템플릿 적재·번호
+    확정·존재 확인·저장은 하지 않는다. 그 다섯은 장면 생성의 유일한 구현(scene_ops.
+    create_scene)이 한다. 예전에는 이 함수가 템플릿까지 읽어 완성된 장면 dict 를 만들고
+    호출부가 직접 저장해서, 저장소에 장면을 만드는 코드가 세 벌이었다.
+
+    scene_id·scene_order 도 함께 담지만 **최종 판정은 create_scene** 이다(빈 폴더에
+    순서대로 저장하므로 결과는 같고, 손상 파일이 낀 경우에는 그쪽이 더 안전하다).
 
     episode: 이어받을 화 번호. 원소가 스스로 episode 를 말하면 그쪽이 우선이다.
              None 이면 디스크의 마지막 장면에서 승계한다(웹의 '장면 하나 추가' 경로).
              0 은 '화 표기 없음' — 재구성 중이라 디스크를 보면 안 될 때 쓴다.
     """
-    sc = vn_core.load_json(TEMPLATE)
-    sid = f"SCENE-{index:03d}"
-    sc["scene_id"], sc["scene_order"], sc["status"] = sid, index, "PROMPT"
-    sc["location_id"] = it.get("location_id") if it.get("location_id") in loc_ids else (locs[0].get("location_id") if locs else "")
+    f: dict = {"scene_id": f"SCENE-{index:03d}", "scene_order": index, "status": "PROMPT"}
+    loc = it.get("location_id")
+    f["location_id"] = loc if loc in loc_ids else ((locs[0].get("location_id") or "") if locs else "")
     dialogue, speakers = [], []
     for d in (it.get("dialogue") if isinstance(it.get("dialogue"), list) else []):
         if not isinstance(d, dict):
@@ -277,31 +294,32 @@ def build_scene(it: dict, index: int, char_ids: list, loc_ids: set, locs: list,
         dialogue.append({"speaker_id": spk, "text": str(d.get("text", "")), "placement": "bottom"})
         if spk and spk not in speakers:
             speakers.append(spk)
-    sc["dialogue"] = dialogue or sc["dialogue"]
-    sc["characters"] = speakers or (char_ids[:1] if char_ids else [])
+    if dialogue:
+        f["dialogue"] = dialogue      # 비면 키를 두지 않는다 → 템플릿의 빈 대사 한 줄이 남는다
+    f["characters"] = speakers or (char_ids[:1] if char_ids else [])
     for k in ("purpose", "action_beat", "emotion", "time"):
-        sc[k] = str(it.get(k, ""))
+        f[k] = str(it.get(k, ""))
     cam = it.get("camera") if isinstance(it.get("camera"), dict) else {}
-    sc["camera"] = {k: str(cam.get(k, "")) for k in ("shot", "angle", "framing", "focus")}
-    sc["prompt"]["grok_output"] = str(it.get("image_prompt", ""))
+    f["camera"] = {k: str(cam.get(k, "")) for k in ("shot", "angle", "framing", "focus")}
+    f["prompt"] = {"grok_output": str(it.get("image_prompt", ""))}
     ep = norm_episode(it.get("episode"))
     if ep is None:
         ep = norm_episode(episode) if episode is not None else last_episode()
     if ep is not None:
-        sc["episode"] = ep
+        f["episode"] = ep
     # 분기 엔진(선택) — 있을 때만 실어 나른다(선형 작품은 깨끗하게 유지). 검사기는 이 필드를 무시.
     ch = norm_choices(it.get("choices"))
     if ch:
-        sc["choices"] = ch
+        f["choices"] = ch
     br = norm_branch(it.get("branch"))
     if br:
-        sc["branch"] = br
+        f["branch"] = br
     is_end, label = ending_of(it)
     if is_end:
-        sc["ending"] = True            # 규약: 참/거짓만. 결말의 이름은 ending_label 로.
+        f["ending"] = True             # 규약: 참/거짓만. 결말의 이름은 ending_label 로.
         if label:
-            sc["ending_label"] = label
-    return sc
+            f["ending_label"] = label
+    return f
 
 
 def _unique_dir(parent: Path, name: str) -> Path:
@@ -362,7 +380,7 @@ def _create_scenes_from_items(items, force: bool, expected: int | None = None) -
     """
     if not isinstance(items, list) or not items:
         raise VNError("장면 배열이 비어 있거나 형식이 올바르지 않습니다.")
-    if not force and SCENES.exists() and any(SCENES.glob("SCENE-*.json")):
+    if not force and vn_core.scene_files():
         raise VNError(_EXISTS_MSG)          # 값싼 선차단 — 확정 판정은 잠금 안에서 다시 한다
 
     mf = vn_core.load_json_safe(MANIFEST, {})
@@ -387,7 +405,7 @@ def _create_scenes_from_items(items, force: bool, expected: int | None = None) -
     # 2) WRITE_LOCK 안에서 재확인 + 백업 + 일괄 저장
     created, backup, pruned = [], None, []
     with WRITE_LOCK:
-        existing = sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []
+        existing = vn_core.scene_files()   # 손상 파일도 포함 — 백업에서 빠지면 그대로 사라진다
         if existing and not force:
             raise VNError(_EXISTS_MSG)
         if existing:  # force 확정 — 덮어쓰지 않고 backups/ 아래 고유 폴더로 이동
@@ -398,12 +416,14 @@ def _create_scenes_from_items(items, force: bool, expected: int | None = None) -
             for f in existing:
                 f.rename(backup / f.name)
             pruned = prune_backups()
-        SCENES.mkdir(parents=True, exist_ok=True)
-        for sc in built:
-            vn_core.atomic_write_json(adv.scene_path(sc["scene_id"]), sc)
+        for f in built:
+            # 저장은 장면 생성의 유일한 구현에 맡긴다 — 존재 확인(덮어쓰기 금지)과 정규화가
+            # 여기서도 그대로 걸린다. 화는 위에서 계산한 값을 명시적으로 넘겨, 재구성 중에
+            # 디스크에 남은 장면에서 엉뚱하게 승계하지 않게 한다.
+            sc = scene_ops.create_scene(f["scene_id"], fields=f, episode=f.get("episode"))
             created.append(sc["scene_id"])
 
-    code, chk = adv.run_checker()
+    code, chk = vn_core.run_checker()
     result = {"created": created, "checker_pass": code == 0,
               "checker": "\n".join(l for l in chk.splitlines() if "FAIL" in l) or "자동 검사 통과"}
     if backup is not None:
@@ -431,7 +451,7 @@ def orch_chat(messages: list, temperature: float = 0.6, max_tokens: int = 8192) 
 
 def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
     """스토리라인 → 장면 자동 구성 (로컬 LLM/API). 수동 모드는 compose_from_json 사용."""
-    if not force and SCENES.exists() and any(SCENES.glob("SCENE-*.json")):
+    if not force and vn_core.scene_files():
         raise VNError(_EXISTS_MSG)          # 호출 낭비 방지 — 미리 막는다
     instruction = build_compose_instruction(count, branching)
     out = orch_chat([{"role": "user", "content": instruction}], temperature=0.6)
@@ -463,20 +483,9 @@ def compose_from_json(text: str, force: bool, expected: int | None = None) -> di
 
 
 # ---------------------------------------------------------------- 대화 → 장면 1개
-def next_scene_slot() -> tuple:
-    """다음 scene_id 와 scene_order (order 는 1부터 연속을 유지).
-
-    호출부는 **쓰기 잠금 안에서** 이 값을 받아 그대로 저장해야 한다 — 슬롯을 고른 뒤
-    저장 전에 다른 요청이 같은 슬롯을 가져가면 scene_order 가 겹친다(검사기 A5 FAIL).
-    """
-    nums, order = [], 0
-    for f in (sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []):
-        sc = vn_core.load_json_safe(f, {})
-        m = re.fullmatch(r"SCENE-(\d+)", str(sc.get("scene_id", "")))
-        if m:
-            nums.append(int(m.group(1)))
-        order = max(order, _as_order(sc.get("scene_order"), 0))
-    return f"SCENE-{(max(nums) + 1 if nums else 1):03d}", order + 1
+# 다음 장면 번호를 고르는 계산기는 여기 없다 — scene_ops.create_scene 안에 하나뿐이다.
+# (예전에는 이 파일의 next_scene_slot 과 CLI 의 cmd_new 가 각자 셌고, 파일명이 아니라
+#  파일 **안의** scene_id 만 봐서 손상된 장면 파일의 번호가 다시 뽑혔다.)
 
 
 def build_talk_scene_instruction(talk: list, chars: list, locs: list, who=None) -> str:
@@ -524,18 +533,18 @@ def scene_from_talk(messages, character_id=None) -> dict:
 
     char_ids = [c.get("character_id") for c in chars]
     loc_ids = {l.get("location_id") for l in locs}
-    with WRITE_LOCK:
-        sid, order = next_scene_slot()
-        idx = int(re.sub(r"\D", "", sid) or 1)
-        sc = build_scene(item, idx, char_ids, loc_ids, locs)
-        sc["scene_id"], sc["scene_order"] = sid, order
-        sc["status"] = "SCENE_PLAN"
-        sc["prompt"]["grok_output"] = ""
-        SCENES.mkdir(parents=True, exist_ok=True)
-        adv.save(adv.scene_path(sid), sc)
+    # 번호는 create_scene 이 쓰기 잠금 안에서 정한다 — build_scene 이 매긴 자리표시자는 버린다.
+    # (슬롯을 미리 골라 두면 고른 뒤 저장 전에 다른 요청이 같은 번호를 가져갈 수 있다.)
+    fields = build_scene(item, 1, char_ids, loc_ids, locs)
+    for placeholder in ("scene_id", "scene_order"):
+        fields.pop(placeholder, None)
+    fields["status"] = "SCENE_PLAN"     # 프롬프트는 아래 set_prompt 가 넣는다(앵커 보정 포함)
+    fields["prompt"] = {"grok_output": ""}
+    sc = scene_ops.create_scene(fields=fields)
+    sid, order = sc["scene_id"], sc["scene_order"]
     # 프롬프트까지만(생성은 사용자 몫) — 앵커·화풍은 prompt_build 가 코드로 넣는다.
     res = scene_ops.set_prompt(sid, prompt_build.compose_image_prompt(sc))
-    saved = vn_core.load_json_safe(adv.scene_path(sid), {})
+    saved = vn_core.load_json_safe(vn_core.scene_path(sid), {})
     res.update({"scene_id": sid, "scene_order": order, "purpose": saved.get("purpose", ""),
                 "prompt": (saved.get("prompt") or {}).get("grok_output", "")})
     return res

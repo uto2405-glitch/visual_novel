@@ -26,13 +26,14 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
     sys.path.insert(0, str(_HERE))
 
+import vn_core                                           # noqa: E402
 from vn_core import VNError, load_json, load_json_safe   # noqa: E402  (console_guard 는 import 만으로 적용)
 
 # 경로 이름은 vn_core 규약을 따르되 값은 이 파일 위치에서 계산한다.
 # (자가진단은 저장소를 임시폴더에 복제해 이 모듈만 따로 적재한다 — 그때도 자기 트리 안만 봐야 한다.)
+# 장면 폴더 상수는 두지 않는다 — 훑기는 vn_core.iter_scenes 하나뿐이다.
 ROOT = _HERE.parent
 MANIFEST = ROOT / "project" / "manifest.json"
-SCENES = ROOT / "project" / "scenes"
 
 load = load_json          # 하위호환: 기존 print_preflight.load(path) 호출부 유지
 
@@ -239,22 +240,20 @@ def needed_px(name: str, target: int = DPI_GOOD):
 
 # ------------------------------------------------------------- 장면 수집
 def collect(scene_filter: str | None, include_all: bool):
+    """판정 대상 (장면, 선택 이미지) 목록 — 훑기·판정은 vn_core 단일 출처를 쓴다.
+
+    손상된 장면 하나가 보고서 전체를 죽이지 않는다(iter_scenes 가 건너뛴다).
+    --scene 으로 지목한 한 장은 승인 전이라도 판정한다(인화 전 확인이 이 도구의 목적).
+    """
     if not MANIFEST.exists():
         raise VNError("project/manifest.json 이 없습니다.")
     out = []
-    for f in sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []:
-        sc = load_json_safe(f, {})       # 손상된 장면 하나가 보고서 전체를 죽이지 않게 한다
-        if not sc:
-            continue
+    for _f, sc in vn_core.iter_scenes():
         if scene_filter and sc.get("scene_id") != scene_filter:
             continue
-        sel = (sc.get("assets", {}).get("selected_image") or "").strip()
-        status = sc.get("status", "")
-        if not sel:
+        if not vn_core.is_deliverable(sc, include_all or bool(scene_filter)):
             continue
-        if not include_all and status != "APPROVED" and not scene_filter:
-            continue
-        out.append((sc, sel))
+        out.append((sc, vn_core.selected_of(sc)))
     return out
 
 
@@ -277,12 +276,24 @@ def generator_cap_note() -> list[str]:
 
     min_long_edge_px 만 올리면 요청이 image_generator.max_long_edge_px(기본 2048px)로 깎인
     채 과금된다. 상한 판정은 makefun_client 한 곳에 있고(중복 구현 금지) 여기서는 전달만 한다.
+
+    실패는 두 가지로 나눈다 — 섞으면 "왜 경고가 안 뜨지?"를 추적할 수 없다.
+      * 모듈이 없다: 생성기를 쓰지 않는 설치다. 조용히 넘어간다(인화 판정은 그대로 돌아간다).
+      * 있는데 못 읽었다(매니페스트 손상·계산 오류): 상한을 **확인하지 못했다는 사실**을
+        보고한다. 삼키면 상한이 안전한 것처럼 보인 채로 과금되는 생성으로 이어진다.
     """
     try:
         import makefun_client as mkc
+    except ImportError:
+        return []                      # 생성기 모듈 없음 — 이 설치에서는 상한 자체가 없다
+    except Exception as exc:           # 모듈은 있는데 적재가 깨졌다 — 침묵하면 안 되는 고장
+        return [f"※ 생성기 상한을 확인하지 못했습니다 — makefun_client 적재 실패 "
+                f"({type(exc).__name__}: {exc}). 확인: python tools/makefun_client.py --check"]
+    try:
         return ["※ " + m for m in mkc.size_warnings()]
-    except Exception:
-        return []                      # 생성기 모듈이 없어도 인화 판정은 그대로 돌아간다
+    except Exception as exc:           # 매니페스트 손상·값 형식 오류 등
+        return [f"※ 생성기 상한을 확인하지 못했습니다 — 상한 계산 실패 "
+                f"({type(exc).__name__}: {exc}). 확인: python tools/makefun_client.py --check"]
 
 
 def report(target: int, scene_filter: str | None, include_all: bool) -> int:

@@ -20,15 +20,16 @@
     예전에는 저장소 계층이 이 파일에 있어서 scene_ops 가 CLI 를 import 하고 CLI 가 다시
     scene_ops·vn_compose 를 지연 import 하는 순환이었다. 지금은 한 방향이다:
     vn_core ← scene_ops ← 이 파일.
-  * 아래 재수출 이름(load·save·scene_path·run_checker·all_scenes·WRITE_LOCK)은 기존
-    호출부(webapp·vn_compose·grok_api)를 위한 얇은 별칭이다. 구현은 vn_core 한 곳뿐이다.
+  * 한동안 이 파일은 저장소 계층 이름(load·save·scene_path·run_checker·all_scenes·
+    WRITE_LOCK)을 재수출했고 **위층인 webapp·vn_compose 가 그것을 통해 vn_core 를 썼다**
+    — 계층 4가 계층 2를 지나 계층 0에 닿는 우회로였다. 지금은 그쪽이 vn_core 를 직접
+    부르므로 재수출은 없앴다. 남은 별칭은 grok_api(CLI→CLI)가 쓰는 _console_guard 뿐이다.
 
 오류 규약: 라이브러리 함수는 VNError 를 던지고, 종료 코드 변환은 main() 에서만 한다.
 """
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -38,27 +39,11 @@ import scene_ops  # noqa: E402
 import vn_core  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
-# 경로·잠금은 vn_core 가 정본이다. 아래 이름들은 기존 호출부(webapp·vn_compose)를 위한 별칭.
-ROOT = vn_core.ROOT
-SCENES = vn_core.SCENES
-MANIFEST = vn_core.MANIFEST
-RAW_DIR = vn_core.IMAGES_RAW
-CHECKER = vn_core.CHECKER
-TEMPLATE = vn_core.TEMPLATES / "scene.json"
-WRITE_LOCK = vn_core.WRITE_LOCK   # 저장소 전역 단일 쓰기 잠금(웹의 동시 요청 직렬화)
-
-# 저장소 계층 재수출 — 구현은 vn_core, 여기는 이름만 유지한다(하위호환).
-load = vn_core.load_dict
-save = vn_core.atomic_write_json
-scene_path = vn_core.scene_path
-run_checker = vn_core.run_checker
-all_scenes = vn_core.all_scenes
-
 # 되돌릴 수 있는 단계 — 정본은 scene_ops.revise 가 검사하는 그 집합 하나다.
 # (예전에는 여기 따로 적어 둬서 두 벌이었고, 한쪽만 늘리면 CLI 와 웹의 허용 단계가 갈렸다.)
 BACK_STATES = scene_ops.BACK_STATES
 
-_console_guard = vn_core.console_guard   # 예전 이름 유지(호출부 호환). import 시 이미 적용됨.
+_console_guard = vn_core.console_guard   # grok_api 가 부르는 예전 이름. import 시 이미 적용됨.
 
 
 def die(msg: str) -> NoReturn:
@@ -90,45 +75,15 @@ def apply_prompt(sid: str, text: str) -> None:
 
 # ---------------------------------------------------------------- 명령들
 def cmd_new(args: argparse.Namespace) -> None:
-    scenes = all_scenes()
-    nums = [int(m.group(1)) for s in scenes
-            if (m := re.fullmatch(r"SCENE-(\d+)", s.get("scene_id", "")))]
-    sid = args.scene_id or f"SCENE-{(max(nums) + 1 if nums else 1):03d}"
-    # 형식 판정의 정본은 vn_core.is_scene_id 하나다. 예전에는 여기만 두 자리를 허용해
-    # 'SCENE-1' 장면이 만들어졌고(검사기도 통과), 정작 웹 스튜디오·scene_ops 가 그 id 를
-    # 거부해서 **영영 진행시킬 수 없는 장면**이 생겼다.
-    if not vn_core.is_scene_id(sid):
-        die(f"scene_id 는 SCENE-001 처럼 'SCENE-' + 3자리 이상 숫자여야 합니다: {sid!r} "
-            "(SCENE-1 같은 이름은 웹 스튜디오가 거부해 그 장면을 진행시킬 수 없습니다).")
-    path = scene_path(sid)
-    if path.exists():
-        die(f"{sid} 는 이미 존재합니다.")
-    sc = load(TEMPLATE)
-    sc["scene_id"] = sid
-    sc["scene_order"] = max((s.get("scene_order", 0) for s in scenes), default=0) + 1
-    # 화(episode)는 지금 작업 중인 마지막 장면에서 이어받는다(templates/scene.json 에는
-    # episode 키가 없다 — 없는 값을 임의로 붙이지 않는다). 승계하지 않으면 3화를 쓰는
-    # 중에 만든 장면에 화가 아예 붙지 않아 감상본의 화 선택에서 통째로 빠진다.
-    ep = vn_core.last_episode()
-    if ep is None:
-        sc.pop("episode", None)     # 화를 쓰지 않는 작품 — 없는 정보를 만들어 붙이지 않는다
-    else:
-        sc["episode"] = ep
-    if MANIFEST.exists():
-        mf = load(MANIFEST)
-        chars = [c.get("character_id") for c in mf.get("characters", []) if c.get("character_id")]
-        locs = [l.get("location_id") for l in mf.get("locations", []) if l.get("location_id")]
-        if chars:
-            sc["characters"] = chars[:1]
-            for line in sc.get("dialogue", []):
-                line["speaker_id"] = chars[0]
-        if locs:
-            sc["location_id"] = locs[0]
-    with WRITE_LOCK:
-        if path.exists():          # 잠금 안에서 다시 확인(동시 new 로 덮어쓰지 않게)
-            die(f"{sid} 는 이미 존재합니다.")
-        SCENES.mkdir(parents=True, exist_ok=True)
-        save(path, sc)
+    """다음 번호 장면 생성 — 만드는 일은 scene_ops.create_scene 하나가 한다.
+
+    예전에는 번호 계산·템플릿 적재·화 승계·매니페스트 보정·존재 확인·저장이 전부 이
+    함수 안에 있었고, 웹의 두 생성 경로에도 비슷하지만 다른 사본이 있었다. 그중 한
+    사본에는 존재 확인이 없어서 기존 장면을 덮어쓸 수 있었다 — 셋을 하나로 모은 뒤로는
+    CLI 로 만들든 웹으로 만들든 같은 방어를 받는다.
+    """
+    sc = scene_ops.create_scene(args.scene_id)
+    sid = sc["scene_id"]
     print(f"생성: project/scenes/{sid}.json (scene_order={sc['scene_order']}"
           + (f", {sc['episode']}화" if sc.get("episode") else "") + ")")
     print("다음: 장면 계획(purpose/action_beat/emotion/camera/dialogue)을 채운 뒤")
@@ -198,16 +153,15 @@ def cmd_revise(args: argparse.Namespace) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    scenes = sorted(all_scenes(), key=lambda s: s.get("scene_order", 0))
+    scenes = sorted(vn_core.all_scenes(), key=lambda s: s.get("scene_order", 0))
     if not scenes:
         print("장면 없음. 시작:  python tools/advance_scene.py new")
         return
     print(f"{'순서':<4} {'scene_id':<12} {'상태':<14} {'auto':<8} {'human':<8} 선택본")
     print("-" * 64)
     for s in scenes:
-        assets = s.get("assets") if isinstance(s.get("assets"), dict) else {}
         review = s.get("review") if isinstance(s.get("review"), dict) else {}
-        sel = Path(str(assets.get("selected_image", ""))).name or "-"
+        sel = Path(vn_core.selected_of(s)).name or "-"
         print(f"{s.get('scene_order','?'):<4} {s.get('scene_id','?'):<12} "
               f"{s.get('status','?'):<14} {review.get('auto','?'):<8} "
               f"{review.get('human','?'):<8} {sel}")
