@@ -1,0 +1,16 @@
+{
+  "character_id": "CHAR-001",
+  "name": "",
+  "version": 1,
+  "profile": {
+    "age": "",
+    "gender_presentation": "",
+    "hair": "",
+    "eyes": "",
+    "build": "",
+    "wardrobe": "",
+    "signature_props": []
+  },
+  "reference_images": [],
+  "prompt_anchor": ""
+}

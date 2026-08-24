@@ -1,0 +1,43 @@
+{
+  "scene_id": "SCENE-001",
+  "scene_order": 1,
+  "status": "SCENE_PLAN",
+  "location_id": "LOC-001",
+  "time": "방과 후, 석양",
+  "characters": ["CHAR-001"],
+  "props": [],
+  "purpose": "주인공이 결심을 굳히는 도입 장면",
+  "action_beat": "창밖을 보다가 고개를 돌려 카메라 쪽을 응시한다",
+  "emotion": "결연함, 약간의 긴장",
+  "camera": {
+    "shot": "medium shot",
+    "angle": "eye level",
+    "framing": "왼쪽 1/3 인물, 오른쪽 여백",
+    "focus": "인물 얼굴"
+  },
+  "visual_style": "따뜻한 색감의 셀 셰이딩 웹툰 화풍",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "오늘은... 꼭 말할 거야.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

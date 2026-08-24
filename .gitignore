@@ -1,0 +1,19 @@
+# API 키·비밀 — 어떤 형태로도 저장소에 넣지 않는다 (환경변수 전용)
+.env
+.env.*
+*.key
+secrets/
+
+# 파이썬
+__pycache__/
+*.pyc
+
+# 대용량 생성물 (원본은 별도 백업 권장)
+images/raw/
+output/
+
+# 로컬 사용자 설정·작업 잡파일
+.claude/settings.local.json
+scratch/_*.js
+scratch/samples/
+ai-webtoon-protocol-v5.1.zip

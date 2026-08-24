@@ -1,0 +1,43 @@
+{
+  "scene_id": "SCENE-001",
+  "scene_order": 1,
+  "status": "SCENE_PLAN",
+  "location_id": "LOC-001",
+  "time": "",
+  "characters": ["CHAR-001"],
+  "props": [],
+  "purpose": "",
+  "action_beat": "",
+  "emotion": "",
+  "camera": {
+    "shot": "",
+    "angle": "",
+    "framing": "",
+    "focus": ""
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

@@ -1,0 +1,92 @@
+{
+  "project_id": "PROJECT-001",
+  "title": "옥상의 라디오",
+  "language": "ko-KR",
+  "orchestrator": {
+    "provider": "Grok (SuperGrok 구독)",
+    "mode": "manual",
+    "api": {
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.6",
+      "key_env": "XAI_API_KEY",
+      "note": "수동 모드 — API 미사용"
+    }
+  },
+  "image_generator": {
+    "provider": "샘플(E2E)",
+    "model": "sample"
+  },
+  "output": {
+    "mode": "visual_novel_scene_cards",
+    "print_ready": true,
+    "aspect_ratio": "2:3",
+    "min_long_edge_px": 1024
+  },
+  "workflow": {
+    "human_gates": [
+      "story",
+      "visual_reference",
+      "scene_plan",
+      "image",
+      "delivery"
+    ],
+    "scene_batch_size": 1
+  },
+  "characters": [
+    {
+      "character_id": "CHAR-001",
+      "name": "하리",
+      "version": 1,
+      "profile": {
+        "age": "17",
+        "gender_presentation": "여성",
+        "hair": "갈색 단발",
+        "eyes": "밝은 갈색",
+        "build": "보통",
+        "wardrobe": "노란 후드",
+        "signature_props": [
+          "헤드폰"
+        ]
+      },
+      "reference_images": [],
+      "prompt_anchor": "17-year-old Korean girl, short brown bob hair, bright eyes, yellow hoodie"
+    },
+    {
+      "character_id": "CHAR-002",
+      "name": "준",
+      "version": 1,
+      "profile": {
+        "age": "17",
+        "gender_presentation": "남성",
+        "hair": "검은 곱슬",
+        "eyes": "검정",
+        "build": "마른",
+        "wardrobe": "남색 교복",
+        "signature_props": [
+          "둥근 안경"
+        ]
+      },
+      "reference_images": [],
+      "prompt_anchor": "17-year-old Korean boy, black curly hair, round glasses, navy school uniform"
+    }
+  ],
+  "locations": [
+    {
+      "location_id": "LOC-001",
+      "name": "학교 옥상",
+      "version": 1,
+      "description": "노을 지는 방과 후 옥상",
+      "reference_images": [],
+      "prompt_anchor": "school rooftop at sunset, orange sky, chain-link fence"
+    },
+    {
+      "location_id": "LOC-002",
+      "name": "방송실",
+      "version": 1,
+      "description": "오래된 교내 방송실",
+      "reference_images": [],
+      "prompt_anchor": "old school broadcasting room, fluorescent light, vintage radio equipment"
+    }
+  ],
+  "props": []
+}

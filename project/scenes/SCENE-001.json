@@ -1,0 +1,48 @@
+{
+  "scene_id": "SCENE-001",
+  "scene_order": 1,
+  "status": "APPROVED",
+  "location_id": "LOC-002",
+  "time": "방과 후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "폐지 공문을 보고 마지막 방송을 결심",
+  "action_beat": "책상 위 공문을 손에 쥐고 마이크를 바라본다",
+  "emotion": "쓸쓸함에서 결의로",
+  "camera": {
+    "shot": "medium",
+    "angle": "eye level",
+    "framing": "좌측 인물",
+    "focus": "표정"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "SCENE_PROMPT: warm cel-shaded korean webtoon, medium shot, 17-year-old Korean girl, short brown bob hair, bright eyes, yellow hoodie, in old school broadcasting room, fluorescent light, vintage radio equipment, holding a paper, looking at the mic, determined, portrait 2:3\nNEGATIVE_PROMPT: text, letters, watermark, extra fingers\nCONTINUITY_NOTES: 헤드폰은 목에 건 상태 유지\nDIALOGUE_PLACEMENT: 하단 여백 확보",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "마지막이라도... 제대로 해보자.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-001/SCENE-001_a.png",
+      "images/raw/SCENE-001/SCENE-001_b.png"
+    ],
+    "selected_image": "images/raw/SCENE-001/SCENE-001_a.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

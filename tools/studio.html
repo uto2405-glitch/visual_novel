@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>웹툰 스튜디오</title>
+<style>
+:root{--bg:#241C15;--panel:#2E251C;--panel2:#372D22;--line:#453828;--ink:#EDE4D3;
+--sub:#A79680;--jade:#5FB39A;--jade-d:#2F6B59;--seal:#C43D2B;--warn:#D9A441;
+--hanji:#F2EAD9;--hanji-ink:#2A2118}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);
+font-family:"Pretendard Variable",Pretendard,"Noto Sans KR","Malgun Gothic",system-ui,sans-serif;
+font-size:14px;line-height:1.55}
+header{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line)}
+header h1{font-size:17px;font-weight:800;letter-spacing:-.02em}
+.chip{font-size:11px;padding:3px 9px;border:1px solid var(--line);border-radius:999px;color:var(--sub)}
+.chip.ok{color:var(--jade);border-color:var(--jade-d)}
+.chip.bad{color:var(--warn);border-color:var(--warn)}
+main{display:flex;min-height:calc(100vh - 55px)}
+nav{width:118px;border-right:1px solid var(--line);padding:14px 0;flex-shrink:0}
+nav button{display:block;width:100%;text-align:left;padding:11px 18px;background:none;border:none;
+color:var(--sub);font:inherit;cursor:pointer;border-left:3px solid transparent}
+nav button.on{color:var(--ink);border-left-color:var(--jade);background:var(--panel)}
+section{flex:1;padding:20px;max-width:1100px;display:none}
+section.on{display:block}
+.eyebrow{font-size:11px;letter-spacing:.18em;color:var(--jade);margin-bottom:10px}
+textarea,input[type=text],input[type=number]{width:100%;background:var(--panel);color:var(--ink);
+border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit}
+textarea:focus,input:focus,button:focus-visible{outline:2px solid var(--jade);outline-offset:1px}
+.btn{background:var(--jade-d);color:var(--ink);border:1px solid var(--jade);border-radius:8px;
+padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}
+.btn.ghost{background:none;border-color:var(--line);color:var(--sub)}
+.btn.seal{background:none;color:var(--seal);border:2px solid var(--seal);border-radius:10px;
+box-shadow:inset 0 0 0 2px var(--bg),inset 0 0 0 3px var(--seal);font-weight:800}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:1fr 340px;gap:18px}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+#chatlog{height:52vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);
+border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:88%;padding:9px 12px;border-radius:10px;white-space:pre-wrap}
+.msg.user{align-self:flex-end;background:var(--jade-d)}
+.msg.assistant{align-self:flex-start;background:var(--panel2)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;position:relative}
+.badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--sub)}
+.badge.APPROVED{color:var(--seal);border-color:var(--seal)}
+.badge.REVIEW_HUMAN{color:var(--warn);border-color:var(--warn)}
+.stamp{position:absolute;top:10px;right:12px;color:var(--seal);border:2.5px solid var(--seal);
+border-radius:50%;width:52px;height:52px;display:flex;align-items:center;justify-content:center;
+font-weight:800;transform:rotate(-9deg);font-size:13px;opacity:.92}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.thumbs img{width:96px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--line);cursor:pointer}
+.thumbs img.sel{border-color:var(--jade)}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;
+white-space:pre-wrap;color:var(--sub);font-size:12.5px}
+.small{color:var(--sub);font-size:12px}
+details{margin-top:6px}
+summary{cursor:pointer}
+#stage{position:fixed;inset:0;background:#0E0B08;display:none;z-index:9}
+#stage.on{display:block}
+#stageImg{position:absolute;inset:0;overflow:hidden;background:#0E0B08}
+#stageImg img{position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;
+object-fit:contain;opacity:0;transition:opacity .5s ease}
+#stageImg img.show{opacity:1}
+#stageImg .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+color:var(--sub);text-align:center;padding:30px}
+#stageClick{position:absolute;inset:0;cursor:pointer;z-index:1}
+#dlg{position:absolute;left:50%;transform:translateX(-50%);bottom:26px;width:min(880px,92%);
+background:var(--hanji);color:var(--hanji-ink);border-radius:14px;padding:14px 22px 16px;
+box-shadow:0 8px 30px rgba(0,0,0,.5);cursor:pointer;z-index:2}
+#dlg.top{bottom:auto;top:70px}
+#dlg.narration{background:rgba(18,14,10,.82);color:var(--hanji)}
+#dlg.narration #dlgText{text-align:center;font-style:italic}
+#dlgName{display:inline-block;color:#fff;font-size:12.5px;font-weight:800;
+padding:2px 12px;border-radius:999px;margin-bottom:7px;background:var(--jade-d)}
+#dlgText{font-size:var(--dlg-fs,17px);line-height:1.6;min-height:48px;white-space:pre-wrap;
+max-height:38vh;overflow-y:auto;overflow-wrap:anywhere;word-break:keep-all;line-break:strict}
+#dlgHint{margin-top:6px;text-align:right;opacity:.55;font-size:11px;font-style:normal}
+#stageBar{position:absolute;top:12px;right:14px;display:flex;gap:6px;z-index:3;align-items:center}
+.vnbtn{background:rgba(30,24,18,.72);color:var(--ink);border:1px solid var(--line);
+border-radius:8px;padding:6px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.vnbtn.on{color:var(--jade);border-color:var(--jade)}
+#stageProg{background:rgba(30,24,18,.72)}
+.vnpanel{position:absolute;z-index:4;background:var(--panel);border:1px solid var(--line);
+border-radius:12px;box-shadow:0 12px 44px rgba(0,0,0,.6);color:var(--ink)}
+#vnLog{inset:7% 9%;padding:16px;display:flex;flex-direction:column;gap:10px}
+#vnLog h3{font-size:13px;color:var(--jade);letter-spacing:.1em}
+#vnLogInner{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:6px}
+.logline{padding:7px 11px;border-radius:8px;background:var(--panel2);white-space:pre-wrap}
+.logline b{font-weight:800}
+#vnSettings{top:52px;right:14px;width:min(320px,86%);padding:16px;display:flex;
+flex-direction:column;gap:14px}
+#vnSettings label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--sub)}
+#vnSettings input[type=range]{width:100%;accent-color:var(--jade)}
+#vnScenes{inset:7% 9%;padding:16px;display:flex;flex-direction:column;gap:10px}
+#vnScenesInner{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:6px}
+.sceneItem{text-align:left;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+border-radius:8px;padding:9px 12px;font:inherit;font-size:13px;cursor:pointer;display:flex;gap:12px;align-items:baseline}
+.sceneItem:hover{border-color:var(--jade)}
+.sceneItem .n{color:var(--jade);font-weight:800;font-variant-numeric:tabular-nums;flex-shrink:0;min-width:1.5em}
+.logline{cursor:pointer}
+.logline:hover{background:var(--line)}
+#dlg,#stageBar{transition:opacity .2s ease}
+#stage.uihidden #dlg,#stage.uihidden #stageBar{opacity:0;pointer-events:none}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+clip:rect(0,0,0,0);white-space:nowrap;border:0}
+[hidden]{display:none!important}
+@media(prefers-reduced-motion:reduce){#stageImg img{transition:none}}
+@media(prefers-reduced-motion:no-preference){.btn,nav button,.thumbs img{transition:all .15s}}
+/* ---- 모바일/터치 ---- */
+.btn,.vnbtn,nav button,select,summary{touch-action:manipulation}
+body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
+@media(max-width:720px){
+ main{flex-direction:column;min-height:auto}
+ nav{width:100%;display:flex;overflow-x:auto;gap:4px;padding:6px 8px;
+  border-right:none;border-bottom:1px solid var(--line);-webkit-overflow-scrolling:touch}
+ nav button{width:auto;white-space:nowrap;padding:10px 15px;border-left:none;
+  border-bottom:3px solid transparent;border-radius:8px}
+ nav button.on{border-left:none;border-bottom-color:var(--jade)}
+ section{padding:14px 12px;max-width:100%}
+ header{padding:11px 13px;flex-wrap:wrap;gap:7px}
+ header h1{font-size:15px}
+ .grid{grid-template-columns:1fr}
+ #chatlog{height:46vh}
+ .btn{padding:11px 15px}
+ input[type=text],input[type=number],textarea,select{font-size:16px}  /* iOS 확대 방지 */
+ .thumbs img{width:84px;height:63px}
+ #stageBar{flex-wrap:wrap;justify-content:flex-end;max-width:calc(100% - 20px);gap:5px}
+ .vnbtn{padding:9px 12px;font-size:12.5px}
+ #dlg{bottom:14px;padding:13px 16px}
+ #dlg.top{top:58px}
+ #dlgText{font-size:var(--dlg-fs,16px);max-height:34vh}
+ #vnSettings{right:8px;left:8px;width:auto}
+ #vnScenes,#vnLog{inset:6% 5%}
+}
+@media(max-width:720px) and (orientation:landscape){#chatlog{height:62vh}#dlgText{max-height:40vh}}
+</style></head><body>
+<header><h1>웹툰 스튜디오</h1><span class="chip" id="chipTitle"></span>
+<span class="chip" id="chipKey"></span><span class="chip" id="chipModel"></span></header>
+<main>
+<nav>
+<button data-tab="story" class="on">스토리</button>
+<button data-tab="scenes">장면</button>
+<button data-tab="viewer">뷰어</button>
+<button data-tab="check">검사</button>
+</nav>
+
+<section id="tab-story" class="on">
+<div class="eyebrow">1 · GROK 과 스토리 만들기</div>
+<div class="grid"><div>
+<div id="chatlog"></div>
+<div class="row" style="margin-top:10px">
+<textarea id="chatInput" rows="2" placeholder="이야기 아이디어를 적고 Enter (줄바꿈: Shift+Enter)"></textarea>
+<button class="btn" id="btnSend">전송</button></div>
+</div><div>
+<div class="eyebrow">스토리라인 (장면 구성의 입력)</div>
+<textarea id="storyline" rows="16" placeholder="확정된 스토리라인을 여기에 정리"></textarea>
+<div class="row" style="margin-top:8px">
+<button class="btn ghost" id="btnPull">마지막 답변 붙이기</button>
+<button class="btn" id="btnSaveStory">스토리라인 저장</button></div>
+<p class="small" id="storyMsg" style="margin-top:6px"></p>
+</div></div>
+</section>
+
+<section id="tab-scenes">
+<div class="eyebrow">2 · 장면 구성  →  3 · 외부 AI 생성(수동)  →  4 · 폴더 등록·승인</div>
+<div class="card"><div class="row">
+장면 수 <input type="number" id="composeCount" value="10" min="1" max="30" style="width:70px">
+<label class="small"><input type="checkbox" id="composeForce"> 기존 장면 백업 후 재구성</label>
+<button class="btn" id="btnCompose">스토리라인 → 장면 구성</button>
+<span class="small" id="composeMsg"></span></div>
+<p class="small" style="margin-top:8px">이미지 프롬프트를 복사해 외부 이미지 AI(레퍼런스 이미지 첨부)로 생성한 뒤,
+결과 파일을 <b>images/raw/장면ID/</b> 폴더에 넣고 [폴더 스캔]을 누르세요.</p></div>
+
+<details class="card" id="manualCompose">
+<summary class="small">수동 모드 · API 크레딧 없이 grok.com 복붙으로 장면 구성</summary>
+<p class="small" style="margin:8px 0">SuperGrok 구독만 있고 API 크레딧이 없을 때 이 경로를 쓰세요. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
+<div class="row">
+<span class="small">① 지시문 생성 → grok.com 에 붙여넣기</span>
+<button class="btn ghost" id="btnComposeInput">지시문 생성</button>
+<button class="btn ghost" id="btnComposeInputCopy" hidden>복사</button></div>
+<textarea id="composeInput" rows="6" readonly style="margin-top:6px"
+ placeholder="[지시문 생성]을 누르면 grok.com 에 붙여넣을 지시문이 여기에 나옵니다."></textarea>
+<div class="row" style="margin-top:10px">
+<span class="small">② grok.com 이 준 JSON 배열을 아래에 붙여넣고 →</span>
+<button class="btn" id="btnComposeManual">장면 생성</button>
+<span class="small" id="composeManualMsg"></span></div>
+<textarea id="composeJson" rows="6" style="margin-top:6px"
+ placeholder="grok.com 응답의 [ ... ] JSON 배열 전체를 여기에 붙여넣기"></textarea>
+</details>
+
+<details class="card" id="printExport">
+<summary class="small">인화 내보내기 · 승인 장면을 실물 인화용 마스터로 (Pillow 필요)</summary>
+<div class="row" style="margin-top:10px">
+규격 <select id="exportSize">
+<option value="4x6">엽서 4×6</option><option value="5x7" selected>5×7</option>
+<option value="8x10">8×10</option><option value="A5">A5</option><option value="A4">A4</option></select>
+블리드 <input type="number" id="exportBleed" value="0" step="0.125" min="0" style="width:64px">인치
+<label class="small"><input type="checkbox" id="exportAll"> 승인 외 포함</label>
+<label class="small"><input type="checkbox" id="exportSkipUp"> 업스케일 제외</label>
+<button class="btn" id="btnExport">마스터 굽기</button>
+<button class="btn ghost" id="btnContact">컨택트시트</button>
+<span class="small" id="exportMsg"></span></div>
+<p class="small" style="margin-top:6px"><b>output/print/</b> 에 300DPI TIFF+JPEG 와 spec_sheet.json 이 생성됩니다.
+저해상도면 업스케일 경고가 뜹니다 — 외부 AI에서 더 큰 해상도로 생성하세요.</p>
+</details>
+
+<div id="sceneList"></div>
+</section>
+
+<section id="tab-viewer">
+<div class="eyebrow">5 · 비주얼 노벨 감상</div>
+<p class="small" style="margin-bottom:10px">진행 <b>클릭/Space/→</b> · 이전 <b>←</b> · 자동 <b>A</b> · 스킵 <b>Ctrl</b> · 장면이동 <b>C</b> · 기록 <b>L</b> · 화면보기 <b>H</b> · 전체화면 <b>F</b> · 종료 <b>Esc</b>.
+타자기 출력 중 클릭하면 즉시 완성, 기록에서 지난 대사를 눌러 그 지점으로 이동, 모바일은 좌우 스와이프.
+위치는 자동 저장되어 [이어보기]로 재개됩니다. 이미지가 없는 장면은 설명이 나레이션으로 표시됩니다.</p>
+<div class="row">
+<button class="btn" id="btnPlay">처음부터 감상</button>
+<button class="btn ghost" id="btnResume" hidden>이어보기</button></div>
+</section>
+
+<section id="tab-check">
+<div class="eyebrow">자동 검사 (SCORECARD A1~A8)</div>
+<button class="btn" id="btnCheck">전체 검사 실행</button>
+<pre id="checkOut" style="margin-top:12px">아직 실행 전.</pre>
+</section>
+</main>
+
+<div id="stage" role="dialog" aria-modal="true" aria-label="비주얼 노벨 뷰어" tabindex="-1" aria-hidden="true">
+<div id="stageImg"></div>
+<div id="stageClick"></div>
+<div id="stageBar"><span class="chip" id="stageProg"></span>
+<button class="vnbtn" id="btnAuto" title="자동 진행 (A)">자동</button>
+<button class="vnbtn" id="btnSkip" title="스킵 (Ctrl)">스킵</button>
+<button class="vnbtn" id="btnScenes" title="장면 이동 (C)">장면</button>
+<button class="vnbtn" id="btnLog" title="기록 (L)">기록</button>
+<button class="vnbtn" id="btnVnSet" title="설정">설정</button>
+<button class="vnbtn" id="btnHide" title="화면 보기 — UI 숨김 (H)">숨기기</button>
+<button class="vnbtn" id="btnFull" title="전체화면 (F)">전체화면</button>
+<button class="vnbtn" id="btnExit" title="닫기 (Esc)">닫기</button></div>
+<div id="dlg"><span id="dlgName"></span><div id="dlgText"></div>
+<div id="dlgHint">클릭하여 계속 ▸</div></div>
+<div id="vnLog" class="vnpanel" role="dialog" aria-modal="true" aria-label="기록" hidden><h3>기록 (BACKLOG)</h3>
+<div id="vnLogInner"></div>
+<button class="vnbtn" id="btnLogClose" style="align-self:flex-end">닫기</button></div>
+<div id="vnSettings" class="vnpanel" role="dialog" aria-modal="true" aria-label="설정" hidden>
+<label>텍스트 속도 <span id="setTextSpeedVal" class="small"></span>
+<input type="range" id="setTextSpeed" min="0" max="80" step="2"></label>
+<label>자동 진행 딜레이 <span id="setAutoDelayVal" class="small"></span>
+<input type="range" id="setAutoDelay" min="400" max="4000" step="100"></label>
+<label>글자 크기 <span id="setFsVal" class="small"></span>
+<input type="range" id="setFs" min="14" max="26" step="1"></label>
+<label style="flex-direction:row;align-items:center;gap:8px">
+<input type="checkbox" id="setSkipAll"> 스킵이 안 읽은 대사도 건너뜀 (끄면 새 대사에서 자동 정지)</label>
+<p class="small">텍스트 속도 0 = 즉시 표시. 설정은 이 브라우저에 저장됩니다.</p>
+<button class="vnbtn" id="btnSetClose" style="align-self:flex-end">닫기</button></div>
+<div id="vnScenes" class="vnpanel" role="dialog" aria-modal="true" aria-label="장면 이동" hidden><h3>장면 이동</h3>
+<div id="vnScenesInner"></div>
+<button class="vnbtn" id="btnScenesClose" style="align-self:flex-end">닫기</button></div>
+<div id="srLine" class="sr-only" aria-live="polite" role="status"></div>
+</div>
+
+<script>
+"use strict";
+// 안전 규약: 서버 데이터를 HTML 문자열로 조립해 넣지 않는다 (selftest T17 이 감시).
+// 모든 삽입은 el()/textContent/value/속성 대입으로만 — 주입이 구조적으로 불가능하다.
+let S={scenes:[],chat:[],characters:[]};
+const $=id=>document.getElementById(id);
+function el(tag,cls,text){const n=document.createElement(tag);
+ if(cls)n.className=cls;if(text!=null)n.textContent=text;return n}
+const charName=id=>{const c=S.characters.find(c=>c.id===id);return c&&c.name?c.name:id};
+async function api(path,body){const r=await fetch(path,body?{method:"POST",
+ headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{});
+ const d=await r.json();if(!r.ok)throw new Error(d.error||"오류");return d}
+async function refresh(){S=await api("/api/state");
+ $("chipTitle").textContent=S.title||"제목 미정";
+ $("chipKey").textContent="API 키 "+(S.key_set?"연결됨":"미설정");
+ $("chipKey").className="chip "+(S.key_set?"ok":"bad");
+ $("chipModel").textContent="모델 "+(S.model&&S.model!=="TBD"?S.model:"미지정");
+ $("chipModel").className="chip "+(S.model&&S.model!=="TBD"?"ok":"bad");
+ if(!$("storyline").value)$("storyline").value=S.storyline||"";
+ renderChat();renderScenes()}
+function renderChat(){const box=$("chatlog");box.replaceChildren();
+ for(const m of S.chat)box.appendChild(el("div","msg "+m.role,m.content));
+ box.scrollTop=box.scrollHeight}
+async function send(){const t=$("chatInput").value.trim();if(!t)return;
+ $("chatInput").value="";S.chat.push({role:"user",content:t});renderChat();
+ try{const d=await api("/api/chat",{messages:S.chat});
+  S.chat.push({role:"assistant",content:d.reply});renderChat()}
+ catch(e){alert(e.message)}}
+$("btnSend").onclick=send;
+$("chatInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}});
+$("btnPull").onclick=()=>{const last=[...S.chat].reverse().find(m=>m.role==="assistant");
+ if(last)$("storyline").value=($("storyline").value+"\n\n"+last.content).trim()};
+$("btnSaveStory").onclick=async()=>{await api("/api/storyline",{text:$("storyline").value});
+ $("storyMsg").textContent="저장됨 — 장면 탭에서 구성할 수 있습니다."};
+$("btnCompose").onclick=async()=>{$("composeMsg").textContent="구성 중… (수십 초 걸릴 수 있음)";
+ try{const d=await api("/api/compose",{count:+$("composeCount").value,force:$("composeForce").checked});
+  $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음");
+  await refresh()}catch(e){$("composeMsg").textContent="실패: "+e.message}};
+
+// ---- 수동 모드: 장면 구성 (grok.com 복붙) ----
+$("btnComposeInput").onclick=async()=>{try{
+  const d=await api("/api/compose-input",{count:+$("composeCount").value});
+  $("composeInput").value=d.instruction;$("btnComposeInputCopy").hidden=false;
+  $("btnComposeInputCopy").textContent="복사"}catch(e){$("composeInput").value="실패: "+e.message}};
+$("btnComposeInputCopy").onclick=async()=>{await navigator.clipboard.writeText($("composeInput").value);
+ $("btnComposeInputCopy").textContent="복사됨"};
+$("btnComposeManual").onclick=async()=>{$("composeManualMsg").textContent="생성 중…";
+ try{const d=await api("/api/compose-manual",{text:$("composeJson").value,force:$("composeForce").checked,count:+$("composeCount").value});
+  $("composeManualMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고")+(d.warning?" · "+d.warning:"");
+  await refresh()}catch(e){$("composeManualMsg").textContent="실패: "+e.message}};
+
+// ---- 인화 내보내기 ----
+$("btnExport").onclick=async()=>{$("exportMsg").textContent="굽는 중… (수십 초 걸릴 수 있음)";
+ try{const d=await api("/api/export",{size:$("exportSize").value,bleed:+$("exportBleed").value,
+   all:$("exportAll").checked,skip_upscale:$("exportSkipUp").checked});
+  $("exportMsg").textContent=d.count+"장 → "+(d.dir||"(없음)")
+   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+(d.skipped?" · 제외 "+d.skipped:"");
+ }catch(e){$("exportMsg").textContent="실패: "+e.message}};
+$("btnContact").onclick=async()=>{$("exportMsg").textContent="컨택트시트 생성 중…";
+ try{const d=await api("/api/export",{contact_only:true,all:$("exportAll").checked});
+  $("exportMsg").textContent=d.contact?"컨택트시트 저장: output/print/contact_sheet.png":"대상 없음";
+ }catch(e){$("exportMsg").textContent="실패: "+e.message}};
+
+function sceneCard(sc){
+ const card=el("div","card");
+ const head=el("div","row");
+ head.appendChild(el("b",null,sc.scene_order+". "+sc.scene_id));
+ head.appendChild(el("span","badge "+sc.status,sc.status));
+ card.appendChild(head);
+ if(sc.status==="APPROVED")card.appendChild(el("div","stamp","승인"));
+ const purpose=el("p","small",sc.purpose||"");purpose.style.margin="6px 0";
+ card.appendChild(purpose);
+
+ const det=el("details");
+ det.appendChild(el("summary","small","대사 "+sc.dialogue.length+"줄 · 이미지 프롬프트"));
+ det.appendChild(el("pre",null,(sc.dialogue||[]).map(d=>charName(d.speaker_id)+": "+d.text).join("\n")));
+ const ta=el("textarea");ta.rows=4;ta.readOnly=true;ta.value=sc.prompt||"";
+ det.appendChild(ta);
+ const detRow=el("div","row");detRow.style.marginTop="6px";
+ const btnCopy=el("button","btn ghost","프롬프트 복사");
+ btnCopy.onclick=async()=>{await navigator.clipboard.writeText(sc.prompt||"");btnCopy.textContent="복사됨"};
+ detRow.appendChild(btnCopy);
+ detRow.appendChild(el("span","small","폴더: images/raw/"+sc.scene_id+"/"));
+ det.appendChild(detRow);
+ card.appendChild(det);
+
+ // 수동 모드: grok.com 복붙으로 이번 장면의 이미지 프롬프트 만들기 (승인 전 장면만)
+ if(sc.status!=="APPROVED"){
+  const mp=el("details");mp.style.marginTop="6px";
+  mp.appendChild(el("summary","small","수동 모드 · 이미지 프롬프트 만들기 (grok.com 복붙)"));
+  const genRow=el("div","row");genRow.style.marginTop="6px";
+  const btnGen=el("button","btn ghost","① 지시문 생성");
+  const btnGenCopy=el("button","btn ghost","복사");btnGenCopy.hidden=true;
+  const genOut=el("textarea");genOut.rows=5;genOut.readOnly=true;genOut.style.marginTop="6px";
+  genOut.placeholder="[지시문 생성] → grok.com 에 붙여넣기";
+  btnGen.onclick=async()=>{try{const d=await api("/api/grok-input",{scene_id:sc.scene_id});
+    genOut.value=d.text;btnGenCopy.hidden=false}catch(e){genOut.value="실패: "+e.message}};
+  btnGenCopy.onclick=async()=>{await navigator.clipboard.writeText(genOut.value);btnGenCopy.textContent="복사됨"};
+  genRow.appendChild(btnGen);genRow.appendChild(btnGenCopy);
+  mp.appendChild(genRow);mp.appendChild(genOut);
+  const setIn=el("textarea");setIn.rows=5;setIn.style.marginTop="8px";
+  setIn.placeholder="② grok.com 이 준 SCENE_PROMPT 응답 전체를 여기에 붙여넣기";
+  const setRow=el("div","row");setRow.style.marginTop="6px";
+  const btnSet=el("button","btn","프롬프트 저장");
+  const setMsg=el("span","small");
+  btnSet.onclick=async()=>{try{const d=await api("/api/set-prompt",{scene_id:sc.scene_id,text:setIn.value});
+    setMsg.textContent=d.checker_pass?"저장됨 · 검사 통과":"저장됨 · 경고: "+d.fails;await refresh()}
+   catch(e){setMsg.textContent="실패: "+e.message}};
+  mp.appendChild(setIn);setRow.appendChild(btnSet);setRow.appendChild(setMsg);mp.appendChild(setRow);
+  card.appendChild(mp)}
+
+ const act=el("div","row");act.style.marginTop="8px";
+ const msg=el("span","small");
+ const btnScan=el("button","btn ghost","폴더 스캔");
+ btnScan.onclick=async()=>{try{const d=await api("/api/register-images",{scene_id:sc.scene_id});
+   msg.textContent="후보 "+d.count+"장 · 자동검사 "+d.auto;await refresh()}catch(e){alert(e.message)}};
+ act.appendChild(btnScan);
+ if(sc.selected_image){
+  const btnSeal=el("button","btn seal","승인 도장 찍기");
+  btnSeal.onclick=async()=>{try{await api("/api/approve",{scene_id:sc.scene_id});await refresh()}
+   catch(e){alert(e.message)}};
+  act.appendChild(btnSeal)}
+ act.appendChild(msg);
+ card.appendChild(act);
+
+ const th=el("div","thumbs");
+ for(const r of (sc.raw_images||[])){
+  const img=el("img",r===sc.selected_image?"sel":null);
+  img.src="/img/"+r.replace(/^images\//,"");
+  img.title=r.split("/").pop();
+  img.onclick=async()=>{try{const d=await api("/api/select",{scene_id:sc.scene_id,image:r});
+    msg.textContent=d.auto_pass?"선택됨 — 도장 찍을 수 있음":"선택됨 · 경고: "+d.fails;
+    await refresh()}catch(e){alert(e.message)}};
+  th.appendChild(img)}
+ card.appendChild(th);
+
+ // 인화 프리플라이트 배지 (선택 이미지가 실물 인화에 적합한지)
+ if(sc.print){
+  const p=sc.print,pr=el("div","row");pr.style.marginTop="8px";
+  let txt,cls;
+  if(!p.px){txt="인화: 크기 판독 불가";cls="bad"}
+  else if(p.printable){txt="인화 @300DPI 최대 "+p.max+" · 긴 변 "+p.long_in+"인치";cls="ok"}
+  else{txt="인화 @300DPI 부적합 (긴 변 "+p.long_in+"인치, 엽서 미만) — 업스케일 권장";cls="bad"}
+  pr.appendChild(el("span","chip "+cls,txt));
+  const btn=el("button","btn ghost","인화 규격 상세");
+  const out=el("pre");out.hidden=true;out.style.marginTop="6px";
+  btn.onclick=async()=>{try{const d=await api("/api/preflight",{scene_id:sc.scene_id});
+   if(!d.rows||!d.rows.length){out.textContent="크기 판독 불가"}
+   else{out.textContent=d.px[0]+"×"+d.px[1]+"px  →  300DPI 최대: "+(d.max_size_at_target||"엽서 미만")+"\n"+
+    d.rows.map(r=>{const m=r.grade==="좋음"?"OK  ":(r.grade==="보통"?"~   ":"✗   ");
+     return m+r.size+"  "+r.dpi+"DPI  "+r.grade+(r.crop_pct>1?" · 크롭 "+r.crop_pct+"%":"")}).join("\n")}
+   out.hidden=false}catch(e){out.textContent="실패: "+e.message;out.hidden=false}};
+  pr.appendChild(btn);card.appendChild(pr);card.appendChild(out)}
+ return card}
+function renderScenes(){const box=$("sceneList");box.replaceChildren();
+ for(const sc of S.scenes)box.appendChild(sceneCard(sc))}
+
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+ document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));
+ document.querySelectorAll("section").forEach(x=>x.classList.remove("on"));
+ b.classList.add("on");$("tab-"+b.dataset.tab).classList.add("on")});
+$("btnCheck").onclick=async()=>{const d=await api("/api/check",{});
+ $("checkOut").textContent=d.output};
+// ---- 비주얼 노벨 뷰어 (VN 런타임) ----
+let vi=0,di=0,ended=false;
+let revealing=false,revealTimer=null,fullText="",autoTimer=null;
+let autoOn=false,skipOn=false;
+let history=[],historyKeys=new Set();
+const VN={textSpeed:26,autoDelay:1500,fs:17,skipAll:false};
+const REDUCE=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const NAME_COLORS=["#5FB39A","#D9A441","#C77DBB","#6FA8DC","#E07A5F","#84C18B","#B58BE0","#E0A458"];
+function charColor(id){if(!id)return null;let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;
+ return NAME_COLORS[h%NAME_COLORS.length]}
+function readableInk(hex){const h=(hex||"").replace("#","");if(h.length<6)return "#fff";
+ const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+ return (0.299*r+0.587*g+0.114*b)>150?"#17110D":"#fff"}   // 이름표 글자색 자동(WCAG 대비)
+let seen=new Set();
+const seenKey=()=>"vn:seen:"+(S.title||"_");
+function loadSeen(){try{seen=new Set(JSON.parse(localStorage.getItem(seenKey())||"[]"))}catch(e){seen=new Set()}}
+function markSeen(){const k=vi+":"+di,was=seen.has(k);if(!was){seen.add(k);
+ try{localStorage.setItem(seenKey(),JSON.stringify([...seen].slice(-5000)))}catch(e){}}return was}
+const dlen=sc=>((sc&&sc.dialogue)||[]).length||1;   // 대사 0줄 장면은 purpose 를 1줄로 취급
+
+// 설정·위치 저장 (이 브라우저 로컬)
+function applyFs(){document.documentElement.style.setProperty("--dlg-fs",VN.fs+"px")}
+function loadVN(){try{const s=JSON.parse(localStorage.getItem("vn:settings")||"{}");
+ if(typeof s.textSpeed==="number")VN.textSpeed=s.textSpeed;
+ if(typeof s.autoDelay==="number")VN.autoDelay=s.autoDelay;
+ if(typeof s.fs==="number")VN.fs=s.fs;
+ if(typeof s.skipAll==="boolean")VN.skipAll=s.skipAll}catch(e){}applyFs()}
+function saveVN(){try{localStorage.setItem("vn:settings",JSON.stringify(VN))}catch(e){}applyFs()}
+const posKey=()=>"vn:pos:"+(S.title||"_");
+function savePos(){try{localStorage.setItem(posKey(),JSON.stringify({vi,di}))}catch(e){}}
+function loadPos(){try{return JSON.parse(localStorage.getItem(posKey())||"null")}catch(e){return null}}
+function clearPos(){try{localStorage.removeItem(posKey())}catch(e){}}
+
+// 이미지: 크로스페이드 + 다음 장면 프리로드
+function renderImage(){const sc=S.scenes[vi],box=$("stageImg"),url=sc&&sc.image_url;
+ const emp=box.querySelector(".empty");if(emp)emp.remove();
+ if(!url){[...box.querySelectorAll("img")].forEach(n=>n.remove());
+  box.appendChild(el("div","empty","(이미지 없음) "+((sc&&(sc.purpose||sc.scene_id))||"")));return}
+ const cur=box.querySelector("img.show");
+ if(cur&&cur.getAttribute("src")===url)return;
+ const img=el("img");img.src=url;
+ const show=()=>{img.classList.add("show");
+  setTimeout(()=>{[...box.querySelectorAll("img")].forEach(n=>{if(n!==img)n.remove()})},REDUCE?0:540)};
+ img.onerror=()=>{[...box.querySelectorAll("img")].forEach(n=>n.remove());  // 깨진 URL → 잔상 대신 나레이션
+  if(!box.querySelector(".empty"))box.appendChild(el("div","empty","(이미지를 불러올 수 없음) "+((sc&&(sc.purpose||sc.scene_id))||"")))};
+ box.appendChild(img);
+ if(REDUCE||img.complete)requestAnimationFrame(show);else img.onload=show;
+ const nx=S.scenes[vi+1];if(nx&&nx.image_url){const p=new Image();p.src=nx.image_url}}
+
+function recordHistory(name,text,color){const k=vi+":"+di;if(historyKeys.has(k))return;
+ historyKeys.add(k);history.push({name,text,color,vi,di})}
+
+function typeText(text){clearInterval(revealTimer);fullText=text;const t=$("dlgText");
+ if(REDUCE||skipOn||VN.textSpeed<=0){t.textContent=text;t.scrollTop=t.scrollHeight;revealing=false;onShown();return}
+ revealing=true;const chars=[...text];let i=0;t.textContent="";   // 코드포인트 단위(이모지 안전)
+ revealTimer=setInterval(()=>{i++;t.textContent=chars.slice(0,i).join("");t.scrollTop=t.scrollHeight;
+  if(i>=chars.length){clearInterval(revealTimer);revealing=false;onShown()}},Math.max(6,VN.textSpeed))}
+function completeText(){clearInterval(revealTimer);$("dlgText").textContent=fullText;revealing=false;onShown()}
+
+function onShown(){clearTimeout(autoTimer);
+ if(skipOn){autoTimer=setTimeout(()=>{if(!panelOpen())advance(1)},45);return}
+ if(autoOn){autoTimer=setTimeout(()=>{if(!panelOpen())advance(1)},VN.autoDelay+fullText.length*22)}}
+
+function showLine(){const sc=S.scenes[vi];if(!sc)return;
+ const dl=dlen(sc);
+ $("stageProg").textContent=(vi+1)+" / "+S.scenes.length+(dl>1?"  ·  "+(di+1)+"/"+dl:"");
+ const wasSeen=markSeen();
+ if(skipOn&&!wasSeen&&!VN.skipAll)setSkip(false);   // 스킵: 안 읽은 대사에 닿으면 자동 정지
+ const line=(sc.dialogue||[])[di],dlg=$("dlg"),name=$("dlgName");
+ dlg.classList.toggle("top",!!(line&&line.placement==="top"));
+ if(line&&line.speaker_id){dlg.classList.remove("narration");name.style.display="inline-block";
+  const col=charColor(line.speaker_id)||"#2F6B59";
+  name.textContent=charName(line.speaker_id);name.style.background=col;name.style.color=readableInk(col);
+  recordHistory(charName(line.speaker_id),line.text||"",col)}
+ else{dlg.classList.add("narration");name.style.display="none";
+  recordHistory("",line?(line.text||""):(sc.purpose||""),null)}
+ const say=line?(line.text||""):(sc.purpose||"…");
+ const who=line&&line.speaker_id?charName(line.speaker_id)+": ":"";
+ if(!skipOn)$("srLine").textContent=who+say;   // 스킵 중엔 낭독 폭주 방지
+ typeText(say);savePos()}
+
+function advance(step){
+ if(panelOpen()){closePanels();return}
+ if(ended){exitStage();return}
+ if(step>0&&revealing){completeText();return}
+ const sc=S.scenes[vi];if(!sc)return;clearTimeout(autoTimer);
+ const before=vi;
+ if(step>0){if(di+1<dlen(sc))di++;else{vi++;di=0}}
+ else{if(di>0)di--;else if(vi>0){vi--;di=dlen(S.scenes[vi])-1}}
+ if(vi>=S.scenes.length){endPlayback();return}
+ if(vi!==before)renderImage();
+ showLine()}
+
+function endPlayback(){ended=true;clearTimeout(autoTimer);clearInterval(revealTimer);
+ setAuto(false);setSkip(false);const dlg=$("dlg");dlg.classList.remove("top");dlg.classList.add("narration");
+ $("dlgName").style.display="none";$("dlgText").textContent="— 끝 — (클릭하면 닫힙니다)";
+ $("stageProg").textContent=S.scenes.length+" / "+S.scenes.length;clearPos()}
+
+function exitStage(){clearTimeout(autoTimer);clearInterval(revealTimer);
+ $("stage").classList.remove("on");$("stage").setAttribute("aria-hidden","true");
+ bgNodes().forEach(n=>{n.inert=false});
+ if(_returnFocus&&_returnFocus.focus)_returnFocus.focus()}
+
+// 패널(기록/설정)
+function panelOpen(){return !$("vnLog").hidden||!$("vnSettings").hidden||!$("vnScenes").hidden}
+function syncExpanded(){$("btnLog").setAttribute("aria-expanded",!$("vnLog").hidden);
+ $("btnVnSet").setAttribute("aria-expanded",!$("vnSettings").hidden);
+ $("btnScenes").setAttribute("aria-expanded",!$("vnScenes").hidden)}
+function closePanels(){$("vnLog").hidden=true;$("vnSettings").hidden=true;$("vnScenes").hidden=true;
+ syncExpanded();if((autoOn||skipOn)&&!revealing&&!ended)onShown()}   // 패널 닫으면 자동/스킵 재개
+function jumpTo(v,d){ended=false;const before=vi;vi=v;di=d;
+ $("vnLog").hidden=true;$("vnScenes").hidden=true;syncExpanded();
+ if(vi!==before)renderImage();showLine()}
+function renderLog(){const box=$("vnLogInner");box.replaceChildren();
+ if(!history.length)box.appendChild(el("div","logline","아직 지나온 대사가 없습니다."));
+ for(const h of history){const row=el("div","logline");
+  if(h.name){const b=el("b",null,h.name+"  ");if(h.color)b.style.color=h.color;row.appendChild(b)}
+  row.appendChild(el("span",null,h.text));
+  row.onclick=()=>jumpTo(h.vi,h.di);   // 백로그 클릭 → 그 지점으로 이동
+  box.appendChild(row)}
+ box.scrollTop=box.scrollHeight}
+function toggleLog(){const wasOpen=!$("vnLog").hidden;closePanels();if(!wasOpen){renderLog();$("vnLog").hidden=false;syncExpanded();$("btnLogClose").focus()}}
+function renderSceneJump(){const box=$("vnScenesInner");box.replaceChildren();
+ S.scenes.forEach((sc,i)=>{const it=el("button","sceneItem");
+  it.appendChild(el("span","n",String(sc.scene_order||i+1)));
+  const first=(sc.dialogue||[])[0];
+  it.appendChild(el("span",null,sc.purpose||(first&&first.text)||sc.scene_id));
+  it.onclick=()=>jumpTo(i,0);box.appendChild(it)})}
+function toggleScenes(){const wasOpen=!$("vnScenes").hidden;closePanels();
+ if(!wasOpen){renderSceneJump();$("vnScenes").hidden=false;syncExpanded();$("btnScenesClose").focus()}}
+function toggleSettings(){const wasOpen=!$("vnSettings").hidden;closePanels();
+ if(!wasOpen){syncSettings();$("vnSettings").hidden=false;syncExpanded();$("btnSetClose").focus()}}
+
+// 자동/스킵 모드
+function setAuto(on){autoOn=on;if(on)skipOn=false;
+ $("btnAuto").classList.toggle("on",autoOn);$("btnSkip").classList.remove("on");
+ $("btnAuto").setAttribute("aria-pressed",autoOn);$("btnSkip").setAttribute("aria-pressed",false);
+ if(autoOn&&!revealing)onShown();else if(!autoOn)clearTimeout(autoTimer)}
+function setSkip(on){skipOn=on;if(on)autoOn=false;
+ $("btnSkip").classList.toggle("on",skipOn);$("btnAuto").classList.remove("on");
+ $("btnSkip").setAttribute("aria-pressed",skipOn);$("btnAuto").setAttribute("aria-pressed",false);
+ if(skipOn){if(revealing)completeText();else onShown()}else clearTimeout(autoTimer)}
+
+// 설정 슬라이더
+function syncSettings(){$("setTextSpeed").value=VN.textSpeed;
+ $("setTextSpeedVal").textContent=VN.textSpeed<=0?"즉시":VN.textSpeed+"ms/자";
+ $("setAutoDelay").value=VN.autoDelay;$("setAutoDelayVal").textContent=(VN.autoDelay/1000).toFixed(1)+"초";
+ $("setFs").value=VN.fs;$("setFsVal").textContent=VN.fs+"px";$("setSkipAll").checked=VN.skipAll}
+$("setTextSpeed").oninput=e=>{VN.textSpeed=+e.target.value;syncSettings();saveVN()};
+$("setAutoDelay").oninput=e=>{VN.autoDelay=+e.target.value;syncSettings();saveVN()};
+$("setFs").oninput=e=>{VN.fs=+e.target.value;syncSettings();saveVN()};
+$("setSkipAll").onchange=e=>{VN.skipAll=e.target.checked;saveVN()};
+
+// 시작/재개
+let _returnFocus=null;
+const bgNodes=()=>[...document.querySelectorAll("body > *")].filter(n=>n.id!=="stage");
+function setUiHidden(h){$("stage").classList.toggle("uihidden",h);$("stageBar").inert=h}
+function startPlayback(resume){if(!S.scenes.length){alert("장면이 없습니다. 먼저 장면을 구성하세요.");return}
+ loadSeen();history=[];historyKeys=new Set();ended=false;
+ const pos=resume?loadPos():null;
+ vi=pos&&pos.vi<S.scenes.length?pos.vi:0;di=pos&&pos.di<dlen(S.scenes[vi])?pos.di:0;
+ setAuto(false);setSkip(false);closePanels();setUiHidden(false);
+ _returnFocus=document.activeElement;
+ bgNodes().forEach(n=>{n.inert=true});   // 배경 비활성 — 포커스/스크린리더 트랩
+ $("stage").classList.add("on");$("stage").setAttribute("aria-hidden","false");$("stage").focus();
+ for(const s of S.scenes){if(s.image_url){const p=new Image();p.src=s.image_url}}  // 전체 프리로드(깜빡임 제거)
+ renderImage();showLine()}
+
+function toggleHide(){setUiHidden(!$("stage").classList.contains("uihidden"))}   // 화면 보기(대사창·바 숨김)
+function toggleFull(){const s=$("stage");
+ if(!document.fullscreenElement){const rq=s.requestFullscreen||s.webkitRequestFullscreen;if(rq)rq.call(s)}
+ else{const ex=document.exitFullscreen||document.webkitExitFullscreen;if(ex)ex.call(document)}}
+// 숨김 상태에서의 탭 = 진행이 아니라 UI 복원
+function tap(){if($("stage").classList.contains("uihidden")){setUiHidden(false);return}advance(1)}
+
+$("btnPlay").onclick=async()=>{try{await refresh();startPlayback(false)}catch(e){alert("불러오기 실패: "+e.message)}};
+$("btnResume").onclick=async()=>{try{await refresh();startPlayback(true)}catch(e){alert("불러오기 실패: "+e.message)}};
+$("btnExit").onclick=exitStage;
+$("btnAuto").onclick=()=>setAuto(!autoOn);
+$("btnSkip").onclick=()=>setSkip(!skipOn);
+$("btnScenes").onclick=toggleScenes;$("btnScenesClose").onclick=closePanels;
+$("btnLog").onclick=toggleLog;$("btnLogClose").onclick=closePanels;
+$("btnVnSet").onclick=toggleSettings;$("btnSetClose").onclick=closePanels;
+$("btnHide").onclick=toggleHide;$("btnFull").onclick=toggleFull;
+$("stageClick").onclick=()=>{if(!swallowClick)tap();swallowClick=false};
+$("dlg").onclick=()=>advance(1);
+
+// 모바일: 좌우 스와이프로 진행/이전, 탭으로 진행 (클릭 중복 방지)
+let swallowClick=false,tx=0,ty=0;
+$("stageClick").addEventListener("touchstart",e=>{const t=e.changedTouches[0];tx=t.clientX;ty=t.clientY},{passive:true});
+$("stageClick").addEventListener("touchend",e=>{const t=e.changedTouches[0],dx=t.clientX-tx,dy=t.clientY-ty;
+ swallowClick=true;setTimeout(()=>{swallowClick=false},450);
+ if($("stage").classList.contains("uihidden")){setUiHidden(false);return}
+ if(Math.abs(dx)>45&&Math.abs(dx)>Math.abs(dy))advance(dx<0?1:-1);
+ else if(Math.abs(dx)<14&&Math.abs(dy)<14)advance(1)},{passive:true});
+
+document.addEventListener("keydown",e=>{if(!$("stage").classList.contains("on"))return;
+ if(e.key==="Escape"){if(panelOpen())closePanels();else if($("stage").classList.contains("uihidden"))setUiHidden(false);else exitStage();return}
+ if(e.key==="ArrowLeft"){advance(-1);return}
+ if(e.key===" "||e.key==="ArrowRight"||e.key==="Enter"){e.preventDefault();advance(1);return}
+ if(e.key==="a"||e.key==="A")setAuto(!autoOn);
+ else if(e.key==="l"||e.key==="L")toggleLog();
+ else if(e.key==="c"||e.key==="C")toggleScenes();
+ else if(e.key==="h"||e.key==="H")toggleHide();
+ else if(e.key==="f"||e.key==="F")toggleFull();
+ else if(e.key==="Control"&&!skipOn)setSkip(true)});
+document.addEventListener("keyup",e=>{if(e.key==="Control"&&skipOn)setSkip(false)});
+
+loadVN();
+refresh().then(()=>{if(loadPos())$("btnResume").hidden=false});
+</script></body></html>

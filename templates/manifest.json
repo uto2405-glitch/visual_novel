@@ -1,0 +1,64 @@
+{
+  "project_id": "PROJECT-001",
+  "title": "",
+  "language": "ko-KR",
+  "orchestrator": {
+    "provider": "Grok (SuperGrok 구독)",
+    "mode": "api",
+    "api": {
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.6",
+      "key_env": "XAI_API_KEY",
+      "note": "SuperGrok 구독과 별개. console.x.ai 키 발급 후 mode 를 api 로 변경"
+    }
+  },
+  "image_generator": {
+    "provider": "TBD",
+    "model": "TBD"
+  },
+  "output": {
+    "mode": "visual_novel_scene_cards",
+    "print_ready": true,
+    "aspect_ratio": "TBD",
+    "min_long_edge_px": 1024
+  },
+  "workflow": {
+    "human_gates": [
+      "story",
+      "visual_reference",
+      "scene_plan",
+      "image",
+      "delivery"
+    ],
+    "scene_batch_size": 1
+  },
+  "characters": [
+    {
+      "character_id": "CHAR-001",
+      "name": "",
+      "version": 1,
+      "profile": {
+        "age": "",
+        "gender_presentation": "",
+        "hair": "",
+        "eyes": "",
+        "build": "",
+        "wardrobe": "",
+        "signature_props": []
+      },
+      "reference_images": [],
+      "prompt_anchor": ""
+    }
+  ],
+  "locations": [
+    {
+      "location_id": "LOC-001",
+      "name": "",
+      "version": 1,
+      "description": "",
+      "reference_images": [],
+      "prompt_anchor": ""
+    }
+  ],
+  "props": []
+}

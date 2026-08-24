@@ -1,0 +1,20 @@
+{
+  "scene_id": "SCENE-001",
+  "auto": {
+    "status": "PENDING",
+    "checks": []
+  },
+  "human": {
+    "status": "PENDING",
+    "checks": {
+      "character_consistency": null,
+      "direction_flow": null,
+      "dialogue_naturalness": null,
+      "visual_novel_immersion": null,
+      "print_quality": null,
+      "style_match": null
+    },
+    "notes": []
+  },
+  "decision": "PENDING"
+}

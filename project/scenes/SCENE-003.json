@@ -1,0 +1,48 @@
+{
+  "scene_id": "SCENE-003",
+  "scene_order": 3,
+  "status": "APPROVED",
+  "location_id": "LOC-001",
+  "time": "해질녘",
+  "characters": [
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "옥상에서 장비 세팅",
+  "action_beat": "케이블을 정리하며 노을을 본다",
+  "emotion": "설렘",
+  "camera": {
+    "shot": "wide",
+    "angle": "low",
+    "framing": "옥상 전경 속 두 인물",
+    "focus": "실루엣"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "warm cel-shaded webtoon, 17-year-old Korean girl, short brown bob hair, bright eyes, yellow hoodie and 17-year-old Korean boy, black curly hair, round glasses, navy school uniform, on school rooftop at sunset, orange sky, chain-link fence, setting up radio cables, silhouettes",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-002",
+      "text": "전파 상태 좋아. 갈 수 있어.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-003/SCENE-003_a.png",
+      "images/raw/SCENE-003/SCENE-003_b.png"
+    ],
+    "selected_image": "images/raw/SCENE-003/SCENE-003_a.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

@@ -1,0 +1,48 @@
+{
+  "scene_id": "SCENE-004",
+  "scene_order": 4,
+  "status": "APPROVED",
+  "location_id": "LOC-001",
+  "time": "노을",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "노을 아래 마지막 멘트",
+  "action_beat": "마이크에 대고 미소지으며 인사한다",
+  "emotion": "벅참",
+  "camera": {
+    "shot": "close-up",
+    "angle": "eye level",
+    "framing": "우측 인물, 좌측 여백",
+    "focus": "미소"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "warm cel-shaded webtoon, 17-year-old Korean girl, short brown bob hair, bright eyes, yellow hoodie, on school rooftop at sunset, orange sky, chain-link fence, speaking into a microphone, gentle smile, golden light",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "여기는 옥상의 라디오. 마지막 방송을 시작합니다.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-004/SCENE-004_a.png",
+      "images/raw/SCENE-004/SCENE-004_b.png"
+    ],
+    "selected_image": "images/raw/SCENE-004/SCENE-004_a.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

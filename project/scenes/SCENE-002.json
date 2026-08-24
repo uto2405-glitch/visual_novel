@@ -1,0 +1,54 @@
+{
+  "scene_id": "SCENE-002",
+  "scene_order": 2,
+  "status": "APPROVED",
+  "location_id": "LOC-002",
+  "time": "방과 후",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "엔지니어 준을 설득",
+  "action_beat": "준의 앞에 헤드폰을 내밀며 부탁한다",
+  "emotion": "간절함과 장난기",
+  "camera": {
+    "shot": "two shot",
+    "angle": "eye level",
+    "framing": "마주보는 두 인물",
+    "focus": "손과 표정"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "warm cel-shaded webtoon, 17-year-old Korean girl, short brown bob hair, bright eyes, yellow hoodie and 17-year-old Korean boy, black curly hair, round glasses, navy school uniform, in old school broadcasting room, fluorescent light, vintage radio equipment, offering headphones, facing each other",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "너 없으면 소리가 안 나오잖아.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "...딱 한 번이야.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-002/SCENE-002_a.png",
+      "images/raw/SCENE-002/SCENE-002_b.png"
+    ],
+    "selected_image": "images/raw/SCENE-002/SCENE-002_a.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

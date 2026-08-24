@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(**)",
+      "Bash(python tools/check_protocol.py)",
+      "Bash(python3 tools/check_protocol.py)",
+      "Bash(python --version)",
+      "Bash(python -m json.tool:*)",
+      "Bash(python tools/check_protocol.py:*)",
+      "Bash(python3 tools/check_protocol.py:*)",
+      "Bash(python tools/advance_scene.py:*)",
+      "Bash(python3 tools/advance_scene.py:*)",
+      "Bash(python tools/make_grok_input.py:*)",
+      "Bash(python3 tools/make_grok_input.py:*)",
+      "Bash(python tools/grok_api.py:*)",
+      "Bash(python3 tools/grok_api.py:*)",
+      "Bash(python tools/selftest.py)",
+      "Bash(python3 tools/selftest.py)",
+      "Bash(python tools/webapp.py:*)",
+      "Bash(python3 tools/webapp.py:*)",
+      "Bash(python tools/vn_compose.py:*)",
+      "Bash(python3 tools/vn_compose.py:*)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/*.key)",
+      "Read(**/secrets/**)",
+      "Bash(git push:*)",
+      "Bash(rm:*)",
+      "Bash(sudo:*)",
+      "Write(protocol/SCORECARD.md)",
+      "Edit(protocol/SCORECARD.md)",
+      "Write(tools/check_protocol.py)",
+      "Edit(tools/check_protocol.py)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.json)",
+      "Write(tests/**)",
+      "Edit(tests/**)"
+    ]
+  }
+}
