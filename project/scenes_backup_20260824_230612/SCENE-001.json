@@ -1,0 +1,47 @@
+{
+  "scene_id": "SCENE-001",
+  "scene_order": 1,
+  "status": "APPROVED",
+  "location_id": "LOC-001",
+  "time": "비 오는 오후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "하람이 부러진 파란 우산을 수선집 카운터에 올리며 이야기가 시작된다",
+  "action_beat": "젖은 노란 우비 차림으로 부러진 파란 우산을 카운터에 조심스레 올려놓는다",
+  "emotion": "머뭇거림과 옅은 기대",
+  "camera": {
+    "shot": "medium shot",
+    "angle": "eye level",
+    "framing": "우측 인물, 좌측 카운터",
+    "focus": "우산과 표정"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, medium shot, 17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat, placing an old broken blue umbrella on the counter of a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, hesitant and hopeful",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "저기… 이 우산, 고칠 수 있을까요?",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-001/SCENE-001_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-001/SCENE-001_a-2.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

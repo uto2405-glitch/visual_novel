@@ -321,6 +321,8 @@ POST_ROUTES = {
 
 # ---------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
+    timeout = 60  # Content-Length 불일치 등으로 rfile.read 가 영원히 막히지 않게 소켓 타임아웃
+
     def log_message(self, *a):
         pass
 

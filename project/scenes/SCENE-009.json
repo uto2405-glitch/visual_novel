@@ -1,0 +1,45 @@
+{
+  "scene_id": "SCENE-009",
+  "scene_order": 9,
+  "status": "PROMPT",
+  "location_id": "LOC-002",
+  "time": "비가 그친 오후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "가게를 나서자 비가 그친 것을 발견한다",
+  "action_beat": "하람이 되살아난 우산을 들고 가게를 나서며 비가 막 그친 골목을 바라본다",
+  "emotion": "놀라움과 조용한 안도",
+  "camera": {
+    "shot": "medium wide shot",
+    "angle": "eye level",
+    "framing": "Haram in the foreground of the alley",
+    "focus": "Haram looking up at the clearing sky"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat standing at the start of a rain-soaked alley after the rain, puddles reflecting the sky, faint rainbow, holding a repaired closed blue umbrella, looking up with quiet surprise as the last raindrops fall",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "비가… 그쳤네.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

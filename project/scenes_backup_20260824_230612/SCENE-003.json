@@ -1,0 +1,47 @@
+{
+  "scene_id": "SCENE-003",
+  "scene_order": 3,
+  "status": "APPROVED",
+  "location_id": "LOC-001",
+  "time": "비 오는 오후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "하람이 아버지와의 비 오는 날 기억을 떠올린다(감정 절정 도입)",
+  "action_beat": "빗소리에 잠겨 눈을 내리깔고 옛 기억을 더듬는다",
+  "emotion": "그리움",
+  "camera": {
+    "shot": "close-up",
+    "angle": "slightly high",
+    "framing": "얼굴 클로즈업",
+    "focus": "눈가"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, close-up, 17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat, eyes lowered remembering, rain streaks on the window of a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, wistful",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "비 오는 날이면, 늘 이 우산을 들고 마중 나오셨어요.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-003/SCENE-003_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-003/SCENE-003_a-2.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

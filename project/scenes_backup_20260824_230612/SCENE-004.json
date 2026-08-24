@@ -1,0 +1,47 @@
+{
+  "scene_id": "SCENE-004",
+  "scene_order": 4,
+  "status": "APPROVED",
+  "location_id": "LOC-001",
+  "time": "저녁 무렵",
+  "characters": [
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "서씨가 부러진 살을 정성껏 갈아 우산을 되살린다",
+  "action_beat": "작업대에서 우산살을 하나씩 갈고 맞춰 끼운다",
+  "emotion": "묵묵한 정성",
+  "camera": {
+    "shot": "close-up",
+    "angle": "top-down",
+    "framing": "손과 우산살",
+    "focus": "수리하는 손"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, close-up of hands repairing umbrella ribs at a workbench, 60-year-old Korean woman, short silver hair, round glasses, work apron, in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, focused and tender",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-002",
+      "text": "살 몇 개만 갈면… 아직 멀쩡해. 우산도, 사람도.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-004/SCENE-004_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-004/SCENE-004_a-2.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PASS",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

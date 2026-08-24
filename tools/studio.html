@@ -225,6 +225,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
  placeholder="[지시문 생성]을 누르면 grok.com 에 붙여넣을 지시문이 여기에 나옵니다."></textarea>
 <div class="row" style="margin-top:10px">
 <span class="small">② grok.com 이 준 JSON 배열을 아래에 붙여넣고 →</span>
+<label class="small"><input type="checkbox" id="composeManualForce"> 기존 장면 백업 후 재구성</label>
 <button class="btn" id="btnComposeManual">장면 생성</button>
 <span class="small" id="composeManualMsg"></span></div>
 <textarea id="composeJson" rows="6" style="margin-top:6px"
@@ -502,9 +503,14 @@ $("btnComposeInput").onclick=async()=>{try{
 $("btnComposeInputCopy").onclick=async()=>{await navigator.clipboard.writeText($("composeInput").value);
  $("btnComposeInputCopy").textContent="복사됨"};
 $("btnComposeManual").onclick=async()=>{$("composeManualMsg").textContent="생성 중…";
- try{const d=await api("/api/compose-manual",{text:$("composeJson").value,force:$("composeForce").checked,count:+$("composeCount").value});
+ const force=$("composeManualForce").checked||$("composeForce").checked;
+ try{const d=await api("/api/compose-manual",{text:$("composeJson").value,force:force,count:+$("composeCount").value});
   $("composeManualMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고")+(d.warning?" · "+d.warning:"");
-  await refresh()}catch(e){$("composeManualMsg").textContent="실패: "+e.message}};
+  await refresh()}catch(e){
+  const m=/이미 장면이 있습니다/.test(e.message)
+   ? "이미 장면이 있습니다 → 위 '기존 장면 백업 후 재구성'을 체크하고 다시 누르세요(기존 장면은 백업됩니다)"
+   : "실패: "+e.message;
+  $("composeManualMsg").textContent=m}};
 
 // ---- 인화 내보내기 ----
 $("btnExport").onclick=async()=>{$("exportMsg").textContent="굽는 중… (수십 초 걸릴 수 있음)";
@@ -568,6 +574,12 @@ function sceneCard(sc){
 
  const act=el("div","row");act.style.marginTop="8px";
  const msg=el("span","small");
+ if(sc.prompt){const bcp=el("button","btn ghost","🖼 이미지 프롬프트 복사");
+  bcp.title="이 프롬프트를 외부 이미지 AI 에 붙여넣으세요";
+  bcp.onclick=async()=>{try{await navigator.clipboard.writeText(sc.prompt);
+    bcp.textContent="복사됨 ✓";setTimeout(()=>{bcp.textContent="🖼 이미지 프롬프트 복사"},1300)}
+   catch(e){bcp.textContent="복사 실패"}};
+  act.appendChild(bcp)}
  const btnScan=el("button","btn ghost","폴더 스캔");
  btnScan.onclick=async()=>{try{const d=await api("/api/register-images",{scene_id:sc.scene_id});
    msg.textContent="후보 "+d.count+"장 · 자동검사 "+d.auto;await refresh()}catch(e){alert(e.message)}};

@@ -1,45 +1,48 @@
 {
   "scene_id": "SCENE-003",
   "scene_order": 3,
-  "status": "APPROVED",
+  "status": "PROMPT",
   "location_id": "LOC-001",
   "time": "비 오는 오후",
   "characters": [
     "CHAR-001"
   ],
   "props": [],
-  "purpose": "하람이 아버지와의 비 오는 날 기억을 떠올린다(감정 절정 도입)",
-  "action_beat": "빗소리에 잠겨 눈을 내리깔고 옛 기억을 더듬는다",
-  "emotion": "그리움",
+  "purpose": "하람이 아버지의 추억을 꺼내 이야기한다",
+  "action_beat": "하람이 우산을 바라보며 비 오는 날마다 아버지가 마중 나오시던 기억을 조용히 말한다",
+  "emotion": "깊은 그리움과 슬픔",
   "camera": {
     "shot": "close-up",
-    "angle": "slightly high",
-    "framing": "얼굴 클로즈업",
-    "focus": "눈가"
+    "angle": "slightly low angle",
+    "framing": "tight on Haram's face and upper body",
+    "focus": "Haram's eyes filled with memory"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, close-up, 17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat, eyes lowered remembering, rain streaks on the window of a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, wistful",
+    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat standing in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, gazing softly at a broken blue umbrella with a distant, nostalgic expression",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
       "speaker_id": "CHAR-001",
-      "text": "비 오는 날이면, 늘 이 우산을 들고 마중 나오셨어요.",
+      "text": "이건… 돌아가신 아버지가 남기신 우산이에요.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-001",
+      "text": "비 오는 날마다 이 우산을 들고 저를 마중 나오셨거든요.",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [
-      "images/raw/SCENE-003/SCENE-003_a-2.png"
-    ],
-    "selected_image": "images/raw/SCENE-003/SCENE-003_a-2.png"
+    "raw_images": [],
+    "selected_image": ""
   },
   "review": {
-    "auto": "PASS",
-    "human": "PASS",
+    "auto": "PENDING",
+    "human": "PENDING",
     "score": null,
     "notes": []
   },

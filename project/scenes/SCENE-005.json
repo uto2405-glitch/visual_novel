@@ -1,45 +1,48 @@
 {
   "scene_id": "SCENE-005",
   "scene_order": 5,
-  "status": "APPROVED",
-  "location_id": "LOC-002",
-  "time": "비 그친 직후",
+  "status": "PROMPT",
+  "location_id": "LOC-001",
+  "time": "비 오는 오후",
   "characters": [
-    "CHAR-001"
+    "CHAR-002"
   ],
   "props": [],
-  "purpose": "가게를 나서니 비가 그쳐 있고, 하람이 되살아난 우산을 편다",
-  "action_beat": "가게 문을 나서며 파란 우산을 활짝 펴 든다",
-  "emotion": "옅은 놀라움과 후련함",
+  "purpose": "고치기 어려운 상태를 확인하지만 정성껏 고치겠다고 결심한다",
+  "action_beat": "서씨가 부러진 살 여러 개를 가리키며 쉽지는 않겠지만 반드시 고치겠다고 말한다",
+  "emotion": "결의와 따뜻한 책임감",
   "camera": {
-    "shot": "wide shot",
+    "shot": "medium close-up",
     "angle": "eye level",
-    "framing": "젖은 골목 속 인물",
-    "focus": "펼친 파란 우산"
+    "framing": "Mrs. Seo dominant in frame with umbrella",
+    "focus": "Mrs. Seo's determined eyes and the damaged ribs"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, wide shot, 17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat, opening a repaired blue umbrella just outside a shop, rain-soaked alley after the rain, puddles reflecting the sky, faint rainbow, quiet relief",
+    "grok_output": "60-year-old Korean woman, short silver hair, round glasses, work apron in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, holding a broken blue umbrella and pointing carefully at its snapped ribs with a resolute yet kind expression",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
-      "speaker_id": "CHAR-001",
-      "text": "…어느새 비가 그쳤네.",
+      "speaker_id": "CHAR-002",
+      "text": "살이 여럿 부러져서 쉽진 않겠지만…",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "정성껏 고쳐줄게. 기다려 보렴.",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [
-      "images/raw/SCENE-005/SCENE-005_a-2.png"
-    ],
-    "selected_image": "images/raw/SCENE-005/SCENE-005_a-2.png"
+    "raw_images": [],
+    "selected_image": ""
   },
   "review": {
-    "auto": "PASS",
-    "human": "PASS",
+    "auto": "PENDING",
+    "human": "PENDING",
     "score": null,
     "notes": []
   },

@@ -1,7 +1,7 @@
 {
   "scene_id": "SCENE-002",
   "scene_order": 2,
-  "status": "APPROVED",
+  "status": "PROMPT",
   "location_id": "LOC-001",
   "time": "비 오는 오후",
   "characters": [
@@ -9,43 +9,41 @@
     "CHAR-001"
   ],
   "props": [],
-  "purpose": "서씨가 우산을 살피고, 하람이 우산의 사연을 꺼낸다",
-  "action_beat": "돋보기 안경 너머로 부러진 살을 짚어보고, 하람이 조심스레 말을 잇는다",
-  "emotion": "잔잔한 온기",
+  "purpose": "서씨 아주머니가 우산을 받아 상태를 살피기 시작한다",
+  "action_beat": "서씨가 우산을 건네받아 조심스럽게 펼쳐 보며 부러진 살들을 확인한다",
+  "emotion": "관심과 연민",
   "camera": {
-    "shot": "two shot",
+    "shot": "medium two-shot",
     "angle": "eye level",
-    "framing": "마주 선 두 인물",
-    "focus": "우산을 든 손"
+    "framing": "both figures balanced, umbrella between them",
+    "focus": "the broken blue umbrella in Mrs. Seo's hands"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "warm cel-shaded Korean webtoon, soft rainy-day palette, clean line art, portrait 2:3, two shot, 60-year-old Korean woman, short silver hair, round glasses, work apron and 17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat, examining a broken blue umbrella together in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, gentle warmth",
+    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat and 60-year-old Korean woman, short silver hair, round glasses, work apron inside a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, the older woman carefully examining a broken blue umbrella with several snapped ribs while the girl watches anxiously",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
       "speaker_id": "CHAR-002",
-      "text": "허어… 오래 함께한 녀석이구나.",
+      "text": "아이고, 많이 상했구나. 어디 한번 보자.",
       "placement": "bottom"
     },
     {
       "speaker_id": "CHAR-001",
-      "text": "아빠가 쓰시던 거예요. 이젠 제가 들고요.",
+      "text": "네… 부탁드립니다.",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [
-      "images/raw/SCENE-002/SCENE-002_a-2.png"
-    ],
-    "selected_image": "images/raw/SCENE-002/SCENE-002_a-2.png"
+    "raw_images": [],
+    "selected_image": ""
   },
   "review": {
-    "auto": "PASS",
-    "human": "PASS",
+    "auto": "PENDING",
+    "human": "PENDING",
     "score": null,
     "notes": []
   },
