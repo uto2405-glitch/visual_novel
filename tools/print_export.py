@@ -607,6 +607,11 @@ def main() -> int:
         if s["upscaled"]:
             print(f"  ⚠ {s['upscaled']}장은 업스케일됨 — 인화 화질 저하 가능. "
                   "--upscale step/auto 로 개선하거나 더 큰 해상도로 재생성 권장.")
+            # "더 크게 재생성" 은 매니페스트 두 값이 함께 올라가야 실제로 커진다.
+            # 요청 크기만 올리면 생성기 상한에 깎여 과금만 되고 결과는 그대로다.
+            print("     재생성 전 확인: output.min_long_edge_px(요청 크기)와 "
+                  "image_generator.max_long_edge_px(생성기 상한)를 함께 올렸는지 "
+                  "—  python tools/makefun_client.py --check")
         if s["skipped"]:
             print(f"  {s['skipped']}장은 --skip-upscale 로 제외됨.")
     else:

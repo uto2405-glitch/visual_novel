@@ -117,7 +117,10 @@ def build_input(sid: str) -> str:
             add_kv(label, prof.get(k))
         if prof.get("signature_props"):
             add_kv("시그니처 소품", ", ".join(str(p) for p in prof["signature_props"]))
-        add(f"- prompt_anchor (SCENE_PROMPT 에 원문 그대로 포함): {c.get('prompt_anchor', '')}")
+        # 앵커는 검사기 A6 가 **대소문자까지 구분해** 원문 그대로 찾는다. 소문자로 바꿔
+        # 돌려주는 출력이 흔해서, 요구를 여기서 한 번 더 못 박는다.
+        add(f"- prompt_anchor (SCENE_PROMPT 에 대소문자·구두점까지 원문 그대로 포함): "
+            f"{c.get('prompt_anchor', '')}")
         if c.get("reference_images"):
             add("- 레퍼런스 이미지 (외부 이미지 AI에 반드시 함께 첨부):")
             for r in c["reference_images"]:
@@ -130,7 +133,7 @@ def build_input(sid: str) -> str:
     add("==== 장소 ====")
     add(f"[{lid}] {l.get('name', '')}")
     add_kv("설명", l.get("description"))
-    add(f"- prompt_anchor (원문 그대로 포함): {l.get('prompt_anchor', '')}")
+    add(f"- prompt_anchor (대소문자·구두점까지 원문 그대로 포함): {l.get('prompt_anchor', '')}")
     if l.get("reference_images"):
         add("- 레퍼런스 이미지 (외부 이미지 AI에 함께 첨부):")
         for r in l["reference_images"]:
@@ -149,6 +152,17 @@ def build_input(sid: str) -> str:
 
     # 6) 이번 장면 계획
     add(f"==== 이번 장면: {sid} (order {sc.get('scene_order')}) ====")
+    if sc.get("episode"):
+        add_kv("화", f"{sc.get('episode')}화")
+    # 엔딩 표기는 감상본(export_viewer.ending_of)과 같은 규칙으로 읽는다:
+    # ending 은 참/거짓, 이름은 ending_label. 옛 데이터의 문자열 ending 도 이름으로 받는다.
+    raw_end = sc.get("ending")
+    end_label = str(sc.get("ending_label") or "").strip()
+    if isinstance(raw_end, str):
+        end_label = end_label or raw_end.strip()
+    if raw_end:
+        add_kv("결말 컷", (end_label or "이 경로의 마지막 장면")
+               + " — 이야기가 여기서 닫히므로 여운이 남는 구도로")
     add_kv("목적", sc.get("purpose"))
     add_kv("행동 비트", sc.get("action_beat"))
     add_kv("감정", sc.get("emotion"))
@@ -184,6 +198,8 @@ def build_input(sid: str) -> str:
         add(f"- 대사 {i}: 화자 {spk} / 위치 {d.get('placement', 'bottom')}")
     add("")
     add("위 정보로 SCENE_PROMPT / NEGATIVE_PROMPT / CONTINUITY_NOTES / DIALOGUE_PLACEMENT 를 출력하라.")
+    add("주의: 위 prompt_anchor 문구는 한 글자도 바꾸지 말고(대소문자 포함) SCENE_PROMPT 안에 "
+        "그대로 넣을 것 — 자동 검사가 원문 일치로 확인하고, 앵커가 흔들리면 컷마다 얼굴이 달라진다.")
 
     return "\n".join(lines)
 

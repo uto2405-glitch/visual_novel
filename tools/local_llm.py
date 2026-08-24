@@ -27,10 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vn_core  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
-try:                       # 대화 로그 경로·입출력의 단일 출처(웹 스튜디오와 공유)
-    import talk_store      # noqa: E402
-except ImportError:        # 아직 없으면 같은 규칙(safe_slug)으로 직접 읽는다
-    talk_store = None      # type: ignore[assignment]
+import talk_store  # noqa: E402  대화 로그 경로·입출력의 단일 출처(웹 스튜디오와 공유)
 
 ROOT = vn_core.ROOT
 MANIFEST = vn_core.MANIFEST
@@ -230,37 +227,18 @@ def _now_block(now: datetime | None = None) -> str:
 
 
 # ------------------------------------------------------------- 장기 기억(요약)
-def _talk_path(cid: str) -> Path:
-    """대화 로그 파일 — talk_store 가 있으면 그 규칙을 그대로 따른다.
-
-    예전에는 이 함수만 cid 를 그대로 파일명에 썼고 웹은 영숫자만 남겼다. 그래서
-    특수문자가 섞인 character_id 에서는 서로 다른 파일을 보게 되어 '장기 기억'이
-    조용히 비었다. 규칙은 한 곳(talk_store, 없으면 safe_slug)에서만 정한다.
-    """
-    if talk_store is not None:
-        try:
-            return Path(talk_store.talk_path(cid))
-        except Exception:
-            pass       # 폴백 규칙으로 계속 — 기억이 비어도 대화 자체는 막지 않는다
-    return STORY_DIR / f"talk_{vn_core.safe_slug(cid, 'CHAR')}.json"
-
-
 def _memory_path(cid: str) -> Path:
-    return STORY_DIR / f"memory_{vn_core.safe_slug(cid, 'CHAR')}.json"
+    """기억 요약 파일 — 파일명 규칙은 대화 로그와 같은 곳(talk_store)에서만 정한다.
+
+    예전에는 이 모듈이 cid 를 그대로 파일명에 쓰고 웹은 영숫자만 남겨서, 특수문자가
+    섞인 character_id 에서는 서로 다른 파일을 보게 되어 '장기 기억'이 조용히 비었다.
+    """
+    return STORY_DIR / f"memory_{talk_store.normalize_cid(cid)}.json"
 
 
 def _talk_messages(cid: str) -> list:
-    """저장된 대화에서 user/assistant 발화만. 파일이 없거나 깨져도 빈 목록."""
-    if talk_store is not None:
-        try:
-            msgs = talk_store.load_messages(cid)
-        except Exception:
-            msgs = []
-    else:
-        msgs = vn_core.load_json_safe(_talk_path(cid), {}).get("messages", [])
-    if not isinstance(msgs, list):
-        return []
-    return [m for m in msgs if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    """저장된 대화(user/assistant 발화). 파일이 없거나 깨져도 빈 목록 — talk_store 가 보장한다."""
+    return talk_store.load_messages(cid)
 
 
 def _load_memory(cid: str) -> dict:
@@ -306,11 +284,7 @@ def memory_digest(cid: str, window: int = TALK_WINDOW, limit: int = 8) -> str:
 def refresh_memory(cid: str | None = None, window: int = TALK_WINDOW) -> bool:
     """창 밖 대화를 로컬 LLM 으로 요약해 저장한다. 서버가 꺼져 있으면 조용히 False."""
     try:
-        if not cid:
-            mf = vn_core.load_manifest()
-            talk = mf.get("talk") if isinstance(mf.get("talk"), dict) else {}
-            chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
-            cid = talk.get("character_id") or (chars[0].get("character_id") if chars else "")
+        cid = talk_store.resolve_cid(cid)      # 대화 상대 결정 규칙도 단일 출처
         if not cid:
             return False
         msgs = _talk_messages(cid)
@@ -405,7 +379,9 @@ def persona_prompt(character_id: str | None = None) -> tuple[str, dict]:
     if not chars:
         raise VNError("매니페스트에 캐릭터가 없습니다. 먼저 작품을 세팅하세요.")
     talk = mf.get("talk") if isinstance(mf.get("talk"), dict) else {}
-    cid = character_id or talk.get("character_id") or chars[0].get("character_id")
+    # 대화 상대 결정(요청값 > manifest.talk > 첫 캐릭터)은 talk_store 하나에만 있다 —
+    # 웹과 CLI 가 서로 다른 인물과 대화하면 로그·기억 파일이 갈린다.
+    cid = talk_store.resolve_cid(character_id) or chars[0].get("character_id")
     ch = next((c for c in chars if c.get("character_id") == cid), chars[0])
     prof = ch.get("profile") if isinstance(ch.get("profile"), dict) else {}
     name = ch.get("name") or cid

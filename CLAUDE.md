@@ -27,6 +27,7 @@ LLM 오케스트레이터로 스토리를 씬/행동 비트/장면으로 분해�
 - `scene_order` 는 1부터 연속하는 정수.
 - 이미지 파일, 프롬프트, 대사, 검수 결과가 scene_id 로 추적 가능해야 한다.
 - 이미지 안에 대사를 직접 생성하는 것을 기본 경로로 사용하지 않는다.
+- **장면 파일의 `status`·`review`·`assets`·`scene_id`·`scene_order` 는 도구(`scene_ops`/`advance_scene`)만 쓴다.** 상태 전이·승인 잠금·과금 복구 기록(`makefun_tasks`)이 걸려 있어 손편집하면 불변식이 깨진다. 반대로 장면 계획·대사·분기 필드(`purpose`·`action_beat`·`emotion`·`time`·`camera`·`dialogue`·`characters`·`location_id`·`episode`·`choices`·`branch`·`ending`·`ending_label`·`print`)는 **스튜디오 장면 편집(`POST /api/set-scene`) 또는 직접 편집이 정식 경로**다.
 - **필드 단위 규약의 단일 출처는 [docs/SCHEMA.md](docs/SCHEMA.md)** 다. 필수/선택·누가 쓰고 누가 읽는지·검사기가 보는지를 그 표에 적고, `templates/` 는 그 표와 같은 모양을 유지한다. 스키마를 바꿀 때는 SCHEMA.md 를 먼저 고친다.
 
 ## 아키텍처 원칙

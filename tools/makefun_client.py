@@ -10,11 +10,16 @@ API: POST /api/v1/userText2Image/start → {code:0, data:[{_id,...}]}
   python tools/makefun_client.py --prompt "..." --out scratch/test.png
   python tools/makefun_client.py --all-pending [--dry-run] [--limit 5]
   python tools/makefun_client.py SCENE-001 --refetch   # 과금 없이 기록된 task 로 재수령
-  python tools/makefun_client.py --check [--online]    # 토큰·설정 사전 점검
+  python tools/makefun_client.py --check [--online]    # 토큰·설정 사전 점검(생성 크기 함정 포함)
+
+인화 크기 주의: 요청 긴 변은 image_generator.max_long_edge_px(기본 2048)로 잘린다.
+output.min_long_edge_px 만 1800/2250/3600 으로 올리면 과금은 그대로 되고 결과만 2048px 이 된다.
+--check 와 생성 직전 경고가 그 조합을 미리 알려 준다(size_plan / size_warnings).
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import random
@@ -223,9 +228,16 @@ def _align8(px: int) -> int:
     return min((px + 7) // 8 * 8, cap)
 
 
-def _size_from_manifest(long_edge: int | None = None) -> tuple[int, int]:
-    """출력 규격(기본 2:3 세로)과 manifest.output.min_long_edge_px 에 맞는 생성 크기."""
-    ar, want = "2:3", DEFAULT_LONG_EDGE
+def size_plan(long_edge: int | None = None) -> dict:
+    """실제로 요청될 크기 + '요청한 값이 깎였는지' 를 함께 돌려준다.
+
+    조용한 절삭은 돈이 새는 함정이다. 문서(README·SCHEMA·PRINT_ORDER_GUIDE·STATUS)는
+    "인화하려면 output.min_long_edge_px 를 1800/2250/3600 으로 올려라"고 안내하는데,
+    image_generator.max_long_edge_px 가 없으면 상한 2048 로 깎여 나간다 — **과금은 그대로 되고**
+    결과는 인화 규격에 미달하며 검사기 A3(긴 변 ≥ min_long_edge_px)까지 FAIL 한다.
+    그래서 크기 계산은 이 한 곳에서 하고, 호출부는 생성 전에 size_warnings 로 사실을 알린다.
+    """
+    ar, want, src = "2:3", DEFAULT_LONG_EDGE, "output.min_long_edge_px"
     out = load_json_safe(MANIFEST, {}).get("output", {})
     if isinstance(out, dict):
         try:
@@ -234,7 +246,10 @@ def _size_from_manifest(long_edge: int | None = None) -> tuple[int, int]:
         except (TypeError, ValueError):
             ar, want = "2:3", DEFAULT_LONG_EDGE
     if long_edge:
-        want = int(long_edge)
+        try:
+            want, src = int(long_edge), "--long-edge"
+        except (TypeError, ValueError):
+            pass
     try:
         w, h = (int(x) for x in ar.split(":"))
         if w <= 0 or h <= 0:
@@ -243,8 +258,55 @@ def _size_from_manifest(long_edge: int | None = None) -> tuple[int, int]:
         w, h = 2, 3
     long_px = _align8(want)
     if h >= w:
-        return max(8, (long_px * w // h) // 8 * 8), long_px
-    return long_px, max(8, (long_px * h // w) // 8 * 8)
+        width, height = max(8, (long_px * w // h) // 8 * 8), long_px
+    else:
+        width, height = long_px, max(8, (long_px * h // w) // 8 * 8)
+    cap = _cap_px()
+    return {"width": width, "height": height, "long": long_px, "want": int(want),
+            "cap": cap, "capped": long_px < int(want), "source": src,
+            "cap_is_default": "max_long_edge_px" not in _cfg()}
+
+
+def _size_from_manifest(long_edge: int | None = None) -> tuple[int, int]:
+    """출력 규격(기본 2:3 세로)과 manifest.output.min_long_edge_px 에 맞는 생성 크기."""
+    plan = size_plan(long_edge)
+    return plan["width"], plan["height"]
+
+
+def _print_note(width: int, height: int) -> str:
+    """이 크기가 실물 인화로 어디까지 가는지 한 줄 — 규격 판정은 print_preflight 에 위임한다."""
+    try:
+        import print_preflight as pf
+        rep = pf.preflight_image(int(width), int(height), pf.DPI_GOOD)
+        need = pf.needed_px("5×7", pf.DPI_GOOD)
+    except Exception:
+        return ""
+    best = rep.get("max_size_at_target")
+    inches = rep.get("max_long_in_at_target")
+    head = (f"이 크기는 {pf.DPI_GOOD}DPI 인화로 최대 {best} 까지입니다 (긴 변 {inches}인치)"
+            if best else
+            f"이 크기는 {pf.DPI_GOOD}DPI 인화 기준 엽서(4×6)에도 미달합니다 (긴 변 {inches}인치)")
+    row = next((r for r in rep.get("rows", []) if r.get("size") == "5×7"), None)
+    if need and row and row.get("dpi", 0) < rep.get("target_dpi", pf.DPI_GOOD):
+        head += f" — 5×7 인화 기준({need[0]}×{need[1]}px)에 미달합니다"
+    return head
+
+
+def size_warnings(plan: dict | None = None, long_edge: int | None = None) -> list[str]:
+    """생성(=과금) 전에 반드시 보여야 할 크기 경고. 문제가 없으면 빈 목록."""
+    plan = plan or size_plan(long_edge)
+    if not plan.get("capped"):
+        return []
+    a3 = ("" if plan.get("source") == "--long-edge" else
+          f" 지금 생성하면 검사기 A3(긴 변 ≥ {plan['want']}px)도 FAIL 합니다.")
+    msgs = [f"요청 {plan['want']}px({plan.get('source', '')}) → 실제 {plan['long']}px "
+            f"— 상한 {plan['cap']}px 에 깎였습니다. 과금은 요청대로 됩니다. "
+            f"매니페스트 image_generator.max_long_edge_px 를 {plan['want']} 이상으로 "
+            f"올린 뒤 생성하세요.{a3}"]
+    note = _print_note(plan["width"], plan["height"])
+    if note:
+        msgs.append(note)
+    return msgs
 
 
 # --- 프롬프트 억제 문구(15) --------------------------------------------------
@@ -356,8 +418,11 @@ def scene_task_ids(scene_id: str) -> list[str]:
 
 def start(prompt: str, n: int = 1, name: str = "",
           long_edge: int | None = None, negative: bool = True, quiet: bool = True) -> list[str]:
-    """생성 시작 → task id 목록."""
-    w, h = _size_from_manifest(long_edge)
+    """생성 시작 → task id 목록. 요청 크기가 상한에 깎이면 과금 전에 알린다."""
+    plan = size_plan(long_edge)
+    w, h = plan["width"], plan["height"]
+    for msg in size_warnings(plan):
+        _say("  ⚠ 생성 크기 — " + msg, quiet)
     body = {"prompt": apply_negative(prompt, negative), "width": w, "height": h,
             "model_type": str(_cfg().get("model", "") or "a2e"),
             "max_images": max(1, min(int(n), 4))}
@@ -492,13 +557,18 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
     """생성→대기→다운로드. 일부만 성공해도 저장된 파일과 경고를 함께 돌려준다(11)."""
     out_dir = Path(out_dir)
     sent = apply_negative(prompt, negative)
-    w, h = _size_from_manifest(long_edge)
+    plan = size_plan(long_edge)
+    w, h = plan["width"], plan["height"]
     model = str(_cfg().get("model", "") or "a2e")
+    # 크기 경고는 start() 가 출력한다. 여기서는 호출부(웹·CLI)가 그대로 볼 수 있게 결과에 싣되,
+    # 실패 메시지에는 섞지 않는다(실패 사유가 긴 안내문에 묻히지 않게).
+    size_warns: list[str] = list(size_warnings(plan))
+    warns: list[str] = []
+    capped = {"capped": True, "want_px": plan["want"], "cap_px": plan["cap"]} if plan["capped"] else {}
     task_ids = start(sent, n=n, name=name, long_edge=long_edge, negative=False, quiet=quiet)
     if scene_id:
         record_tasks(scene_id, task_ids, w, h)   # 다운로드 전에 남겨야 유실 시 재수령이 가능하다(10)
     saved: list[Path] = []
-    warns: list[str] = []
     for tid in task_ids:
         try:
             urls = wait(tid, on_progress=on_progress, quiet=quiet)
@@ -506,25 +576,26 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
             warns.append(f"작업 {tid[-6:]}: {e}")
             log_usage({"scene_id": scene_id, "task_id": tid, "requested": n, "saved": 0,
                        "ok": False, "model": model, "width": w, "height": h,
-                       "billable": True, "error": str(e)[:200]})
+                       "billable": True, "error": str(e)[:200], **capped})
             write_gen_meta(out_dir, {"created_at": _now(), "scene_id": scene_id, "task_id": tid,
                                      "prompt": sent, "model": model, "width": w, "height": h,
-                                     "files": [], "status": "failed", "error": str(e)[:200]})
+                                     "files": [], "status": "failed", "error": str(e)[:200],
+                                     **capped})
             continue
         files, w2 = _download_all(tid, urls, out_dir, quiet)
         saved += files
         warns += w2
         log_usage({"scene_id": scene_id, "task_id": tid, "requested": n, "saved": len(files),
                    "ok": bool(files) and not w2, "model": model, "width": w, "height": h,
-                   "billable": True, "error": "; ".join(w2)[:200]})
+                   "billable": True, "error": "; ".join(w2)[:200], **capped})
         write_gen_meta(out_dir, {"created_at": _now(), "scene_id": scene_id, "task_id": tid,
                                  "prompt": sent, "model": model, "width": w, "height": h,
-                                 "files": [f.name for f in files],
+                                 "files": [f.name for f in files], **capped,
                                  "status": "ok" if files and not w2 else ("partial" if files else "failed"),
                                  "error": "; ".join(w2)[:200]})
     if not saved:
         raise VNError("생성된 이미지가 없습니다." + (" " + " / ".join(warns) if warns else ""))
-    return GenResult(saved, warns, task_ids)
+    return GenResult(saved, size_warns + warns, task_ids)
 
 
 def fetch_task_images(task_id: str, out_dir: Path | None = None, scene_id: str = "",
@@ -594,6 +665,73 @@ def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
                            negative=negative, scene_id=scene_id, on_progress=on_progress, quiet=quiet)
 
 
+# --- 중복 과금 방지: 생성 작업 상태기계(gen_jobs) 연동 ------------------------
+# 웹 스튜디오는 gen_jobs 로 "이 장면은 지금 생성 중" 을 표시해 폰과 PC 가 동시에 눌러도
+# 과금이 한 번만 되게 막는다. CLI 가 그 표시를 안 보면 서버 밖에서 같은 장면을 또 생성해
+# 이중 과금이 난다 — 그래서 CLI 경로도 같은 claim 을 통과한다.
+# gen_jobs 가 없는 환경(이 모듈만 복제된 자가진단 등)에서는 조용히 통과한다.
+
+def _jobs():
+    try:
+        import gen_jobs
+    except Exception:
+        return None
+    return gen_jobs
+
+
+def _jobs_note(jobs, sid: str, msg: str, running: bool = True) -> None:
+    note = getattr(jobs, "note", None) if jobs else None
+    if not callable(note):
+        return
+    try:
+        note(sid, msg, running=running)
+    except TypeError:                 # note(sid, msg) 만 받는 구현
+        with contextlib.suppress(Exception):
+            note(sid, msg)
+    except Exception:
+        pass
+
+
+@contextlib.contextmanager
+def claim_scene(scene_id: str, label: str = "생성"):
+    """같은 장면의 동시 생성을 막는 표시를 잡는다(웹·CLI 공통).
+
+    이미 진행 중이면 gen_jobs 가 오류를 던지고, 그것만 그대로 올려 보낸다(중복 과금 차단).
+    상태기계가 없거나 시그니처가 다르면 조용히 통과한다 — 표시 계층의 문제로 생성을 막지 않는다.
+    """
+    jobs = _jobs()
+    if not scene_id or jobs is None:
+        yield False
+        return
+    block = getattr(jobs, "claimed", None)      # CLI 용 전용 블록이 있으면 그대로 쓴다
+    if callable(block):
+        try:
+            ctx = block(scene_id, label)
+        except TypeError:
+            ctx = None
+        if ctx is not None:
+            with ctx:
+                yield True
+            return
+    claim = getattr(jobs, "claim", None)
+    if not callable(claim):
+        yield False
+        return
+    try:
+        claim(scene_id)
+    except RuntimeError:              # VNError 포함 — "이미 생성 중" 은 반드시 막는다
+        raise
+    except Exception:
+        yield False
+        return
+    try:
+        yield True
+    except BaseException as exc:
+        _jobs_note(jobs, scene_id, f"{label} 실패: {str(exc)[:120]}", running=False)
+        raise
+    _jobs_note(jobs, scene_id, f"{label} 완료", running=False)
+
+
 # --- 배치(13) ---------------------------------------------------------------
 
 def _has_images(scene_id: str, assets: dict) -> bool:
@@ -624,20 +762,37 @@ def pending_scenes() -> list[str]:
 
 
 def generate_all_pending(n: int = 1, limit: int = 0, long_edge: int | None = None,
-                         negative: bool = True, dry_run: bool = False, quiet: bool = False) -> dict:
-    """대기 장면을 순회 생성 — 한 장면이 실패해도 다음 장면으로 넘어간다(13)."""
+                         negative: bool = True, dry_run: bool = False, quiet: bool = False,
+                         claim: bool = True) -> dict:
+    """대기 장면을 순회 생성 — 한 장면이 실패해도 다음 장면으로 넘어간다(13).
+
+    claim=True 면 장면마다 gen_jobs 표시를 잡는다(웹에서 생성 중인 장면을 CLI 가 또 굽지 않게).
+    크기 경고는 --dry-run 에서도 먼저 보여 준다 — 과금 전에 알아야 의미가 있다.
+    """
     targets = pending_scenes()
     if limit and limit > 0:
         targets = targets[:limit]
-    result = {"planned": targets, "done": {}, "failed": {}, "warnings": [], "dry_run": dry_run}
+    size_warns = size_warnings(long_edge=long_edge)
+    result = {"planned": targets, "done": {}, "failed": {}, "warnings": [],
+              "size_warnings": size_warns, "dry_run": dry_run}
     if dry_run or not targets:
+        for msg in size_warns:        # 실제 생성 때는 start() 가 장면마다 같은 경고를 낸다
+            _say("⚠ 생성 크기 — " + msg, quiet)
         return result
     for sid in targets:
         _say(f"[{sid}] 생성 시작 ({targets.index(sid) + 1}/{len(targets)})", quiet)
         try:
-            files = generate_for_scene(sid, n=n, long_edge=long_edge, negative=negative, quiet=quiet)
+            if claim:
+                with claim_scene(sid):
+                    files = generate_for_scene(sid, n=n, long_edge=long_edge,
+                                               negative=negative, quiet=quiet)
+            else:
+                files = generate_for_scene(sid, n=n, long_edge=long_edge,
+                                           negative=negative, quiet=quiet)
             result["done"][sid] = [f.name for f in files]
-            result["warnings"] += [f"{sid}: {w}" for w in getattr(files, "warnings", [])]
+            # 크기 경고는 위에서 한 번 알렸으니 장면마다 되풀이하지 않는다
+            result["warnings"] += [f"{sid}: {w}" for w in getattr(files, "warnings", [])
+                                   if w not in size_warns]
         except RuntimeError as e:
             result["failed"][sid] = str(e)
             _say(f"[{sid}] 실패 — {e}", quiet)
@@ -671,11 +826,25 @@ def check(online: bool = False) -> dict:
         add(False, str(e))
     cfg = _cfg()
     add(bool(cfg), f"manifest image_generator 설정 있음 (model={cfg.get('model', '') or 'a2e'})", fatal=False)
-    w, h = _size_from_manifest()
-    add(True, f"생성 크기 {w}x{h} (긴 변 {max(w, h)}px · 상한 {_cap_px()}px)")
-    if max(w, h) < 1748:   # 10x15cm 300DPI 기준 긴 변
-        rep["lines"].append("주의 10x15cm 300DPI 인화에는 긴 변 1748px 이상 권장 "
-                            "— manifest.output.min_long_edge_px 를 올리세요.")
+    plan = size_plan()
+    w, h = plan["width"], plan["height"]
+    add(True, f"생성 크기 {w}x{h} (요청 {plan['want']}px · 실제 긴 변 {plan['long']}px · "
+              f"상한 {plan['cap']}px{'(기본값)' if plan['cap_is_default'] else ''})")
+    for msg in size_warnings(plan):      # 지금 생성하면 돈이 새는 조합 — 점검을 실패로 만든다
+        add(False, msg)
+    if not plan["capped"]:
+        if plan["cap_is_default"]:       # 아직 안 걸렸을 뿐, 인화 상향과 동시에 걸리는 함정
+            rep["lines"].append(
+                f"주의 상한이 기본값 {SIZE_MAX_PX}px 입니다. 인화하려고 "
+                f"output.min_long_edge_px 를 1800(4×6)·2250(5×7)·3600(8×10) 으로 올리면 "
+                f"image_generator.max_long_edge_px 도 함께 올려야 합니다 "
+                f"— 안 올리면 요청이 {SIZE_MAX_PX}px 로 깎인 채 과금됩니다.")
+        if plan["long"] < 1748:   # 10x15cm 300DPI 기준 긴 변
+            rep["lines"].append("주의 10x15cm 300DPI 인화에는 긴 변 1748px 이상 권장 "
+                                "— manifest.output.min_long_edge_px 를 올리세요.")
+        note = _print_note(w, h)
+        if note:
+            rep["lines"].append("정보 " + note)
     if online:
         if not t:
             add(False, "온라인 점검 생략 — 토큰이 없습니다.")
@@ -704,7 +873,8 @@ def main() -> int:
     ap.add_argument("--prompt", help="장면 대신 직접 프롬프트로 생성")
     ap.add_argument("--out", help="--prompt 모드의 저장 경로/폴더")
     ap.add_argument("--long-edge", type=int, default=0,
-                    help="긴 변 픽셀(기본: manifest.output.min_long_edge_px)")
+                    help="긴 변 픽셀(기본: manifest.output.min_long_edge_px). "
+                         "image_generator.max_long_edge_px 상한을 넘으면 깎이고 경고가 뜹니다")
     ap.add_argument("--no-negative", action="store_true",
                     help="이미지 내 글자 억제 문구를 프롬프트에 덧붙이지 않음")
     ap.add_argument("--all-pending", action="store_true",
@@ -736,7 +906,7 @@ def main() -> int:
                 return 0
             if a.dry_run:
                 print("생성 대상:", ", ".join(res["planned"]))
-                return 0
+                return 1 if res["size_warnings"] else 0
             for sid, names in res["done"].items():
                 print(f"완료 {sid}: {len(names)}장")
             for w in res["warnings"]:
@@ -747,11 +917,13 @@ def main() -> int:
 
         if a.task:
             out = Path(a.out) if a.out else None
-            files = fetch_task_images(a.task, out, a.scene or "", quiet=a.quiet)
+            with claim_scene(a.scene or "", "재수령"):
+                files = fetch_task_images(a.task, out, a.scene or "", quiet=a.quiet)
         elif a.refetch:
             if not a.scene:
                 ap.error("--refetch 에는 장면 ID 가 필요합니다.")
-            files = refetch_scene(a.scene, quiet=a.quiet)
+            with claim_scene(a.scene, "재수령"):
+                files = refetch_scene(a.scene, quiet=a.quiet)
         elif a.prompt:
             out = Path(a.out) if a.out else ROOT / "scratch"
             files = generate_to_dir(a.prompt, out if out.is_dir() or not out.suffix else out.parent,
@@ -760,8 +932,9 @@ def main() -> int:
                 files[0].replace(Path(a.out))
                 files[0] = Path(a.out)
         elif a.scene:
-            files = generate_for_scene(a.scene, n=a.n, long_edge=long_edge,
-                                       negative=neg, quiet=a.quiet)
+            with claim_scene(a.scene):     # 웹에서 같은 장면을 생성 중이면 여기서 막힌다
+                files = generate_for_scene(a.scene, n=a.n, long_edge=long_edge,
+                                           negative=neg, quiet=a.quiet)
         else:
             ap.error("장면 ID 또는 --prompt 가 필요합니다.")
             return 2

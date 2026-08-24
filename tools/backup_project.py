@@ -23,6 +23,9 @@ schedule: 주기 자동 스냅샷+verify 용 스크립트/등록 명령 안내(�
 
 쓰기: backups/ 와 --dest 로 지정한 폴더만. 예외로 restore 만 project/·images/ 를 되돌린다.
 표준 라이브러리만.
+
+복구할 때 zip 을 손으로 풀 필요는 없다 — restore 가 차이 미리보기·확인·되돌림 백업까지 한다.
+이미지 원본은 기본 백업에 없다(체크섬만) — 지키려면 snapshot --with-images 를 쓴다.
 """
 from __future__ import annotations
 
@@ -281,6 +284,9 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
         "files": sums,
     })
     print(f"  체크섬 매니페스트: {manifest.relative_to(ROOT).as_posix()} ({len(sums)}개 파일)")
+    if zpath:   # 사고가 났을 때 찾아 헤매지 않도록 되돌리는 명령을 지금 남겨 둔다
+        print(f"  되돌리기: python tools/backup_project.py restore --snapshot {stamp} --dry-run"
+              "   → 확인 후 --dry-run 없이 다시")
 
     if not with_images:
         _warn_no_images("  ")
@@ -363,8 +369,11 @@ def verify(stamp: str | None = None, base: Path | None = None) -> int:
         print("무결성 정상 — 기록된 파일이 모두 동일합니다.")
         return 0
     print(f"이상 {len(changed) + len(missing)}건 — 인화/전달 전 확인하세요.")
-    if missing:
-        print("  되돌리려면: python tools/backup_project.py restore --dry-run")
+    # 변경(비트로트·실수 저장)도 누락과 똑같이 restore 로 되돌린다 — zip 을 손으로 풀 필요 없다.
+    stamp = m.stem.replace("manifest_", "")
+    print(f"  되돌리려면: python tools/backup_project.py restore --snapshot {stamp} --dry-run"
+          "   → 무엇이 바뀌는지 본 뒤 --dry-run 없이 다시 실행")
+    print("  (복원 전 현재 상태는 backups/prerestore_*.zip 으로 자동 보관됩니다)")
     return 1
 
 
@@ -389,6 +398,18 @@ def list_backups(base: Path | None = None) -> int:
     saves = sorted(b.glob("prerestore_*.zip"))
     for s in saves:
         print(f"  [복원 전 보관] {s.name} · {_human(s.stat().st_size)}")
+
+    # 목록만 보고 끝나지 않게 — 여기서 바로 쓸 수 있는 다음 명령을 붙인다.
+    latest = ms[-1].stem.replace("manifest_", "")
+    print()
+    print("복원(수작업 압축 해제 불필요):")
+    print(f"  python tools/backup_project.py restore --snapshot {latest} --dry-run   # 차이 먼저 확인")
+    print(f"  python tools/backup_project.py restore --snapshot {latest}             # 되돌리기")
+    if not any(_load_json(m).get("images_included") for m in ms):
+        print("※ 어느 스냅샷에도 이미지 원본이 없습니다 — images/ 는 체크섬만 있어 zip 으로 "
+              "되돌릴 수 없습니다.")
+        print("   다음 백업부터: python tools/backup_project.py snapshot --with-images "
+              "(외장 사본: --dest D:/backup)")
     return 0
 
 
@@ -766,26 +787,45 @@ def schedule(*, time_of_day: str = "21:00", freq: str = "DAILY", day: str = "SUN
 
 # ---------------------------------------------------------------- CLI
 
+EPILOG = """자주 쓰는 두 가지
+
+  [복구] 파일이 사라졌거나 잘못 저장했을 때 — zip 을 손으로 풀 필요 없습니다.
+    python tools/backup_project.py list                            어떤 스냅샷이 있나
+    python tools/backup_project.py restore --dry-run               무엇이 바뀌는지 먼저
+    python tools/backup_project.py restore --snapshot <스탬프>       되돌리기
+    python tools/backup_project.py verify                          되돌린 결과 대조
+    복원 전 현재 상태는 backups/prerestore_*.zip 으로 자동 보관됩니다(--no-backup 으로 생략).
+
+  [이미지 원본] 기본 백업에는 체크섬만 들어갑니다. 승인 이미지는 유료 생성물이자 유일본입니다.
+    python tools/backup_project.py snapshot --with-images          zip 에 원본까지
+    python tools/backup_project.py snapshot --with-images --dest D:/backup   외장드라이브 사본
+"""
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="백업 + sha256 무결성 + 복원")
+    ap = argparse.ArgumentParser(description="백업 + sha256 무결성 + 복원", epilog=EPILOG,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("snapshot", help="백업 + 체크섬 스냅")
-    sp.add_argument("--with-images", action="store_true", help="이미지 원본도 zip 에 포함")
+    sp = sub.add_parser("snapshot", help="백업 + 체크섬 스냅 (이미지 원본은 --with-images 로)")
+    sp.add_argument("--with-images", action="store_true",
+                    help="이미지 원본도 zip 에 포함 — 없으면 체크섬만 남아 되돌릴 수 없습니다")
     sp.add_argument("--images-scope", default="approved", choices=["approved", "all"],
                     help="approved=승인 장면이 쓰는 이미지만(기본), all=images/ 전체")
     sp.add_argument("--dest", help="외장드라이브·클라우드 폴더에 사본 복사")
     sp.add_argument("--keep", type=int, help="스냅 후 최신 N개만 보존")
     sp.add_argument("--dry-run", action="store_true", help="쓰지 않고 계획만 표시")
 
-    vp = sub.add_parser("verify", help="스냅과 현재 파일 대조")
+    vp = sub.add_parser("verify", help="스냅과 현재 파일 대조 (이상이 있으면 restore 를 안내)")
     vp.add_argument("--snapshot", help="기준 스냅샷 스탬프(기본: 최신)")
     vp.add_argument("--from", dest="src", help="백업 폴더(기본: backups/)")
 
-    lp = sub.add_parser("list", help="백업 목록")
+    lp = sub.add_parser("list", help="백업 목록 + 바로 쓸 restore 명령")
     lp.add_argument("--from", dest="src", help="백업 폴더(기본: backups/)")
 
-    rp = sub.add_parser("restore", help="스냅샷 zip 복원(파괴적)")
+    rp = sub.add_parser("restore", help="스냅샷 zip 복원(파괴적) — 소실·오저장의 정식 복구 경로",
+                        description="스냅샷 상태로 되돌린다. 먼저 --dry-run 으로 차이를 보고, "
+                                    "실행하면 복원 전 현재 상태를 자동 보관한다.")
     rp.add_argument("--snapshot", help="복원할 스탬프(기본: 최신)")
     rp.add_argument("--from", dest="src", help="백업 폴더(기본: backups/)")
     rp.add_argument("--dry-run", action="store_true", help="차이만 미리보기")

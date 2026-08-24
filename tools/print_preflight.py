@@ -272,6 +272,19 @@ def _row_line(r: dict) -> str:
     return f"{mark}{_pad(r['size'], 18)}{_pad(mm, 14)}{r['dpi']:>4}DPI  {r['grade']}{crop}"
 
 
+def generator_cap_note() -> list[str]:
+    """생성기 상한 안내 — 이 도구의 "더 크게 생성하세요" 조언이 함정으로 끝나지 않게 한다.
+
+    min_long_edge_px 만 올리면 요청이 image_generator.max_long_edge_px(기본 2048px)로 깎인
+    채 과금된다. 상한 판정은 makefun_client 한 곳에 있고(중복 구현 금지) 여기서는 전달만 한다.
+    """
+    try:
+        import makefun_client as mkc
+        return ["※ " + m for m in mkc.size_warnings()]
+    except Exception:
+        return []                      # 생성기 모듈이 없어도 인화 판정은 그대로 돌아간다
+
+
 def report(target: int, scene_filter: str | None, include_all: bool) -> int:
     if not MANIFEST.exists():
         raise VNError("project/manifest.json 이 없습니다.")
@@ -288,6 +301,8 @@ def report(target: int, scene_filter: str | None, include_all: bool) -> int:
     if cur_in is not None:
         note = "엽서도 빠듯" if cur_in < 4 else ("최대 " + str(cur_in) + "인치")
         print(f"매니페스트 min_long_edge_px={min_edge} → {target}DPI 에서 긴 변 {cur_in}인치 ({note})")
+    for line in generator_cap_note():
+        print(line)
     print()
 
     scenes = collect(scene_filter, include_all)
@@ -326,6 +341,10 @@ def report(target: int, scene_filter: str | None, include_all: bool) -> int:
             need = needed_px(name, target)
             if need:
                 print(f"  · {name} @{target}DPI 인화하려면 최소 약 {need[0]}×{need[1]}px 로 생성하세요.")
+        print("  · 매니페스트는 두 값을 함께 올려야 합니다 — output.min_long_edge_px(요청 크기)와 "
+              "image_generator.max_long_edge_px(생성기 상한).")
+        print("    상한만 낮으면 요청이 조용히 깎인 채 과금됩니다. 확인: "
+              "python tools/makefun_client.py --check")
     print("주의: 예술적 발색·톤은 사람 시사(SCORECARD C)로 최종 판정합니다.")
     return 0
 

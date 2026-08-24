@@ -22,23 +22,36 @@
   * LAN 모드는 PIN 인증이 기본. 127.0.0.1 접속은 면제(로컬 작업은 그대로 편하게).
     인증 토큰은 발급받은 기기(IP)에 묶이고 3시간 미사용 시 만료된다(슬라이딩).
     PIN 오입력은 IP 별로 세고, 5회면 1분 잠금 + 매 실패마다 0.3초 지연(무차별 대입 방지).
-  * 모든 응답에 nosniff·no-referrer, 스튜디오 화면에는 CSP. /dl 은 inline 요청이 아니면
-    application/octet-stream 으로 내려 output/ 의 HTML 이 동일 출처 스크립트로 실행되지 않게 한다.
+  * 모든 응답에 nosniff·no-referrer, 스튜디오 화면에는 CSP. CSP 는 문서마다 계산한다
+    (csp_for) — 인라인 스크립트가 없는 문서는 script-src 에서 'unsafe-inline' 이 빠진다.
+    /dl 은 inline 요청이 아니면 application/octet-stream 으로 내려 output/ 의 HTML 이
+    동일 출처 스크립트로 실행되지 않게 한다.
+  * /studio/<이름>.js 는 tools/ 아래 **평범한 이름의 .js 파일만** 내보낸다(하위 폴더·숨김·
+    확장자 위장 불가, 경로 판정은 vn_core.safe_path).
+  * 장면 편집(/api/set-scene)은 화이트리스트 필드만 통과한다 — status·review·assets·
+    scene_id·scene_order 는 이 경로로 바뀌지 않는다(사람 승인 게이트 우회 차단).
   * 프론트는 서버 데이터를 innerHTML 로 넣지 않는다(studio.html 안전 규약).
   * 쓰기 요청은 vn_core.WRITE_LOCK 으로 직렬화된다.
 
 계층: vn_core(경로·JSON·원자적 쓰기) ← advance_scene(저장소) ← scene_ops(상태 전이)
-      ← webapp(HTTP). 이 파일에는 **전이 규칙이 없다** — 라우트는 scene_ops 를 부르는
-      얇은 어댑터다. 대화 로그는 talk_store, 이미지 프롬프트 조립은 prompt_build 담당.
+      ← webapp(HTTP). 이 파일에는 **전이 규칙도 도메인 로직도 없다** — 라우트는 아래를
+      부르는 얇은 어댑터다.
+        scene_ops    장면 상태 전이·필드 편집        vn_compose  장면 구성·대화→장면
+        prompt_build 프롬프트 문자열(이미지·스토리챗)  gen_jobs    생성 작업 상태기계
+        talk_store   대화 로그                        print_export/export_viewer  내보내기
+      **모델에 보내는 프롬프트 문자열은 이 파일에 한 줄도 없다**(prompt_build·vn_compose 전담).
 
 데이터 보존:
   * 대화 로그(스토리·인물)는 항상 저장본과 병합해 저장하고, 상한을 넘는 오래된 구간도
     버리지 않고 talk_<cid>.archive.jsonl 로 옮긴 뒤에만 잘라낸다.
   * 이미지 생성 스레드는 daemon 이라 **Ctrl+C 로 서버를 끄면 즉시 끊긴다.** 종료 시 진행 중인
-    작업이 있으면 콘솔에 알리고, MakeFun 에 이미 만들어진 결과는 POST /api/refetch 로
-    추가 과금 없이 다시 받아올 수 있다.
+    작업이 있으면 콘솔에 알리고(gen_jobs.running), MakeFun 에 이미 만들어진 결과는
+    POST /api/refetch 로 추가 과금 없이 다시 받아올 수 있다.
+  * 같은 장면의 중복 생성(=중복 과금)은 gen_jobs.claim 하나가 막는다 — 웹이든 CLI 든
+    같은 관문을 지난다.
 
 로그: logs/webapp.log (회전). 기본은 오류·생성 실패·LAN 접속만, --verbose 면 요청까지.
+      생성 작업 로그(vn.gen)도 같은 파일에 모인다.
 
 의존성: 표준 라이브러리만(썸네일만 선택적으로 Pillow). Python 3.9+.
 """
@@ -49,7 +62,6 @@ import base64
 import gzip
 import hashlib
 import http.cookies
-import inspect
 import json
 import logging
 import logging.handlers
@@ -67,6 +79,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import advance_scene as adv  # noqa: E402
+import gen_jobs  # noqa: E402
 import local_llm  # noqa: E402
 import make_grok_input  # noqa: E402
 import makefun_client  # noqa: E402
@@ -107,23 +120,55 @@ CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: b
        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
        "connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; "
        "frame-ancestors 'none'")
+# src= 없는 <script ...> 여는 태그 — 그 안에 내용이 있으면 인라인 스크립트가 있는 문서다.
+_INLINE_SCRIPT_OPEN = re.compile(rb"<script(?![^>]*\bsrc\s*=)[^>]*>", re.I)
+# 스튜디오 JS 는 /studio/<이름>.js 로 서빙한다(감상본은 같은 파일을 인라인으로 품는다).
+STUDIO_JS_RE = re.compile(r"^[A-Za-z0-9_-]+\.js$")
+JS_MAX_AGE = 0               # 파일을 고치면 즉시 반영되도록 매번 재검증(ETag 로 304)
 
 log = logging.getLogger("vn.webapp")
 log.addHandler(logging.NullHandler())   # 라이브러리로 import 될 때는 조용히
+# 생성 작업(gen_jobs)의 로그도 같은 파일로 모은다 — 실패 사유가 두 곳으로 갈라지지 않게.
+LOG_NAMES = ("vn.webapp", "vn.gen")
+
+
+def has_inline_script(body: bytes) -> bool:
+    """문서에 **내용이 있는** 인라인 스크립트가 있는가. 닫는 태그가 없으면 있다고 본다(보수적)."""
+    for m in _INLINE_SCRIPT_OPEN.finditer(body):
+        end = body.find(b"</script", m.end())
+        if (body[m.end():] if end < 0 else body[m.end():end]).strip():
+            return True
+    return False
+
+
+def csp_for(body: bytes) -> str:
+    """이 문서에 맞는 CSP — 인라인 스크립트가 없으면 script-src 에서 'unsafe-inline' 을 뺀다.
+
+    스튜디오 JS 가 /studio/*.js 파일로 분리되면 인라인 예외가 필요 없어지고, 그때는
+    주입된 <script> 조각이 아예 실행되지 못한다. 아직 인라인이 남아 있는 문서(잠금 화면 등)는
+    지금까지와 같은 정책을 그대로 받는다 — 어느 쪽이든 화면은 동작한다.
+    """
+    if has_inline_script(body):
+        return CSP
+    return CSP.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'")
 
 
 def setup_logging(verbose: bool = False) -> None:
     """logs/webapp.log 회전 로그. 실패해도(권한 등) 서버 기동을 막지 않는다."""
+    handler = None
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        h = logging.handlers.RotatingFileHandler(
+        handler = logging.handlers.RotatingFileHandler(
             LOG_DIR / "webapp.log", maxBytes=512_000, backupCount=3, encoding="utf-8")
-        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        log.addHandler(h)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     except OSError:
         pass
-    log.setLevel(logging.DEBUG if verbose else logging.INFO)
-    log.propagate = False
+    for name in LOG_NAMES:
+        lg = logging.getLogger(name)
+        if handler is not None:
+            lg.addHandler(handler)
+        lg.setLevel(logging.DEBUG if verbose else logging.INFO)
+        lg.propagate = False
 
 
 # ---------------------------------------------------------------- 저장 유틸(별칭)
@@ -226,6 +271,7 @@ def state() -> dict:
         sc = _load_json_safe(f)
         if sc is None:
             continue  # 손상 장면은 건너뛰고 나머지 UI 는 살린다
+        is_end, end_label = vn_compose.ending_of(sc)
         scenes.append({
             "scene_id": sc.get("scene_id"), "scene_order": sc.get("scene_order"),
             "status": sc.get("status"), "purpose": sc.get("purpose", ""),
@@ -236,7 +282,9 @@ def state() -> dict:
             "review": sc.get("review", {}), "image_url": scene_image_url(sc),
             "print": scene_print(sc),
             "choices": sc.get("choices", []), "branch": sc.get("branch", []),
-            "ending": bool(sc.get("ending")),
+            # 엔딩 표기는 감상본과 같은 규칙으로 정규화한다(vn_compose.ending_of).
+            # 화면은 ending_label → purpose 순으로 이름을 고른다.
+            "ending": is_end, "ending_label": end_label,
             "episode": sc.get("episode"),   # 화 단위 선택(뷰어)용
         })
     scenes.sort(key=lambda s: s.get("scene_order") or 0)
@@ -265,8 +313,7 @@ def state() -> dict:
             "scenes": scenes, "storyline": storyline,
             # 스토리 챗로그는 여기 싣지 않는다 — 대화가 길어질수록 모든 탭의 새로고침이
             # 같이 무거워졌다. 스토리 탭이 필요할 때만 POST /api/chat-history 로 받아간다.
-            # (키는 남겨 둔다: 예전 프론트가 S.chat 을 그대로 순회해도 깨지지 않게.)
-            "chat": [], "chat_count": chat_count()}
+            "chat_count": chat_count()}
 
 
 _CHAT_COUNT: dict = {"key": None, "n": 0}
@@ -290,42 +337,12 @@ def chat_count() -> int:
     return int(_CHAT_COUNT["n"])
 
 
-def story_context() -> str:
-    """스토리 챗이 '지금 이 작품'을 알고 답하도록 붙이는 요약 컨텍스트."""
-    mf = _load_json_safe(MANIFEST) or {}
-    out = []
-    if str(mf.get("title", "")).strip():
-        out.append(f"[작품] {mf['title']}")
-    chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
-    if chars:
-        out.append("[등장인물] " + " / ".join(
-            f"{c.get('character_id')} {c.get('name', '')}"
-            + (f"({(c.get('profile') or {}).get('age', '')}세)" if (c.get('profile') or {}).get('age') else "")
-            for c in chars))
-    locs = [l for l in mf.get("locations", []) if isinstance(l, dict)]
-    if locs:
-        out.append("[장소] " + " / ".join(
-            f"{l.get('location_id')} {l.get('name', '')}" for l in locs))
-    sl = ""
-    if (STORY_DIR / "storyline.md").exists():
-        sl = (STORY_DIR / "storyline.md").read_text(encoding="utf-8").strip()
-    if sl:
-        out.append("[현재 스토리라인]\n" + sl[:1500])
-    lines = []
-    for f in (sorted(adv.SCENES.glob("SCENE-*.json")) if adv.SCENES.exists() else [])[:40]:
-        sc = _load_json_safe(f) or {}
-        lines.append(f"- {sc.get('scene_id')} [{sc.get('status', '')}] {str(sc.get('purpose', ''))[:40]}")
-    if lines:
-        out.append("[구성된 장면]\n" + "\n".join(lines))
-    return "\n".join(out)
-
-
 def do_chat(messages: list[dict]) -> str:
-    ctx = story_context()
-    sys_msg = {"role": "system",
-               "content": "너는 비주얼 노벨/웹툰 스토리 기획 파트너다. 한국어로 간결하고 구체적으로 답한다.\n"
-                          "아래는 지금 작업 중인 작품의 현재 상태다. 이 설정과 이어지도록 제안하고, "
-                          "새 인물·장소를 만들 때만 새로 제안하라.\n\n" + ctx}
+    """스토리 챗 1턴 — 프롬프트 조립은 prompt_build, 모델 선택은 vn_compose 담당.
+
+    (이 함수에 남는 일은 '창 자르기 → 호출 → 병합 저장' 뿐이다.)
+    """
+    sys_msg = prompt_build.story_system_message()
     window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
     reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000)
     path = talk_store.story_chat_path()
@@ -431,6 +448,15 @@ def r_set_crop(b):
     return {"scene_id": sid, "crop_anchor": anchor}
 
 
+def r_set_scene(b):
+    """장면 내용 편집 — {scene_id, fields:{...}}.
+
+    화이트리스트·APPROVED 가드·쓰기 잠금은 scene_ops.update_fields 하나에만 있다
+    (status·review·assets·scene_id·scene_order 는 이 경로로 바뀌지 않는다).
+    """
+    return scene_ops.update_fields(b.get("scene_id"), b.get("fields"))
+
+
 def r_export(b):
     # 서버는 Pillow 없이도 뜨도록 지연 임포트
     try:
@@ -454,16 +480,13 @@ def r_export(b):
         short_in, long_in = print_export.parse_size(str(b.get("size", "5x7")))
     except SystemExit as e:
         raise RuntimeError(str(e))
-    params = inspect.signature(print_export.export_batch).parameters
     kw = {}
     if only_ids is not None:
-        if "only_ids" not in params:
-            raise RuntimeError("설치된 print_export 가 즐겨찾기 필터(only_ids)를 지원하지 않습니다.")
         kw["only_ids"] = only_ids
-    # 인화 옵션(여백 모드·재단선 등)은 요청에 있을 때만, 그리고 도구가 받는 것만 넘긴다
+    # 인화 옵션(여백 모드·재단선 등)은 요청에 있을 때만 넘긴다 — 나머지는 도구 기본값.
     for key, cast in (("mode", str), ("bg", str), ("upscale", str),
                       ("marks", bool), ("order_prefix", bool)):
-        if key in b and key in params:
+        if key in b:
             kw[key] = cast(b[key])
     summ = print_export.export_batch(
         short_in, long_in, dpi=int(b.get("dpi", 300)), bleed=float(b.get("bleed", 0)),
@@ -520,81 +543,9 @@ def r_gen_prompt(b):
 
 
 # ------------------------------------------------- 이미지 생성 (중복 방지·백그라운드)
-_GEN_LOCK = threading.Lock()
-_GEN_JOBS: dict[str, dict] = {}   # scene_id → {running, message, ts}
-
-
-def _gen_claim(sid: str) -> None:
-    """같은 장면의 동시 생성을 막는다 — 폰과 PC 에서 동시에 눌러도 과금은 한 번만.
-
-    (20분 넘게 끝나지 않은 표시는 죽은 작업으로 보고 풀어 준다 — 영구 잠금 방지.)
-    """
-    with _GEN_LOCK:
-        job = _GEN_JOBS.get(sid)
-        if job and job.get("running") and time.time() - float(job.get("ts") or 0) < 1200:
-            raise VNError(f"{sid} 이미지를 이미 생성 중입니다. 끝난 뒤 다시 시도하세요.")
-        _GEN_JOBS[sid] = {"running": True, "message": "생성 준비 중…", "ts": time.time()}
-
-
-def running_jobs() -> list[str]:
-    """아직 끝나지 않은 생성 작업 — 서버 종료 시 사용자에게 알려 주기 위한 목록."""
-    now = time.time()
-    with _GEN_LOCK:
-        return sorted(sid for sid, j in _GEN_JOBS.items()
-                      if j.get("running") and now - float(j.get("ts") or 0) < 1200)
-
-
-def _gen_note(sid: str, message: str, running: bool = True) -> None:
-    with _GEN_LOCK:
-        _GEN_JOBS[sid] = {"running": running, "message": message, "ts": time.time()}
-
-
-def _job_run(sid: str, label: str, work) -> dict:
-    """생성/재수령 공통 실행틀 — 성공/실패 어느 쪽이든 in-flight 표시를 반드시 해제한다."""
-    try:
-        files = work()
-        _gen_note(sid, f"{len(files)}장 수신 · 등록·검사 중…")
-        reg = scene_ops.register_images(sid)
-        reg["generated"] = [f.name for f in files]
-        _gen_note(sid, f"완료 — {len(files)}장 {label} · 자동검사 {reg.get('auto', '')}",
-                  running=False)
-        log.info("%s 완료 %s (%d장)", label, sid, len(files))
-        return reg
-    except Exception as exc:
-        log.warning("%s 실패 %s: %s", label, sid, exc)
-        _gen_note(sid, f"실패: {exc}", running=False)
-        raise
-
-
-def _gen_run(sid: str, n: int) -> dict:
-    def work():
-        _gen_note(sid, "MakeFun 에 생성 요청 중… (1~3분)")
-        return makefun_client.generate_for_scene(sid, n=n)
-    return _job_run(sid, "생성", work)
-
-
-def _refetch_run(sid: str) -> dict:
-    def work():
-        _gen_note(sid, "이미 만들어진 결과를 다시 받는 중… (무과금)")
-        return makefun_client.refetch_scene(sid)
-    return _job_run(sid, "재수령", work)
-
-
-def _start_job(sid: str, b: dict, runner, message: str, count: int) -> dict:
-    """백그라운드 기본 + sync:true 면 동기 — 폰 브라우저가 기다리다 끊기지 않게 한다."""
-    _gen_claim(sid)
-    if b.get("sync"):
-        return runner()
-
-    def _bg():
-        try:
-            runner()
-        except Exception:
-            pass   # 사유는 _job_run 이 로그·진행 메시지에 남긴다(스레드는 조용히 종료)
-
-    threading.Thread(target=_bg, daemon=True).start()
-    return {"started": True, "running": True, "scene_id": sid, "message": message,
-            "generated": [], "auto": "진행 중", "count": count}
+# 상태기계는 gen_jobs 하나에만 있다(웹·CLI 공용). 여기 남는 것은 요청 해석과 호출뿐이다.
+def _candidates(sc: dict) -> int:
+    return len(sc.get("assets", {}).get("raw_images", []))
 
 
 def r_gen_image(b):
@@ -608,9 +559,14 @@ def r_gen_image(b):
     if sc.get("status") == "APPROVED":
         raise VNError("APPROVED 장면입니다. 다시 생성하려면 먼저 revise 하세요.")
     n = max(1, min(int(b.get("n", 1) or 1), 4))
-    return _start_job(sid, b, lambda: _gen_run(sid, n),
-                      "MakeFun 생성 중… (1~3분) 진행 상황은 자동으로 갱신됩니다.",
-                      len(sc.get("assets", {}).get("raw_images", [])))
+
+    def work():
+        gen_jobs.note(sid, "MakeFun 에 생성 요청 중… (1~3분)")
+        return makefun_client.generate_for_scene(sid, n=n)
+
+    return gen_jobs.start(
+        sid, work, "생성", sync=bool(b.get("sync")), count=_candidates(sc),
+        message="MakeFun 생성 중… (1~3분) 진행 상황은 자동으로 갱신됩니다.")
 
 
 def r_refetch(b):
@@ -623,20 +579,19 @@ def r_refetch(b):
     sc = _load_scene(sid)
     if sc.get("status") == "APPROVED":
         raise VNError("APPROVED 장면입니다. 후보를 다시 받으려면 먼저 revise 하세요.")
-    return _start_job(sid, b, lambda: _refetch_run(sid),
-                      "이전 생성 결과를 다시 받는 중… (무과금)",
-                      len(sc.get("assets", {}).get("raw_images", [])))
+
+    def work():
+        gen_jobs.note(sid, "이미 만들어진 결과를 다시 받는 중… (무과금)")
+        return makefun_client.refetch_scene(sid)
+
+    return gen_jobs.start(sid, work, "재수령", sync=bool(b.get("sync")),
+                          count=_candidates(sc),
+                          message="이전 생성 결과를 다시 받는 중… (무과금)")
 
 
 def r_gen_status(b):
     """생성 진행 조회 — {running, message}."""
-    sid = b.get("scene_id")
-    if not vn_core.is_scene_id(sid):
-        raise VNError(f"장면 ID 형식이 올바르지 않습니다: {sid!r}")
-    with _GEN_LOCK:
-        job = dict(_GEN_JOBS.get(sid) or {})
-    return {"running": bool(job.get("running")), "message": str(job.get("message", "")),
-            "scene_id": sid}
+    return gen_jobs.status(b.get("scene_id"))
 
 
 def r_talk_status(b):
@@ -671,8 +626,9 @@ def r_talk(b):
     # 모델에 넘길 창은 병합 이력 기준 — 빈 화면에서 시작해도 대화가 이어진다.
     context = (list(incoming) if reset
                else talk_store.merge_messages(talk_store.load_messages(cid), incoming))
-    win = int(getattr(local_llm, "TALK_WINDOW", 16) or 16)   # 기억 요약이 덮는 창과 같은 크기
-    window = [{"role": m["role"], "content": m["content"]} for m in context[-win:]]
+    # 모델에 넘기는 창의 크기는 local_llm 이 정한다(기억 요약이 덮는 창과 같아야 한다).
+    window = [{"role": m["role"], "content": m["content"]}
+              for m in context[-local_llm.TALK_WINDOW:]]
     reply = local_llm.chat([{"role": "system", "content": sysmsg}] + window)
 
     last_user = next((m["content"] for m in reversed(context) if m["role"] == "user"), "")
@@ -689,86 +645,10 @@ def r_talk(b):
     return {"reply": clean, "name": meta["name"], "photos": photos, "saved": len(final)}
 
 
-def _next_scene_slot() -> tuple[str, int]:
-    """다음 scene_id 와 scene_order (order 는 1부터 연속을 유지)."""
-    nums, order = [], 0
-    for f in (sorted(adv.SCENES.glob("SCENE-*.json")) if adv.SCENES.exists() else []):
-        sc = _load_json_safe(f) or {}
-        m = re.fullmatch(r"SCENE-(\d+)", str(sc.get("scene_id", "")))
-        if m:
-            nums.append(int(m.group(1)))
-        try:
-            order = max(order, int(sc.get("scene_order") or 0))
-        except (TypeError, ValueError):
-            pass
-    return f"SCENE-{(max(nums) + 1 if nums else 1):03d}", order + 1
-
-
-def _extract_json_object(text: str) -> dict:
-    body = re.sub(r"```(?:json)?", "", str(text)).strip()
-    s_i, e_i = body.find("{"), body.rfind("}")
-    if s_i < 0 or e_i <= s_i:
-        raise RuntimeError("장면 JSON 을 찾지 못했습니다. 대화를 조금 더 이어간 뒤 다시 시도하세요.")
-    try:
-        d = json.loads(body[s_i:e_i + 1])
-    except ValueError as exc:
-        raise RuntimeError(f"장면 JSON 해석 실패({exc}). 다시 시도해 주세요.")
-    if not isinstance(d, dict):
-        raise RuntimeError("장면 JSON 최상위가 객체가 아닙니다.")
-    return d
-
-
 def r_talk_to_scene(b):
-    """'이 순간을 사진으로' — 최근 대화 → 새 장면(계획) + 이미지 프롬프트까지.
-
-    이미지 생성은 하지 않는다(과금 대상). 만들어진 장면은 PROMPT 상태로 남고,
-    사용자가 장면 탭에서 확인한 뒤 직접 생성 버튼을 누른다.
-    """
-    msgs = b.get("messages", []) if isinstance(b.get("messages"), list) else []
-    talk = [f"{'나' if m.get('role') == 'user' else '상대'}: {str(m.get('content', ''))[:300]}"
-            for m in msgs[-12:] if isinstance(m, dict) and str(m.get("content", "")).strip()]
-    if not talk:
-        raise RuntimeError("장면으로 만들 대화가 없습니다. 먼저 대화를 나눠 주세요.")
-
-    mf = _load_json_safe(MANIFEST) or {}
-    chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
-    locs = [l for l in mf.get("locations", []) if isinstance(l, dict)]
-    if not chars:
-        raise RuntimeError("매니페스트에 캐릭터가 없습니다. 먼저 작품을 세팅하세요.")
-    who = b.get("character_id")   # 지금 대화 중인 상대 — 화자 배정을 정확히 하기 위해
-    char_block = "\n".join(
-        f"- {c.get('character_id')} {c.get('name', '')}"
-        + ("  ← '상대' 는 이 인물" if c.get("character_id") == who else "")
-        for c in chars)
-    loc_block = "\n".join(f"- {l.get('location_id')} {l.get('name', '')}: {l.get('description', '')}"
-                          for l in locs)
-    ask = ("아래는 두 사람이 방금 나눈 대화다. 이 순간을 한 컷의 장면으로 만들어라.\n"
-           "다른 말 없이 JSON 객체 하나만 출력하라.\n\n"
-           f"[대화]\n{chr(10).join(talk)}\n\n[캐릭터]\n{char_block}\n\n[장소]\n{loc_block}\n\n"
-           '{"purpose":"장면 목적(한국어)","action_beat":"동작(한국어)","emotion":"감정(한국어)",'
-           '"time":"시간대(한국어)","location_id":"위 목록의 id",'
-           '"camera":{"shot":"medium","angle":"eye","framing":"center","focus":"face"},'
-           '"dialogue":[{"speaker_id":"위 목록의 id","text":"대사(한국어)"}]}')
-    item = _extract_json_object(local_llm.chat([{"role": "user", "content": ask}],
-                                               temperature=0.6, max_tokens=700))
-
-    char_ids = [c.get("character_id") for c in chars]
-    loc_ids = {l.get("location_id") for l in locs}
-    with WRITE_LOCK:
-        sid, order = _next_scene_slot()
-        idx = int(re.sub(r"\D", "", sid) or 1)
-        sc = vn_compose._build_scene(item, idx, char_ids, loc_ids, locs)
-        sc["scene_id"], sc["scene_order"] = sid, order
-        sc["status"] = "SCENE_PLAN"
-        sc["prompt"]["grok_output"] = ""
-        adv.SCENES.mkdir(parents=True, exist_ok=True)
-        adv.save(adv.scene_path(sid), sc)
-    log.info("대화 → 장면 생성 %s", sid)
-    # 프롬프트까지만(생성은 사용자 몫)
-    res = scene_ops.set_prompt(sid, prompt_build.compose_image_prompt(sc))
-    saved = _load_json_safe(adv.scene_path(sid)) or {}
-    res.update({"scene_id": sid, "scene_order": order, "purpose": saved.get("purpose", ""),
-                "prompt": (saved.get("prompt") or {}).get("grok_output", "")})
+    """'이 순간을 사진으로' — 최근 대화 → 새 장면(계획) + 이미지 프롬프트. 구현은 vn_compose."""
+    res = vn_compose.scene_from_talk(b.get("messages"), b.get("character_id"))
+    log.info("대화 → 장면 생성 %s", res.get("scene_id"))
     return res
 
 
@@ -851,12 +731,11 @@ def r_export_pwa(b):
                            "아이콘을 컷으로 만들려면:  python -m pip install Pillow")
     max_edge = max(480, min(int(b.get("max_edge", 1600) or 1600), 4096))
     quality = max(40, min(int(b.get("quality", 85) or 85), 100))
-    params = inspect.signature(export_pwa.export).parameters
     kw = {}
     for key, arg, cast in (("cover", "cover_id", str), ("embed_font", "font_spec", str),
                            ("icon_from_cut", "icon_from_cut", bool),
                            ("icon_scene", "icon_scene", str)):
-        if b.get(key) and arg in params:
+        if b.get(key):
             kw[arg] = cast(b[key])
     out = export_pwa.export(bool(b.get("all")), max_edge, quality, **kw)
     files = sorted(f.name for f in out.glob("*") if f.is_file())
@@ -883,7 +762,7 @@ POST_ROUTES = {
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,
     "/api/compose-manual": r_compose_manual, "/api/grok-input": r_grok_input,
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
-    "/api/set-crop": r_set_crop,
+    "/api/set-crop": r_set_crop, "/api/set-scene": r_set_scene,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/export-pwa": r_export_pwa,
@@ -1210,8 +1089,9 @@ class Handler(BaseHTTPRequestHandler):
         self._trace()
         if not self._authed():
             if self.path == "/" or self.path.startswith("/?"):
-                self._bytes(LOGIN_HTML.encode("utf-8"), "text/html; charset=utf-8",
-                            [("Content-Security-Policy", CSP)])
+                body = LOGIN_HTML.encode("utf-8")
+                self._bytes(body, "text/html; charset=utf-8",
+                            [("Content-Security-Policy", csp_for(body))])
             else:
                 self._json({"error": "PIN 인증이 필요합니다.", "auth_required": True}, 401)
             return
@@ -1234,9 +1114,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # CSP: 페이지는 자기 출처 안에서만 동작한다(외부 스크립트·외부 연결·프레임 금지).
             self._bytes(body, "text/html; charset=utf-8",
-                        [("Content-Security-Policy", CSP)])
+                        [("Content-Security-Policy", csp_for(body))])
         elif path == "/api/state":
             self._json(state())
+        elif path.startswith("/studio/"):
+            self._serve_studio_js(urllib.parse.unquote(path[len("/studio/"):]))
         elif path.startswith("/img/"):
             self._serve_image(urllib.parse.unquote(path[len("/img/"):]),
                               urllib.parse.parse_qs(query))
@@ -1248,6 +1130,37 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, 404)
 
+    def _send_304(self, tag: str, cache: str) -> None:
+        """본문 없는 재검증 응답 — 같은 파일이면 여기서 끝난다."""
+        self.send_response(304)
+        self.send_header("ETag", tag)
+        self.send_header("Cache-Control", cache)
+        for k, v in SEC_HEADERS + self._conn():
+            self.send_header(k, v)
+        self.end_headers()
+
+    def _serve_studio_js(self, name: str) -> None:
+        """tools/<이름>.js 서빙 — 스튜디오와 감상본이 같은 재생 엔진을 쓰게 하는 통로.
+
+        tools/ 아래 **평범한 이름의 .js 파일만** 내보낸다(하위 폴더·숨김·확장자 위장 불가).
+        경로 판정은 vn_core.safe_path 하나뿐이고, 그 앞에 이름 형식 관문을 하나 더 둔다.
+        내용이 바뀌면 ETag 가 바뀌므로 브라우저는 즉시 새 파일을 받는다.
+        """
+        cache = f"private, max-age={JS_MAX_AGE}, must-revalidate"
+        if not STUDIO_JS_RE.match(name):
+            self._json({"error": "not found"}, 404)
+            return
+        target = safe_path(vn_core.TOOLS, name)
+        if target is None or not target.is_file():
+            self._json({"error": "not found"}, 404)
+            return
+        tag = etag_for(target)
+        if (self.headers.get("If-None-Match") or "").strip() == tag:
+            self._send_304(tag, cache)
+            return
+        self._bytes(target.read_bytes(), "text/javascript; charset=utf-8",
+                    [("ETag", tag), ("Cache-Control", cache)])
+
     def _serve_image(self, rel: str, qs: dict) -> None:
         target = safe_path(ROOT / "images", rel)
         if target is None or not target.is_file():
@@ -1257,6 +1170,14 @@ class Handler(BaseHTTPRequestHandler):
             w = int((qs.get("w") or ["0"])[0])
         except ValueError:
             w = 0
+        # 같은 이미지를 반복 전송하지 않도록 mtime·크기 기반 ETag + 캐시 지시(항목 83).
+        # 판정을 **읽기 전에** 한다 — 갤러리 새로고침마다 수십 MB 를 다시 읽거나 썸네일을
+        # 다시 만들지 않고 304 로 끝낸다.
+        tag = etag_for(target, w)
+        cache = f"private, max-age={IMG_MAX_AGE}"
+        if (self.headers.get("If-None-Match") or "").strip() == tag:
+            self._send_304(tag, cache)
+            return
         data, ctype = None, IMG_TYPES.get(target.suffix.lower().lstrip("."), "application/octet-stream")
         if w > 0:
             got = make_thumb(target, max(32, min(w, 2048)))
@@ -1264,18 +1185,7 @@ class Handler(BaseHTTPRequestHandler):
                 data, ctype = got
         if data is None:
             data = target.read_bytes()
-        # 같은 이미지를 반복 전송하지 않도록 mtime·크기 기반 ETag + 캐시 지시(항목 83)
-        tag = etag_for(target, w)
-        if (self.headers.get("If-None-Match") or "").strip() == tag:
-            self.send_response(304)
-            self.send_header("ETag", tag)
-            self.send_header("Cache-Control", f"private, max-age={IMG_MAX_AGE}")
-            for k, v in SEC_HEADERS + self._conn():
-                self.send_header(k, v)
-            self.end_headers()
-            return
-        self._bytes(data, ctype, [("ETag", tag),
-                                 ("Cache-Control", f"private, max-age={IMG_MAX_AGE}")])
+        self._bytes(data, ctype, [("ETag", tag), ("Cache-Control", cache)])
 
     def _parse_range(self, size: int) -> tuple[int, int] | None | bool:
         """Range 헤더 → (start, end). 없으면 None, 범위가 잘못됐으면 False.
@@ -1528,7 +1438,7 @@ def main() -> int:
             pass
         # 생성 스레드는 daemon 이라 여기서 함께 끊긴다. MakeFun 쪽에서는 이미 만들어졌을 수
         # 있으므로, 다시 과금하지 말고 재수령(/api/refetch)으로 받으라고 알려 준다.
-        pend = running_jobs()
+        pend = gen_jobs.running()
         if pend:
             print(f"\n⚠ 진행 중이던 이미지 작업이 중단되었습니다: {', '.join(pend)}")
             print("  MakeFun 에서 이미 만들어졌을 수 있습니다. 다시 켠 뒤 해당 장면에서")

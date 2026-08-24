@@ -61,9 +61,26 @@
 |---|---|---|---|
 | `provider` | str | ⬜ | 표기용 |
 | `model` | str | ⬜ | `makefun_client` 의 `model_type` (기본 `a2e`) |
+| `max_long_edge_px` | int | ⬜ | `makefun_client` **생성 크기 상한** (기본 2048 · 하드 상한 4096) |
 | `api.base_url` | str | ⬜ | `makefun_client` 접속 주소 |
 | `api.token_env` | str | ⬜ | 토큰을 담은 **환경변수 이름** (`MAKEFUN_API_TOKEN`) |
 | `note` | str | ⬜ | 사람용 메모 |
+
+> ### ⚠ `max_long_edge_px` — 인화 해상도의 함정
+> `makefun_client` 는 요청 픽셀을 **이 값으로 잘라 낸다**(`_cap_px()` → `_align8()`).
+> 기본값이 2048 이므로 `output.min_long_edge_px` 만 2250·3600 으로 올리면
+> **요청이 조용히 2048 로 깎여 검사기 A3 가 그 장면을 FAIL 시킨다** — 돈은 쓰고 규격은 못 맞춘다.
+> 인화용으로 올릴 때는 **두 값을 함께** 올린다:
+>
+> ```json
+> "output":          { "min_long_edge_px": 2250 },
+> "image_generator": { "max_long_edge_px": 2560 }
+> ```
+>
+> 실제로 몇 px 로 요청되는지는 과금 없이 확인할 수 있다:
+> `python tools/makefun_client.py --check` → `생성 크기 1500x2250 (긴 변 2250px · 상한 2560px)`
+> 하드 상한은 4096 이며, 이보다 큰 값을 적어도 4096 으로 잘린다.
+> 공급자가 실제로 받아 주는 크기는 별개다 — 큰 값은 1장으로 먼저 시험한다.
 
 ### 1.4 `output`
 
@@ -71,15 +88,23 @@
 |---|---|---|---|---|
 | `mode` | str | ⬜ | (없음) — 표기용 | — |
 | `print_ready` | bool | ⬜ | (없음) — 표기용 | — |
-| `aspect_ratio` | str | ⬜ | 프롬프트 입력 조립(`make_grok_input`) | — |
+| `aspect_ratio` | str | ⬜ | `makefun_client` 생성 크기(`W:H`) · 프롬프트 입력 조립(`make_grok_input`) | — |
 | `min_long_edge_px` | int | ⬜ | 검사기 해상도 기준 · `makefun_client` 생성 크기 · `print_preflight` | **A3** (기본 1024) |
 | `visual_style` | str | ⬜ | 프롬프트 조립의 **작품 전체 화풍** (최우선) | — |
 
 **화풍 우선순위**: `output.visual_style` → 장면의 `visual_style` → 코드 기본값
 (`vn_core.DEFAULT_VISUAL_STYLE`). 매니페스트에 값이 있으면 장면 오버라이드는 무시된다.
 
+**`aspect_ratio` 는 아직 완전히 배선되지 않았다.** `makefun_client` 는 이 값으로 생성 크기를
+계산하고 `make_grok_input` 은 지시서에 적어 주지만, **`prompt_build` 는 `"portrait 2:3"` 을
+하드코딩**한다(로컬 LLM 경로로 만든 프롬프트 문자열). 2:3 이 아닌 작품을 하려면 그 한 줄도
+함께 고쳐야 한다.
+
 **`min_long_edge_px` 는 화면 감상 기준이다.** 실물 인화를 하려면 올려야 한다 —
-4×6 엽서 1800px, 5×7 2250px. → [PRINT_ORDER_GUIDE.md](PRINT_ORDER_GUIDE.md)
+4×6 엽서 1800px, 5×7 2250px, 8×10 3600px.
+**올릴 때는 `image_generator.max_long_edge_px`(기본 2048)도 함께 올린다.** 그러지 않으면
+생성 요청이 2048 로 깎이고, 올려 둔 기준 때문에 오히려 A3 가 FAIL 한다(§1.3 경고 참조).
+→ [PRINT_ORDER_GUIDE.md](PRINT_ORDER_GUIDE.md)
 
 ### 1.5 `dating` · `episodes` · `talk`
 
@@ -118,6 +143,9 @@
 
 **`prompt_anchor` 는 사실상 필수다.** 장면이 `IMAGE` 단계에 오르면 A6 이 "그 캐릭터의
 `prompt_anchor` 가 기준정보에 없음"으로 FAIL 한다. 컷 간 얼굴·의상 일관성의 유일한 근거다.
+
+**이 표가 캐릭터 스키마의 정본이다.** 캐릭터는 별도 파일이 아니라 `manifest.characters[]`
+안에 산다. `templates/character.json` 은 여기에 붙여넣을 항목 1개짜리 조각일 뿐이다(§4).
 
 #### 의상 배리에이션 — 정의만 있고 **아직 연결되지 않았다**
 
@@ -183,7 +211,12 @@ SCENE_PLAN → PROMPT → IMAGE → REVIEW_AUTO → REVIEW_HUMAN → APPROVED
 ```
 
 **검사기는 상태에 맞는 항목만 본다.** `SCENE_PLAN` 장면은 이미지도 프롬프트도 없어야 정상이고
-FAIL 이 아니다. `REVISE` 는 이후 단계 검사를 강제하지 않는다.
+FAIL 이 아니다.
+
+**`REVISE` 의 면제 범위는 A3 까지다.** 되돌린 장면은 이미지 검사(A3)에서 빠지지만,
+**`prompt.grok_output` 이 남아 있으면 A6 앵커 검사는 계속 적용된다**
+(`check_protocol` 은 A6 대상을 "IMAGE 이상 **또는** 프롬프트가 있는 장면"으로 잡는다).
+즉 되돌려 놓은 장면이라도 프롬프트에서 앵커를 지우면 그 순간 A6 FAIL 이다.
 
 | 단계 | 그 단계부터 강제되는 것 |
 |---|---|
@@ -192,7 +225,20 @@ FAIL 이 아니다. `REVISE` 는 이후 단계 검사를 강제하지 않는다.
 | `REVIEW_HUMAN` 이상 | A3 `selected_image` 필수 · A7 `review.auto == "PASS"` |
 | `APPROVED` | A7 `review.auto == review.human == "PASS"` |
 
-### 2.2 장면 계획 (사람이 채운다 · 프롬프트의 재료)
+#### 손으로 고쳐도 되는 필드 / 도구만 쓰는 필드
+
+| | 필드 | 쓰는 방법 |
+|---|---|---|
+| **편집 가능** | `purpose` · `action_beat` · `emotion` · `time` · `camera` · `dialogue` · `characters` · `location_id` · `episode` · `choices` · `branch` · `ending` · `ending_label` · `print` | 스튜디오 장면 편집(`POST /api/set-scene` — 이 목록만 병합) 또는 직접 편집 |
+| **도구 전용** | `status` · `review` · `assets` · `scene_id` · `scene_order` | `scene_ops`/`advance_scene` 만. 편집 경로로는 바꿀 수 없다 |
+
+`status`·`review`·`assets` 는 상태 전이·승인 잠금·과금 복구(`makefun_tasks`)가 걸려 있어
+손으로 고치면 불변식이 깨진다. APPROVED 장면은 편집 경로에서도 거부되고, 먼저 `revise` 로
+되돌려야 한다.
+
+### 2.2 장면 계획 (프롬프트의 재료)
+
+**쓰는 쪽**: 사람(스튜디오 장면 편집 또는 직접 편집) · `vn_compose`(스토리라인 → 장면 구성).
 
 | 필드 | 타입 | 필수 | 읽는 쪽 | 검사기 |
 |---|---|---|---|---|
@@ -215,10 +261,15 @@ FAIL 이 아니다. `REVISE` 는 이후 단계 검사를 강제하지 않는다.
 
 ```
 shot : extreme-wide / wide / full / medium-wide / medium /
-       medium-close-up / close-up / extreme-close-up / two-shot / over-the-shoulder / pov
+       medium-close-up / close-up / extreme-close-up / two-shot /
+       over-the-shoulder / pov / insert
 angle: eye-level / high-angle / low-angle / overhead /
        birds-eye / worms-eye / dutch-angle / front / side / rear
 ```
+
+> **정본은 코드다** — `scene_lint.STD_SHOTS` / `STD_ANGLES`. 위 목록은 그 사본이므로,
+> 어휘를 늘릴 때는 코드를 먼저 고치고 이 표를 맞춘다.
+> (`insert` = 손·시계·쪽지 같은 사물만 채우는 삽입 컷.)
 
 `"medium shot"` → `"medium"`, `"eye level"` → `"eye-level"` 처럼 **군더더기 접미와 공백을 뺀
 형태**가 표준이다. 표준 어휘 밖 값은 `info`, 표준으로 정규화 가능한 흔들림은 `warn` 이 뜬다.
@@ -259,12 +310,23 @@ angle: eye-level / high-angle / low-angle / overhead /
 | `branch[].min` | int | ⬜ | 이 호감도 이상이면 | — |
 | `branch[].goto` | scene_id | ⬜ | 그 장면으로 (위에서부터 첫 일치) | — |
 | `ending` | bool \| str | ⬜ | 참이면 재생을 멈추고 엔딩 카드 | — |
-| `ending_label` | str | ⬜ | 엔딩 이름 (`"호감 엔딩"`) | — |
+| `ending_label` | str | ⬜ | 엔딩 이름 (`"호감 엔딩"`) — 감상본·스튜디오 엔딩 카드 | — |
 
 **`ending_label` 규약**: `ending: true` 인 장면의 엔딩 이름은 `purpose` 안 괄호가 아니라
 **이 필드**에 둔다. `purpose` 는 장면 설명(프롬프트 재료)이고 엔딩 이름은 감상자에게 보여 줄
-라벨이라 쓰임이 다르다. 감상본은 `ending` 이 **문자열**이면 그 값을 엔딩 카드 이름으로 쓰는
-경로도 갖고 있다 — 내보내기 쪽이 `ending_label` 을 우선 사용하도록 잇는다.
+라벨이라 쓰임이 다르다.
+
+**엔딩 카드 이름의 우선순위는 한 곳에 있다** — `vn_runtime.js` 의 `endLabelOf()`.
+스튜디오 뷰어와 감상본이 같은 재생 엔진을 쓰므로 **양쪽이 같은 순서**로 고른다:
+
+```
+ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_label 로 정규화)  →  purpose
+```
+
+`ending: "호감 엔딩"` 처럼 이름을 문자열로 넣은 옛 데이터도 그대로 재생된다
+(`vn_runtime` 의 `normScene()` · `export_viewer.ending_of()` 가 label 로 옮긴다).
+새로 쓰는 데이터는 `ending: true` + `ending_label` 로 통일한다 — `vn_compose` 의 분기
+지시문이 그 형태를 만들고, `/api/state` 도 장면마다 `ending_label` 을 함께 실어 보낸다.
 
 **`goto` 는 감상본에서 정리된다.** 이미지가 없어 감상본에 실리지 않은 장면을 가리키는 `goto` 는
 `export_viewer` 가 경고와 함께 떼어 내고 선형 진행으로 폴백시킨다(선택지 자체는 살린다).
@@ -312,7 +374,9 @@ angle: eye-level / high-angle / low-angle / overhead /
 허용 값: `PENDING` · `PASS` · `REVISE` · `REGENERATE` · `FAIL`
 
 **`human` 은 자동으로 채우지 않는다.** SCORECARD C(캐릭터 일관성·연출·대사·몰입·인화 품질·화풍)는
-사람 시사의 몫이고, 승인 도장은 사람만 찍는다. `APPROVED` 장면의 `status`·`selected_image` 를
+사람 시사의 몫이고, 승인 도장은 사람만 찍는다. 그 6개 항목을 하나씩 적어 두고 싶을 때 쓰는
+서식이 `templates/review-report.json` 이다 — **장면 파일에는 들어가지 않는** 별도 기록이고,
+장면에 남는 것은 위 표의 `review` 블록뿐이다. `APPROVED` 장면의 `status`·`selected_image` 를
 바꾸려면 먼저 `revise` 로 되돌려야 한다 — `scene_ops` 가 모든 쓰기 경로에서 이를 막는다.
 
 ### 2.8 `print` — 인화 규칙 (선택)
@@ -347,6 +411,7 @@ angle: eye-level / high-angle / low-angle / overhead /
 | `logs/makefun_usage.jsonl` | `makefun_client` | 사람 (비용 추적) | ✂ 제외 | **종량제 지출 이력** |
 | `logs/webapp.log` | 스튜디오 서버 | 사람 (장애 추적) | ✂ 제외 | 오류·생성 실패 기록 |
 | `logs/lan_pin.txt` | 스튜디오 `--lan` | 사람 (PIN 확인) | ✂ 제외 | 이번 실행의 접속 PIN |
+| `project/grok_inputs/<scene_id>.txt` | `make_grok_input` | 사람 (grok.com 에 붙여넣는 입력) | ✂ 제외 | 없음 — 언제든 다시 만든다 |
 | `project/story/storyline.md` | 사람 + 로컬 LLM | 프롬프트 맥락 · 대화 페르소나 | ✔ 추적 | 작품 줄거리 |
 | `project/story/character_bible.md` | 사람 | 대화 페르소나 `[너에 대한 기록]` | ✔ 추적 | 인물의 취향·기념일·기억 |
 | `project/story/chatlog.json` | 스튜디오 스토리 탭 | 스토리 탭 이어하기 | ✂ **제외** | 기획 대화 |
@@ -406,11 +471,32 @@ angle: eye-level / high-angle / low-angle / overhead /
 
 ---
 
-## 4. 스키마를 바꿀 때
+## 4. `templates/` — 어떤 파일이 무엇인가
+
+| 파일 | 정체 | 코드가 읽는가 |
+|---|---|---|
+| `manifest.json` | **새 작품의 시작점.** 캐릭터·장소 기준정보의 정본 모양 | 사람이 `project/` 로 복사 |
+| `scene.json` | 새 장면의 기본형 | ✔ `advance_scene new` · `vn_compose` 가 그대로 읽는다 |
+| `character.json` | `manifest.characters[]` 에 **붙여넣는 항목 1개 조각** (§1.6) | ✗ |
+| `review-report.json` | **SCORECARD C 사람 시사 서식** — 장면 파일에 들어가지 않는다 | ✗ |
+| `grok-prompt-brief.md` | 프롬프트 지시서 원문 | ✔ `make_grok_input` |
+| `grok-prompts-ko.md` | 그록 한글 프롬프트 틀 모음 (스튜디오가 요약본을 표시) | ✗ |
+| `free-assets-ko.md` | 무료 폰트·BGM·효과음 소스 목록(라이선스 등급별) | ✗ |
+
+**캐릭터는 별도 파일에 살지 않는다.** `character.json` 은 편의용 조각이고, 실제 기준정보는
+전부 `project/manifest.json` 안에 있다(CLAUDE.md "단일 매니페스트"). 두 파일의 필드 모양이
+어긋나면 매니페스트 쪽이 정본이다 — §1.6 이 그 표다.
+
+`scene.json` 은 **코드가 직접 읽는 유일한 JSON 템플릿**이라 여기에 넣은 값이 그대로 새 장면에
+박힌다. 선택 필드(`episode` 등)를 기본값으로 넣어 두면 그 필드가 필요 없는 작품에도 붙는다.
+
+---
+
+## 5. 스키마를 바꿀 때
 
 1. **이 문서를 먼저 고친다** — 필수/선택 · 쓰는 쪽 · 읽는 쪽 · 검사기 열까지.
 2. `templates/scene.json` · `templates/manifest.json` 을 같은 모양으로 맞춘다
-   (새 작품이 구스키마로 시작되지 않도록).
+   (새 작품이 구스키마로 시작되지 않도록). 캐릭터 필드를 바꿨다면 `templates/character.json` 도.
 3. `examples/` 도 맞춘다 — README 가 "데모로 초록불을 보라"고 안내하는 파일이고,
    `selftest` 가 이걸 복사해 검사기 PASS 를 확인한다.
 4. `python tools/check_protocol.py` → **RESULT: PASS**, `python tools/selftest.py` → 전체 통과.

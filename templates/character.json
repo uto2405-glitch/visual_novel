@@ -9,8 +9,12 @@
     "eyes": "",
     "build": "",
     "wardrobe": "",
-    "signature_props": []
+    "signature_props": [],
+    "personality": "",
+    "speech_style": ""
   },
   "reference_images": [],
-  "prompt_anchor": ""
+  "prompt_anchor": "",
+  "wardrobe_default": "",
+  "wardrobe_variants": []
 }

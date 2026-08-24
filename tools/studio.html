@@ -586,14 +586,19 @@ function renderChips(){
 // 전면 재렌더는 다른 카드에 붙여넣던 그록 응답·펼친 <details> 를 통째로 날려 버렸다(감사 지적).
 async function refresh(opts){
  const o=opts||{};
+ const prevChat=(S&&S.chat)||[];
  S=await api("/api/state");
+ // 서버는 챗로그를 /api/state 에 싣지 않는다(폰 전송량) — S 를 통째로 교체하므로
+ // 여기서 되살리지 않으면 S.chat 이 undefined 가 되어 화면 전체가 죽는다.
+ if(!Array.isArray(S.chat))S.chat=prevChat;
  renderChips();
  if(!$("storyline").value)$("storyline").value=S.storyline||"";
  syncFav();syncResume();
  if(o.scene&&renderScene(o.scene)){renderGallery();return}
  renderChat();renderScenes();renderGallery();renderLan()}
 function renderChat(){const box=$("chatlog");box.replaceChildren();
- for(const m of S.chat)box.appendChild(el("div","msg "+m.role,m.content));
+ // /api/state 는 챗로그를 싣지 않는다(폰 전송량) — 없을 수 있으므로 반드시 가드.
+ for(const m of (S.chat||[]))box.appendChild(el("div","msg "+m.role,m.content));
  box.scrollTop=box.scrollHeight}
 // 챗로그는 /api/state 에서 분리돼 있다(폰 전송량) — 스토리 탭에 들어올 때 한 번만 받아온다.
 let chatLoaded=false;

@@ -3,15 +3,25 @@
 
 사용법:
   python tools/selftest.py                전체 실행
-  python tools/selftest.py --list         테스트 목록만 보기
+  python tools/selftest.py --list         테스트 목록(그룹별)만 보기
   python tools/selftest.py -k webapp      이름·그룹에 'webapp' 이 든 것만 실행 (여러 번 지정 가능)
   python tools/selftest.py -k P03 -k B02  개별 테스트만
   python tools/selftest.py --keep         실패했을 때 샌드박스를 지우지 않고 경로 출력
+  python tools/selftest.py --strict       구조적 공백(GAP)도 실패로 취급 (계약 도착 확인용)
+
+판정 네 가지 — SKIP 하나로 뭉뚱그리지 않는다
+  PASS  검증됨.
+  FAIL  계약 위반. 고쳐야 한다.
+  SKIP  **이 환경에서 검사할 수 없음**(Pillow·node 부재). 코드에는 문제가 없다.
+  GAP   **구조적 공백**: 검사할 대상(모듈·라우트·필드)이 아직 저장소에 없다.
+        SKIP 과 섞으면 커버리지 구멍이 조용해진다 — 그래서 따로 세고 따로 보여 준다.
+        대상이 도착하는 순간 같은 테스트가 저절로 회귀 잠금이 된다(코드 수정 불필요).
+        GAP 은 "아직 없다"에만 쓴다. 있는데 동작이 틀리면 그것은 FAIL 이다.
 
 설계 원칙
   * 사용자의 project/ · images/ 원본은 절대 건드리지 않는다 — 모든 실행은 샌드박스 사본에서.
   * 유료 API(MakeFun·xAI)는 절대 호출하지 않는다. 네트워크가 나가는 지점만 스텁으로 막는다.
-  * 없을 수 있는 것(Pillow·node·이관 중인 모듈)은 PASS 가 아니라 **SKIP** 으로 집계한다.
+  * 확실히 존재하는 모듈은 optional 로 눅이지 않는다(REQUIRED_MODULES · meta T01 이 감시).
   * 테스트는 서로의 뒷정리에 기대지 않는다 — 상태를 바꾸면 픽스처가 반드시 원상 복구한다.
   * 한 테스트에서 난 예외는 그 테스트의 FAIL 로만 귀속된다(전체 실행이 멈추지 않는다).
 
@@ -50,8 +60,17 @@ PY = sys.executable
 ADV = "tools/advance_scene.py"
 CHK = "tools/check_protocol.py"
 
-# studio.html / 감상본 HTML 이 절대 쓰면 안 되는 DOM API (문자열 주입 경로)
+# studio.html / 감상본 HTML / 공용 런타임이 절대 쓰면 안 되는 DOM API (문자열 주입 경로)
 BANNED_DOM = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
+
+# 이 저장소에 **확실히 있는** 모듈 — 없거나 적재에 실패하면 SKIP 이 아니라 FAIL 이다.
+# (새 모듈이 생길 때마다 optional=True 로 눅이면 커버리지 공백이 조용히 늘어난다.
+#  meta T01 이 이 목록을 두 방향으로 감시한다: 파일 존재·적재 + optional 되돌림 금지.)
+REQUIRED_MODULES = (
+    "vn_core", "advance_scene", "scene_ops", "talk_store", "prompt_build", "local_llm",
+    "webapp", "vn_compose", "export_viewer", "makefun_client", "scene_lint",
+    "secret_scan", "xai_client", "backup_project", "print_preflight",
+)
 
 
 def _console_guard() -> None:
@@ -69,7 +88,15 @@ _console_guard()
 
 # ============================================================ 판정 · 레지스트리
 class Skip(Exception):
-    """이 환경에서는 검사할 수 없음 — 통과로 집계하지 않는다."""
+    """이 환경에서는 검사할 수 없음(Pillow·node 부재) — 통과로 집계하지 않는다."""
+
+
+class Gap(Skip):
+    """검사 대상이 아직 저장소에 없음 — '환경 탓 SKIP' 과 구분해서 집계한다.
+
+    Skip 을 상속하므로 러너를 거치지 않고 도는 코드에서도 안전하게 취급되지만,
+    러너는 Gap 을 먼저 잡아 GAP 으로 따로 센다(--strict 면 FAIL).
+    """
 
 
 class Failed(AssertionError):
@@ -331,8 +358,9 @@ class Box:
     def mod(self, name: str, optional: bool = False):
         """tools/<name>.py 를 샌드박스에서 in-process 로 적재(캐시).
 
-        optional=True 는 '다른 에이전트가 이관 중이라 아직 없을 수 있는' 모듈용 —
-        없거나 적재 실패면 그 테스트만 SKIP 된다.
+        기본은 **필수**다 — 없거나 적재 실패면 FAIL. 아직 도착하지 않은 모듈에는
+        optional 대신 :func:`need_mod` 를 쓴다(GAP 으로 따로 집계된다).
+        optional=True 는 REQUIRED_MODULES 에 없는 모듈에만 허용된다(meta T01 이 감시).
         """
         if name in self._mods:
             return self._mods[name]
@@ -483,6 +511,38 @@ class Box:
         return self.wapi(path, payload, headers)[0]
 
 
+# ------------------------------------------------------------ 계약 도착 확인
+def need_mod(b: Box, name: str):
+    """이번 라운드에 **도착해야 하는** 모듈 — 없으면 GAP, 있는데 적재 실패면 FAIL.
+
+    "아직 없다"(GAP)와 "있는데 깨졌다"(FAIL)를 갈라 두는 지점이다.
+    """
+    if not b.p(f"tools/{name}.py").exists():
+        raise Gap(f"tools/{name}.py 아직 없음 — 이번 라운드 이관 대기")
+    return b.mod(name)
+
+
+def need_attr(mod, name: str, what: str):
+    """모듈에 아직 없는 공개 API — GAP. (있으면 그 자리에서 돌려준다.)"""
+    fn = getattr(mod, name, None)
+    if fn is None:
+        raise Gap(f"{getattr(mod, '__name__', '?').replace('box_', '')}.{name} 아직 없음 — {what}")
+    return fn
+
+
+def csp_directive(csp: str, name: str) -> str:
+    """CSP 헤더에서 지시문 하나의 값만 뽑는다. 없으면 빈 문자열.
+
+    (헤더 전체를 문자열로 훑으면 style-src 의 'unsafe-inline' 이 script-src 검사에
+     걸려 통과/실패가 뒤집힌다. 그래서 지시문 단위로 자른다.)
+    """
+    for part in str(csp or "").split(";"):
+        bits = part.strip().split()
+        if bits and bits[0].lower() == name.lower():
+            return " ".join(bits[1:])
+    return ""
+
+
 # ------------------------------------------------------------ 장면 픽스처
 @contextlib.contextmanager
 def fresh_scene(b: Box, **over):
@@ -558,6 +618,38 @@ def cli_scene(b: Box, stage: str = "PLAN", images: int = 2):
         with contextlib.suppress(OSError):
             b.scene_path(sid).unlink()
         shutil.rmtree(b.root / "images" / "raw" / sid, ignore_errors=True)
+
+
+# ============================================================ meta (자가진단 자신)
+@test("meta", "T01 필수 모듈은 전부 존재·적재되고, SKIP 으로 되돌아가지 않는다")
+def t01(b: Box):
+    """커버리지 공백을 조용하게 만드는 두 경로를 동시에 막는다.
+
+    (1) 파일이 사라지거나 import 가 깨져도 '없으니 SKIP' 으로 넘어가는 것,
+    (2) 이관이 끝난 모듈을 optional=True 로 되돌려 놓는 것.
+    """
+    absent = [n for n in REQUIRED_MODULES if not b.p(f"tools/{n}.py").exists()]
+    eq(absent, [], "필수 모듈 파일 누락")
+    for n in REQUIRED_MODULES:
+        ok(b.mod(n) is not None, f"{n} 적재 결과가 비어 있음")   # 적재 실패는 mod() 가 FAIL
+    src = b.p("tools/selftest.py").read_text(encoding="utf-8")
+    soft = set(re.findall(r'mod\(\s*"([A-Za-z_]+)"\s*,\s*optional\s*=\s*True', src))
+    eq(sorted(soft & set(REQUIRED_MODULES)), [], "확실히 있는 모듈이 optional SKIP 으로 되돌아감")
+
+
+@test("meta", "T02 tools/*.py 전부 구문 오류 없음(동시 편집 회귀 조기 검출)")
+def t02(b: Box):
+    files = sorted((b.root / "tools").glob("*.py"))
+    ok(len(files) >= 15, f"도구 파일이 {len(files)}개뿐 — 패키지가 잘렸습니다")
+    bad = []
+    for p in files:
+        try:
+            compile(p.read_text(encoding="utf-8"), p.name, "exec")
+        except SyntaxError as e:
+            bad.append(f"{p.name}:{e.lineno} {e.msg}")
+        except (OSError, ValueError) as e:
+            bad.append(f"{p.name}: {type(e).__name__}: {e}")
+    eq(bad, [], "구문 오류")
 
 
 # ============================================================ pipeline (CLI)
@@ -735,6 +827,27 @@ def p15(b: Box):
         eq(after["status"], "APPROVED", "status 가 되돌려짐")
         eq(after["prompt"]["grok_output"], before["prompt"]["grok_output"], "프롬프트 변조")
         eq(after["assets"]["raw_images"], before["assets"]["raw_images"], "후보 목록 변조")
+
+
+@test("pipeline", "P16 scene_id 형식 통일 — 세 자리 미만(new SCENE-1)도 거부")
+def p16(b: Box):
+    """SCENE-1 은 웹(vn_core.is_scene_id)에서는 400 인데 CLI 로는 만들어졌다.
+
+    형식이 갈리면 그 장면은 웹 편집·이미지 생성·진행표에서 통째로 사라진다(W20 의 짝).
+    """
+    stray = b.p("project/scenes/SCENE-1.json")
+    rc, out = b.run(ADV, "new", "SCENE-1")
+    made = stray.exists()
+    if made:                       # 다른 테스트의 출발점을 오염시키지 않는다
+        stray.unlink()
+    hasnt(out, "Traceback", "traceback")
+    if rc == 0:
+        raise Gap("advance_scene 이 아직 SCENE-1 을 만든다 — vn_core.is_scene_id(3자리 이상)로 통일 대기")
+    eq(rc, 2, f"rc — {out[:200]}")
+    ok(not made, "거부했는데 파일은 생성됨")
+    rc2, out2 = b.run(ADV, "new", "SCENE-042")     # 정상 형식은 계속 만들어져야 한다
+    b.p("project/scenes/SCENE-042.json").unlink(missing_ok=True)
+    eq(rc2, 0, f"정상 형식까지 막힘 — {out2[:200]}")
 
 
 # ============================================================ checker 부정 픽스처
@@ -1098,6 +1211,134 @@ def w25(b: Box):
     has(json.dumps(d, ensure_ascii=False), "summary", "summary")
 
 
+@test("webapp", "W26 /studio/<name>.js 정적 라우트 — 파일과 동일·ETag/304·화이트리스트 밖 차단", web=True)
+def w26(b: Box):
+    """스튜디오와 감상본이 **같은 재생 엔진**을 쓰는지 확인하는 지점.
+
+    스튜디오는 이 라우트로, 감상본은 인라인으로 같은 tools/vn_runtime.js 를 쓴다(J04 의 짝).
+    tools/ 아래를 여는 라우트라 화이트리스트·경로 탈출 차단이 함께 잠겨야 한다.
+    """
+    rt = b.p("tools/vn_runtime.js")
+    code, hd, body = b.raw("/studio/vn_runtime.js")
+    if code != 200:
+        if not rt.exists():
+            raise Gap("tools/vn_runtime.js · GET /studio/<name>.js 아직 없음 — 공용 런타임 이관 대기")
+        raise Failed(f"런타임 파일은 있는데 라우트가 {code} 를 돌려줍니다")
+    ok(rt.exists(), "라우트는 응답하는데 tools/vn_runtime.js 가 없음(무엇을 서빙하는가?)")
+    eq(body.replace(b"\r\n", b"\n"), rt.read_bytes().replace(b"\r\n", b"\n"),
+       "스튜디오가 받는 런타임이 파일과 다름(감상본과 엔진이 갈림)")
+    has(hd.get("Content-Type", "").lower(), "javascript", "MIME")
+    tag = (hd.get("ETag") or "").strip()
+    ok(bool(tag), "ETag 없음(폰에서 매번 재전송)")
+    has(hd.get("Cache-Control", ""), "max-age", "Cache-Control")
+    code2, _h2, _b2 = b.raw("/studio/vn_runtime.js", headers={"If-None-Match": tag})
+    eq(code2, 304, "If-None-Match 재요청")
+    for bad in ("/studio/../webapp.py", "/studio/..%2fwebapp.py", "/studio/webapp.py",
+                "/studio/studio.html", "/studio/", "/studio/vn_runtime.js.bak"):
+        c, _h, bd = b.raw(bad)
+        ok(c in (400, 403, 404), f"{bad} → {c} (화이트리스트 밖이 열림)")
+        hasnt(bd.decode("utf-8", "replace"), "XAI_API_KEY", f"{bad} 응답에 서버 소스가 실림")
+
+
+@test("webapp", "W27 스튜디오 CSP — 인라인 스크립트를 파일로 뺐다면 script-src 'unsafe-inline' 제거", web=True)
+def w27(b: Box):
+    code, hd, _body = b.raw("/")
+    eq(code, 200, "스튜디오 페이지")
+    csp = hd.get("Content-Security-Policy", "")
+    ok(bool(csp), "CSP 헤더 없음")
+    for token in ("default-src 'self'", "object-src 'none'", "frame-ancestors 'none'"):
+        has(csp, token, "CSP 기본")
+    for d in ("script-src", "connect-src", "default-src"):
+        hasnt(csp_directive(csp, d), "*", f"{d} 와일드카드")
+    inline = _scripts(b.p("tools/studio.html").read_text(encoding="utf-8"))
+    if inline:
+        raise Gap(f"studio.html 에 인라인 <script> {len(inline)}개 — 파일로 빼기 전이라 "
+                  "script-src 'unsafe-inline' 을 아직 뗄 수 없다")
+    hasnt(csp_directive(csp, "script-src"), "unsafe-inline",
+          "인라인 스크립트가 없는데 예외가 남아 있음")
+
+
+@test("webapp", "W28 /api/set-scene — 화이트리스트만 병합 · 보호 필드 400 · APPROVED 400", web=True)
+def w28(b: Box):
+    with fresh_scene(b) as sid:
+        before = b.scene(sid)
+        fields = {
+            "purpose": "수정된 목적", "emotion": "설렘", "time": "노을",
+            "camera": {"shot": "close-up", "angle": "low", "framing": "center", "focus": "눈"},
+            "episode": 2, "ending": True, "ending_label": "호감 엔딩",
+            "print": {"crop_anchor": "top"},
+            "choices": [{"text": "같이 걷는다", "affection": 1, "goto": sid}],
+        }
+        st, d = b.wapi("/api/set-scene", {"scene_id": sid, "fields": fields})
+        if st == 404:
+            raise Gap("POST /api/set-scene 아직 없음 — 장면 편집 라우트 대기")
+        eq(st, 200, f"status — {json.dumps(d, ensure_ascii=False)[:200]}")
+        sc = b.scene(sid)
+        eq(sc["purpose"], "수정된 목적", "purpose 병합")
+        eq(sc["emotion"], "설렘", "emotion 병합")
+        eq(sc["camera"]["shot"], "close-up", "camera 병합")
+        eq(sc.get("episode"), 2, "episode")
+        eq(bool(sc.get("ending")), True, "ending")
+        eq(sc.get("ending_label"), "호감 엔딩", "ending_label")
+        eq((sc.get("print") or {}).get("crop_anchor"), "top", "print.crop_anchor")
+        ok(len(sc.get("choices") or []) == 1, f"choices {sc.get('choices')}")
+        eq(sc.get("action_beat"), before.get("action_beat"), "손대지 않은 필드가 지워짐")
+        # 승인 게이트·추적성의 뼈대는 이 경로로 못 바꾼다(조용히 무시가 아니라 거부)
+        keep = b.scene(sid)
+        for bad in ({"status": "APPROVED"}, {"review": {"human": "PASS"}},
+                    {"assets": {"selected_image": "images/raw/x.png"}},
+                    {"scene_id": "SCENE-999"}, {"scene_order": 99},
+                    {"purpose": "정상 필드에 섞어 보냄", "status": "APPROVED"},
+                    {"정체불명": 1}):
+            eq(b.code("/api/set-scene", {"scene_id": sid, "fields": bad}), 400,
+               f"보호/미지 필드가 통과: {sorted(bad)}")
+        eq(b.code("/api/set-scene", {"scene_id": "SCENE-404", "fields": {"purpose": "x"}}),
+           400, "없는 장면")
+        eq(b.code("/api/set-scene", {"scene_id": sid, "fields": "문자열"}), 400, "비-dict fields")
+        eq(b.scene(sid), keep, "거부됐는데 파일이 바뀜")
+        eq(b.code("/api/state"), 200, "서버 생존")
+    with cli_scene(b, "APPROVED") as sid2:
+        keep2 = b.scene(sid2)
+        eq(b.code("/api/set-scene", {"scene_id": sid2, "fields": {"purpose": "몰래 수정"}}),
+           400, "APPROVED 편집이 400 이 아님")
+        eq(b.scene(sid2), keep2, "APPROVED 장면이 편집됨")
+
+
+@test("webapp", "W29 ending_label 이 /api/state 와 스튜디오 엔딩 카드까지 이어진다", web=True)
+def w29(b: Box):
+    with fresh_scene(b, ending=True, ending_label="호감 엔딩") as sid:
+        st, d = b.wapi("/api/state")
+        eq(st, 200, "status")
+        sc = next((x for x in d.get("scenes", []) if x.get("scene_id") == sid), None)
+        ok(sc is not None, "장면이 state 에 없음")
+        eq(bool(sc.get("ending")), True, "ending")
+        if "ending_label" not in sc:
+            raise Gap("/api/state 장면 항목에 ending_label 이 아직 없음 — 스튜디오가 엔딩 이름을 못 받는다")
+        eq(sc["ending_label"], "호감 엔딩", "ending_label")
+    html = b.p("tools/studio.html").read_text(encoding="utf-8")
+    if "ending_label" not in html:
+        raise Gap("studio.html 이 아직 ending_label 을 쓰지 않음 — 엔딩 카드 표기가 감상본과 갈린다")
+
+
+@test("webapp", "W30 vn_compose.build_scene 이 ending_label 을 장면으로 옮긴다")
+def w30(b: Box):
+    vc = b.mod("vn_compose")
+    args = (["CHAR-001"], {"LOC-001"}, [{"location_id": "LOC-001"}])
+    item = {"order": 7, "purpose": "결말", "action_beat": "손을 잡는다", "emotion": "설렘",
+            "time": "노을", "location_id": "LOC-001",
+            "camera": {"shot": "medium", "angle": "eye", "framing": "center", "focus": "얼굴"},
+            "dialogue": [{"speaker_id": "CHAR-001", "text": "고마워."}],
+            "image_prompt": "medium shot", "ending": True, "ending_label": "호감 엔딩"}
+    sc = vc.build_scene(item, 7, *args, episode=0)      # episode=0 → 디스크를 보지 않는다
+    eq(sc["scene_id"], "SCENE-007", "scene_id 규칙")
+    eq(bool(sc.get("ending")), True, "ending")
+    if not sc.get("ending_label"):
+        raise Gap("vn_compose.build_scene 이 ending_label 을 아직 옮기지 않음 — 엔딩 카드가 이름을 잃는다")
+    eq(sc["ending_label"], "호감 엔딩", "ending_label")
+    plain = vc.build_scene({**item, "ending": False, "ending_label": ""}, 8, *args, episode=0)
+    ok(not plain.get("ending") and not plain.get("ending_label"), "엔딩이 아닌 장면에 라벨이 남음")
+
+
 # ============================================================ PIN 인증(LAN)
 @contextlib.contextmanager
 def auth_state(wa, pin: str = "482913"):
@@ -1393,6 +1634,37 @@ def m05(b: Box):
     eq(mk._ext("https://x/y.jpg?a=1"), ".jpg", "확장자 판정")
 
 
+@test("makefun", "M06 요청 긴 변이 상한에 깎이면 생성 전에 경고한다(조용한 절삭 = 과금 함정)")
+def m06(b: Box):
+    """인화용으로 min_long_edge_px 를 올려도 image_generator.max_long_edge_px 가 낮으면
+    조용히 깎여 나간다 — **과금은 요청대로 되고** 결과는 인화 규격 미달에 A3 FAIL 이다.
+    그 사실이 생성(=과금) 전에 사용자에게 도달하는지를 모의로만 확인한다(실호출 0)."""
+    mk = b.mod("makefun_client")
+    plan_of = need_attr(mk, "size_plan", "크기 계산·절삭 여부의 단일 출처")
+    warn_of = need_attr(mk, "size_warnings", "생성 전 절삭 경고")
+    cap = mk._cap_px()
+    plan = plan_of(cap * 3)
+    eq(plan["capped"], True, f"상한 초과인데 capped=False — {plan}")
+    eq(plan["cap"], cap, "cap")
+    ok(max(plan["width"], plan["height"]) <= cap, f"상한을 넘겨 요청 — {plan}")
+    msg = " / ".join(warn_of(plan))
+    has(msg, "max_long_edge_px", "고치는 방법(매니페스트 키) 안내")
+    has(msg, str(cap), "실제 상한값")
+    eq(list(warn_of(plan_of(mk.SIZE_MIN_PX))), [], "깎이지 않았는데 경고")
+    # 실제 생성 경로가 그 경고를 결과로 돌려주는지 (네트워크 지점은 전부 스텁)
+    png = _png_bytes()
+    with fresh_scene(b) as sid:
+        out_dir = b.root / "images" / "raw" / sid
+        with mf_stub(mk, _mf_api("task_cap01", ["https://cdn.example/c_1.png"]), lambda url: png):
+            res = mk.generate_to_dir("프롬프트", out_dir, n=1, long_edge=cap * 3,
+                                     scene_id=sid, quiet=True)
+        eq(len(res), 1, "저장된 파일 수")
+        ok(any("max_long_edge_px" in w for w in res.warnings),
+           f"생성 결과에 절삭 경고가 없음 — {list(res.warnings)}")
+        entry = read_json(out_dir / mk.META_NAME)["entries"][-1]
+        eq(max(entry["width"], entry["height"]), plan["long"], "기록된 크기가 실제 요청과 다름")
+
+
 # ============================================================ 백업 · 복원
 @contextlib.contextmanager
 def bk_box(b: Box):
@@ -1629,40 +1901,121 @@ def v03(b: Box):
     ok(not scenes[0].get("branch"), "분기 goto 가 남음")
 
 
+@test("viewer", "V04 엔딩 표기 정규화 — 옛 문자열도 label 로 · build_data 가 이름을 실어 나른다")
+def v04(b: Box):
+    """엔딩 이름의 정본은 ending_label 하나다(ending 은 참/거짓).
+
+    스튜디오 카드·감상본 엔딩 화면·vn_compose 지시문이 같은 규약을 써야 이름이 갈리지 않는다.
+    """
+    tcm = b.mod("export_viewer")
+    eq(tcm.ending_of({"ending": True, "ending_label": "호감 엔딩"}), (True, "호감 엔딩"), "정규형")
+    eq(tcm.ending_of({"ending": "엇갈린 결말"}), (True, "엇갈린 결말"), "옛 문자열 형식")
+    eq(tcm.ending_of({"ending": False, "ending_label": "쓰지 않음"}), (False, "쓰지 않음"),
+       "ending=False 는 엔딩이 아니다")
+    eq(tcm.ending_of({}), (False, ""), "엔딩 아님")
+    with approved_scene(b) as sid:
+        edit_json(b.scene_path(sid), lambda d: d.update(ending=True, ending_label="호감 엔딩"))
+        with quiet():
+            data = tcm.build_data(False, 320, 60)
+    entry = next((s for s in data["scenes"] if s.get("id") == sid), None)
+    ok(entry is not None, "장면이 감상본 데이터에 실리지 않음")
+    eq(entry.get("ending"), True, "ending")
+    eq(entry.get("ending_label"), "호감 엔딩", "ending_label")
+
+
 # ============================================================ JS 구문 게이트
 def _scripts(html: str) -> list[str]:
     return [s for s in re.findall(r"<script\b[^>]*>(.*?)</script>", html, re.S | re.I) if s.strip()]
 
 
-def _node_check(b: Box, html: str, label: str) -> None:
-    """<script> 본문을 모아 node --check — 문법 오류로 화면이 백지가 되는 회귀를 잡는다."""
+def _node_check_src(b: Box, code: str, label: str) -> None:
+    """JS 원문을 node --check — 문법 오류로 화면이 백지가 되는 회귀를 잡는다."""
     node = shutil.which("node")
     if not node:
         raise Skip("node 없음 — JS 구문 검사 생략")
-    blocks = _scripts(html)
-    ok(len(blocks) >= 1, f"{label}: <script> 를 찾지 못함")
     tmp = b.root / f"_syntax_{label}.js"
-    tmp.write_text("\n;\n".join(blocks), encoding="utf-8")
+    tmp.write_text(code, encoding="utf-8")
     p = subprocess.run([node, "--check", str(tmp)], capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
     tmp.unlink(missing_ok=True)
     eq(p.returncode, 0, f"{label} JS 문법 오류 — {(p.stderr or p.stdout)[:400]}")
 
 
+def _page_js(b: Box, html: str, label: str) -> list[str]:
+    """그 페이지가 **실제로 실행하는 JS 전부** — 인라인 <script> + 참조하는 tools/*.js.
+
+    스튜디오가 인라인 스크립트를 /studio/vn_runtime.js 로 빼도(=CSP 에서 'unsafe-inline'
+    을 떼는 조건, W27) 문법·주입 API 검사가 빈손으로 통과해 버리지 않게 한다.
+    """
+    blocks = _scripts(html)
+    for src in re.findall(r"<script\b[^>]*\ssrc=[\"']([^\"']+)[\"']", html, re.I):
+        p = b.p(f"tools/{src.rsplit('/', 1)[-1]}")
+        if p.exists():
+            blocks.append(p.read_text(encoding="utf-8"))
+    ok(len(blocks) >= 1, f"{label}: 실행되는 JS 를 찾지 못함")
+    return blocks
+
+
+def _node_check(b: Box, html: str, label: str) -> None:
+    """HTML 이 실행하는 JS 를 모아 문법 검사한다."""
+    _node_check_src(b, "\n;\n".join(_page_js(b, html, label)), label)
+
+
 @test("js", "J01 studio.html — JS 문법 통과 + 주입 API(innerHTML 등) 0")
 def j01(b: Box):
     html = b.p("tools/studio.html").read_text(encoding="utf-8")
-    for api in BANNED_DOM:
-        eq(html.count(api), 0, f"studio.html 이 {api} 사용")
+    for src in [html] + _page_js(b, html, "studio"):
+        for api in BANNED_DOM:
+            eq(src.count(api), 0, f"스튜디오가 실행하는 JS 가 {api} 사용")
     _node_check(b, html, "studio")
 
 
 @test("js", "J02 감상본 HTML — JS 문법 통과(내보낸 결과물 그대로)")
 def j02(b: Box):
     tcm = b.mod("export_viewer")
-    with approved_scene(b):
+    with approved_scene(b), quiet():
         html = tcm.export(False, 640, 70).read_text(encoding="utf-8")
     _node_check(b, html, "viewer")
+
+
+@test("js", "J03 공용 VN 런타임 — 단일 전역·주입 지점·문법·금지 DOM API 0")
+def j03(b: Box):
+    """스튜디오 뷰어와 감상본이 같은 파일을 쓰는 이상, 이 파일 하나가 두 화면을 동시에
+    깨뜨릴 수 있다. 그래서 감상본과 같은 강도로 잠근다."""
+    p = b.p("tools/vn_runtime.js")
+    if not p.exists():
+        raise Gap("tools/vn_runtime.js 아직 없음 — 스튜디오·감상본 공용 재생 엔진 이관 대기")
+    src = p.read_text(encoding="utf-8")
+    for api in BANNED_DOM:
+        eq(src.count(api), 0, f"vn_runtime.js 가 {api} 사용")
+    has(src, "VNRuntime", "전역 이름(window.VNRuntime)")
+    has(src, "mount", "mount(opts) 진입점")
+    has(src, "imageSrc", "이미지 경로 주입 지점(감상본 data URI · 스튜디오 /img)")
+    for net in ("XMLHttpRequest", "fetch("):
+        eq(src.count(net), 0, f"자기완결이어야 할 런타임이 {net} 사용(감상본에서 죽는다)")
+    _node_check_src(b, src, "vn_runtime")
+
+
+@test("js", "J04 감상본 자기완결 — 공용 런타임이 인라인되고 외부 script src 가 없다")
+def j04(b: Box):
+    rt = b.p("tools/vn_runtime.js")
+    if not rt.exists():
+        raise Gap("tools/vn_runtime.js 아직 없음 — 감상본 인라인 대상이 없다")
+    ev = b.mod("export_viewer")
+    with approved_scene(b), quiet():
+        html = ev.export(False, 640, 70).read_text(encoding="utf-8")
+    hasnt(html, "__RUNTIME__", "치환되지 않은 자리표시자가 감상본에 그대로 남음")
+    if "VNRuntime" not in html:
+        raise Gap("export_viewer 가 아직 tools/vn_runtime.js 를 인라인하지 않음 "
+                  "— 감상본이 스튜디오와 다른 엔진으로 재생된다")
+    ok(not re.search(r"<script\b[^>]*\ssrc=", html, re.I),
+       "감상본이 외부 스크립트를 참조(파일 하나만 옮기면 재생이 죽는다)")
+    # 인라인된 내용이 실제로 그 파일인지 — 특징 토큰 몇 개로 확인(공백·개행 차이는 무시)
+    marks = [m for m in ("VNRuntime", "mount", "imageSrc") if m in rt.read_text(encoding="utf-8")]
+    for m in marks:
+        has(html, m, "런타임 일부만 인라인됨")
+    for api in BANNED_DOM:
+        eq(html.count(api), 0, f"감상본이 {api} 사용")
 
 
 # ============================================================ 보안
@@ -1770,7 +2123,7 @@ def s04(b: Box):
 # ============================================================ 단위(순수 함수)
 @test("unit", "U01 scene_ops — APPROVED 장면은 어떤 쓰기 경로로도 바뀌지 않는다")
 def u01(b: Box):
-    so = b.mod("scene_ops", optional=True)
+    so = b.mod("scene_ops")
     # 예외 클래스는 모듈이 실제로 쓰는 것을 그대로 쓴다(같은 파일을 두 번 적재하면
     # 이름이 같아도 다른 클래스가 되므로, 여기서 새로 import 하면 안 된다).
     err = getattr(so, "VNError", RuntimeError)
@@ -1789,13 +2142,8 @@ def u01(b: Box):
 
 @test("unit", "U02 대화 로그 병합 — 저장본은 절대 짧아지지 않는다")
 def u02(b: Box):
-    wa = b.mod("webapp")
-    merge = getattr(wa, "_merge_talk", None)
-    if merge is None:
-        ts = b.mod("talk_store", optional=True)
-        merge = getattr(ts, "merge_talk", None) or getattr(ts, "merge", None)
-    if merge is None:
-        raise Skip("대화 병합 함수를 찾지 못함(이관 중)")
+    ts = b.mod("talk_store")
+    merge = ts.merge_messages          # 병합의 단일 출처(webapp·local_llm 이 함께 쓴다)
     saved = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(20)]
     fresh = merge(saved, [{"role": "user", "content": "새 세션 첫 마디"}])
     cont = merge(saved, saved + [{"role": "user", "content": "이어서"}])
@@ -1835,9 +2183,210 @@ def u04(b: Box):
     eq(len(p4), 0, "요청이 아닌데 사진을 붙임")
 
 
+@test("unit", "U05 vn_core — 경로 탈출 차단 · scene_id 형식 · 원자적 쓰기(찌꺼기 없음)")
+def u05(b: Box):
+    """저장소 전체의 보안·형식 관문. /img·/studio·백업 복원이 전부 여기에 의존한다."""
+    vc = b.mod("vn_core")
+    base = b.root / "images"
+    for bad in ("../etc", "/etc/passwd", "C:/evil.txt", "raw/../../CLAUDE.md",
+                ".git/config", "", "..\\evil", "//server/share/x"):
+        raises(lambda bad=bad: vc.safe_path(base, bad), vc.VNError, f"통과됨: {bad!r}")
+    good = vc.safe_path(base, "raw/SCENE-001/a.png")
+    ok(good.is_relative_to(base.resolve()), f"기준 밖으로 해석됨: {good}")
+    eq(vc.safe_path(base, ".cache/x.jpg", allow_hidden=True).name, "x.jpg", "허용된 숨김 경로")
+    for sid, want in (("SCENE-001", True), ("SCENE-0001", True), ("SCENE-1", False),
+                      ("scene-001", False), ("SCENE-001/../x", False), ("", False),
+                      (None, False), ("SCENE-abc", False)):
+        eq(vc.is_scene_id(sid), want, f"is_scene_id({sid!r})")
+    eq(vc.safe_slug("../../etc"), "etc", "safe_slug 가 점·구분자를 남김")
+    p = b.root / "_u05_atomic.json"
+    vc.atomic_write_json(p, {"a": "한글", "b": [1, 2]})
+    eq(read_json(p), {"a": "한글", "b": [1, 2]}, "원자적 쓰기 왕복")
+    leftovers = [q.name for q in p.parent.glob("_u05_atomic.json.*")]
+    p.unlink(missing_ok=True)
+    eq(leftovers, [], "임시 파일 찌꺼기")
+
+
+@test("unit", "U06 talk_store — 경로 정규화 · 상한 초과분은 버리지 않고 아카이브로 이관")
+def u06(b: Box):
+    """사용자가 가장 아끼는 자산이 대화 로그다. 규칙은 하나 — 조용히 짧아지지 않는다."""
+    ts = b.mod("talk_store")
+    for hostile in ("../../etc/passwd", "CHAR/../x", "..", ""):
+        slug = ts.normalize_cid(hostile)
+        ok("/" not in slug and "\\" not in slug and ".." not in slug and slug,
+           f"경로 성분이 남음: {hostile!r} → {slug!r}")
+        ok(ts.talk_path(hostile).parent == ts.STORY_DIR, "대화 로그가 story 폴더 밖으로 나감")
+    path = ts.STORY_DIR / "talk_SELFTEST-U06.json"
+    arch = ts.archive_path(path)
+    try:
+        msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"{i}:" + "가" * 200}
+                for i in range(40)]
+        ts.save_log(path, msgs, cap=3000)
+        kept = ts.load_log(path)
+        ok(0 < len(kept) < 40, f"상한이 적용되지 않음(남은 {len(kept)})")
+        ok(arch.exists(), "잘라낸 구간이 아카이브로 옮겨지지 않음(대화 소실)")
+        moved = [l for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()]
+        eq(len(moved) + len(kept), 40, "이관+보존 합계가 원본과 다름(대화가 사라짐)")
+        eq(json.loads(moved[0])["content"], msgs[0]["content"], "가장 오래된 대화가 그대로 이관")
+        eq(kept[-1]["content"], msgs[-1]["content"], "최신 대화가 잘림")
+    finally:
+        path.unlink(missing_ok=True)
+        arch.unlink(missing_ok=True)
+
+
+@test("unit", "U07 prompt_build — 앵커·화풍은 코드가 원문 그대로 넣는다(A6 보장)")
+def u07(b: Box):
+    """LLM 이 무엇을 뱉든 앵커는 코드가 조립한다. 대소문자까지 원문이어야 A6 가 통과한다."""
+    pb = b.mod("prompt_build")
+    anchor_c, anchor_l = b.anchors()
+    sc = read_json(b.root / "examples" / "scenes" / "SCENE-001.json")
+    with patched(pb.local_llm, "chat", lambda *a, **k: "she turns from the window"):
+        text = pb.compose_image_prompt(sc)
+    has(text, anchor_c, "인물 앵커 원문")
+    has(text, anchor_l, "장소 앵커 원문")
+    has(text, "2:3", "세로 규격")
+    has(text, "she turns from the window", "동작 문장")
+    with patched(pb.local_llm, "chat", lambda *a, **k: ""):     # LLM 이 빈손이어도
+        bare = pb.compose_image_prompt(sc)
+    has(bare, anchor_c, "LLM 실패 시 앵커까지 사라짐")
+    has(bare, anchor_l, "LLM 실패 시 장소 앵커까지 사라짐")
+
+
+@test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")
+def u08(b: Box):
+    gj = need_mod(b, "gen_jobs")
+    err = getattr(gj, "VNError", RuntimeError)
+    sid, other = "SCENE-901", "SCENE-902"
+
+    def done(mod, s):     # release 는 계약에 없는 편의 API 라 없을 수도 있다고 본다
+        rel = getattr(mod, "release", None)
+        rel(s) if callable(rel) else mod.note(s, "정리", running=False)
+
+    gj.claim(sid)
+    try:
+        raises(lambda: gj.claim(sid), err, "두 번째 claim 이 통과(같은 장면 2회 과금)")
+        eq(gj.status(sid)["running"], True, "status.running")
+        ok(sid in gj.running(), "running() 목록에 없음")
+        gj.note(sid, "MakeFun 생성 중…")
+        has(gj.status(sid)["message"], "생성 중", "note 가 반영되지 않음")
+        gj.claim(other)                       # 다른 장면은 막히지 않는다
+        gj.note(other, "완료", running=False)
+        ok(other not in gj.running(), "끝난 작업이 목록에 남음")
+        raises(lambda: gj.claim("../etc"), err, "형식이 틀린 id 가 관문을 통과")
+    finally:
+        for s in (sid, other):
+            done(gj, s)
+    eq(gj.status(sid)["running"], False, "해제 후에도 running")
+    ok(sid not in gj.running(), "해제 후에도 목록에 남음")
+    gj.claim(sid)                             # 끝난 뒤에는 다시 잡을 수 있어야 한다
+    done(gj, sid)
+
+    # CLI(makefun_client) 경로가 같은 표시를 보는가 — 서버 밖 중복 과금의 유일한 방어선.
+    # (in-process 적재본과 makefun 이 import 한 gen_jobs 는 서로 다른 인스턴스라,
+    #  반드시 makefun 이 실제로 쓰는 쪽을 잡아서 확인한다.)
+    mk = b.mod("makefun_client")
+    jobs = mk._jobs() if hasattr(mk, "_jobs") else None
+    claim_scene = getattr(mk, "claim_scene", None)
+    if jobs is None or claim_scene is None:
+        raise Gap("makefun_client 가 아직 gen_jobs 를 통과하지 않음 — CLI 로 같은 장면을 또 구울 수 있다")
+    cli_sid = "SCENE-903"
+    jobs.claim(cli_sid)                       # 웹이 먼저 잡은 상태를 흉내
+    try:
+        raises(lambda: claim_scene(cli_sid, "생성").__enter__(), RuntimeError,
+               "웹이 생성 중인 장면을 CLI 가 또 굽는다")
+    finally:
+        done(jobs, cli_sid)
+    with claim_scene(cli_sid, "생성") as got:     # 네트워크 없음 — 표시만 잡았다 푼다
+        eq(bool(got), True, "정상 상황인데 선점하지 못함")
+    ok(cli_sid not in jobs.running(), "블록을 나갔는데 표시가 남음(영구 잠금)")
+
+
+@test("unit", "U09 scene_ops.update_fields — 화이트리스트 병합 · 보호 필드는 거부(우회 차단)")
+def u09(b: Box):
+    """편집 폼이 status·review·assets 를 쓸 수 있으면 사람 승인 게이트가 필드 하나로
+    우회된다. 조용히 무시하지 않고 **거부**하는 쪽이 규약이다(잘못 보낸 쪽이 알아야 한다)."""
+    so = b.mod("scene_ops")
+    err = getattr(so, "VNError", RuntimeError)
+    update = need_attr(so, "update_fields", "웹 편집(/api/set-scene)의 유일한 구현")
+    with fresh_scene(b) as sid:
+        before = b.scene(sid)
+        res = update(sid, {"purpose": "새 목적", "emotion": "설렘", "ending": True,
+                           "ending_label": "호감 엔딩", "print": {"crop_anchor": "top"},
+                           "camera": {"shot": "close-up"}})
+        sc = b.scene(sid)
+        eq(sc["purpose"], "새 목적", "purpose 병합")
+        eq(sc["emotion"], "설렘", "emotion 병합")
+        eq(sc.get("ending_label"), "호감 엔딩", "ending_label 병합")
+        eq((sc.get("print") or {}).get("crop_anchor"), "top", "print 부분 병합")
+        eq(sc["camera"]["shot"], "close-up", "camera 병합")
+        eq(sc["action_beat"], before["action_beat"], "손대지 않은 필드가 지워짐(덮어쓰기)")
+        eq(sc["status"], before["status"], "편집이 상태를 움직임")
+        ok("purpose" in (res.get("updated") or []), f"updated 목록 — {res}")
+        eq(res.get("checker_pass"), True, f"편집 후 검사 — {str(res.get('fails'))[:200]}")
+        # 보호 필드는 하나씩 넣어도 전부 거부되고, 파일은 그대로여야 한다
+        keep = b.scene(sid)
+        for bad in ({"status": "APPROVED"}, {"review": {"human": "PASS"}},
+                    {"assets": {"selected_image": "images/raw/x.png"}},
+                    {"scene_id": "SCENE-999"}, {"scene_order": 77},
+                    {"purpose": "같이 보낸 정상 필드", "status": "APPROVED"}):
+            raises(lambda bad=bad: update(sid, bad), err, f"보호 필드 통과: {sorted(bad)}")
+        raises(lambda: update(sid, {"없는필드": 1}), err, "화이트리스트 밖 필드")
+        raises(lambda: update(sid, {}), err, "빈 편집")
+        raises(lambda: update(sid, [1, 2]), err, "비-dict 본문")
+        raises(lambda: update("../etc", {"purpose": "x"}), err, "장면 ID 형식 검증")
+        eq(b.scene(sid), keep, "거부됐는데 파일이 바뀜")
+    with cli_scene(b, "APPROVED") as sid2:
+        keep2 = b.scene(sid2)
+        raises(lambda: update(sid2, {"purpose": "몰래 수정"}), err, "APPROVED 편집")
+        eq(b.scene(sid2), keep2, "APPROVED 장면이 바뀜")
+
+
+@test("unit", "U10 set_prompt(fix_anchors) — 대소문자만 다른 앵커도 원문으로 되돌려 A6 통과")
+def u10(b: Box):
+    """외부 이미지 AI 는 프롬프트를 소문자로 정규화해 돌려주는 일이 흔하다.
+
+    검사기 A6 는 대소문자를 구분하므로, 보정이 소문자 비교로 '빠진 것 없음' 이라고
+    판정하면 정확히 필요한 순간에 아무 일도 하지 않는다(A6 FAIL).
+    """
+    so = b.mod("scene_ops")
+    anchor_c, anchor_l = b.anchors()
+    with fresh_scene(b) as sid:
+        lower = f"medium shot, {anchor_c.lower()}, {anchor_l.lower()}, cel shading"
+        sc = b.scene(sid)
+        eq(sorted(so.missing_anchors(sc, lower)), sorted([anchor_c, anchor_l]),
+           "소문자 앵커를 '들어 있음' 으로 오판(A6 와 판정이 갈림)")
+        res = so.set_prompt(sid, lower, fix_anchors=True)
+        saved = b.scene(sid)["prompt"]["grok_output"]
+        has(saved, anchor_c, "인물 앵커 원문")
+        has(saved, anchor_l, "장소 앵커 원문")
+        eq(saved.lower().count(anchor_c.lower()), 1, "같은 인물 묘사가 두 번(화면에 사람이 늘어난다)")
+        eq(res["checker_pass"], True, f"A6 검사 — {res.get('fails', '')[:200]}")
+        eq(b.scene(sid)["status"], "PROMPT", "status")
+        # 이미 원문 그대로면 손대지 않는다(멱등)
+        again = so.set_prompt(sid, saved, fix_anchors=True)
+        eq(b.scene(sid)["prompt"]["grok_output"], saved, "멱등하지 않음")
+        eq(again["checker_pass"], True, "재저장 후 검사")
+
+
 # ============================================================ 러너
-GROUPS = ["pipeline", "checker", "webapp", "auth", "makefun", "backup",
+GROUPS = ["meta", "pipeline", "checker", "webapp", "auth", "makefun", "backup",
           "print", "viewer", "js", "security", "unit"]
+
+# --list 에서 각 그룹이 무엇을 잠그는지 한 줄로 보여 준다(부분 실행을 고르기 쉽게).
+GROUP_NOTE = {
+    "meta": "자가진단 자신 — 필수 모듈·구문(가장 빠름)",
+    "pipeline": "CLI 상태 전이 · 승인 게이트",
+    "checker": "검사기가 '떨어뜨리는 능력'(부정 픽스처)",
+    "webapp": "웹 스튜디오 라우트·잠금 (서버 기동)",
+    "auth": "폰 접속 PIN·토큰",
+    "makefun": "이미지 생성 클라이언트 (모의 · 과금 0)",
+    "backup": "스냅샷·복원·zip slip",
+    "print": "인화 규격·마스터",
+    "viewer": "감상본 데이터·분기",
+    "js": "브라우저 코드 문법 + 주입 API 0",
+    "security": "키 유출·리다이렉트·비밀 스캔",
+    "unit": "순수 함수 단위(서버 없이 가장 빠름)",
+}
 
 
 def _order(t: dict) -> tuple[int, int]:
@@ -1864,16 +2413,18 @@ def _match(t: dict, patterns: list[str]) -> bool:
 
 
 def _line(status: str, t: dict, secs: float) -> str:
-    return f"{status}  [{t['group']:<8}] {t['name']}  ({secs:.2f}s)"
+    return f"{status:<4}  [{t['group']:<8}] {t['name']}  ({secs:.2f}s)"
 
 
-def run_one(b: Box, t: dict) -> tuple[str, str, float]:
+def run_one(b: Box, t: dict, strict: bool = False) -> tuple[str, str, float]:
     started = time.perf_counter()
     status, detail = "PASS", ""
     try:
         if t["web"]:
             b.ensure_web()
         t["fn"](b)
+    except Gap as e:                             # 아직 없는 계약 — 환경 SKIP 과 구분해서 센다
+        status, detail = ("FAIL" if strict else "GAP"), str(e) or "계약 대기"
     except Skip as e:
         status, detail = "SKIP", str(e) or "건너뜀"
     except Failed as e:
@@ -1892,61 +2443,46 @@ def run_one(b: Box, t: dict) -> tuple[str, str, float]:
     return status, detail, secs
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        prog="selftest.py", description="패키지 자가진단 (샌드박스 사본에서 실행)")
-    ap.add_argument("-k", "--only", action="append", default=[], metavar="패턴",
-                    help="그룹·이름에 이 문자열이 든 테스트만 실행 (여러 번 지정 가능)")
-    ap.add_argument("--list", action="store_true", help="테스트 목록만 출력")
-    ap.add_argument("--keep", action="store_true", help="실패 시 샌드박스를 지우지 않고 경로 출력")
-    args = ap.parse_args(argv)
+def print_list(tests: list[dict], patterns: list[str]) -> None:
+    """그룹별 목록 — 어디를 부분 실행하면 되는지 한눈에 보이게."""
+    sel = [t for t in tests if _match(t, patterns)]
+    for g in GROUPS + sorted({t["group"] for t in tests} - set(GROUPS)):
+        rows = [t for t in tests if t["group"] == g]
+        if not rows:
+            continue
+        picked = sum(1 for t in rows if _match(t, patterns))
+        note = GROUP_NOTE.get(g, "")
+        mark = "" if picked == len(rows) else f" · 선택 {picked}"
+        print(f"\n[{g}] {len(rows)}건{mark}" + (f" — {note}" if note else ""))
+        for t in rows:
+            flag = "웹" if t["web"] else "  "
+            print(f"  {' ' if _match(t, patterns) else '-'} {flag} {t['name']}")
+    print(f"\n총 {len(tests)}건 (선택 {len(sel)}건) · 그룹: {' '.join(GROUPS)}")
+    print("부분 실행: python tools/selftest.py -k unit -k js   (그룹 이름·테스트 번호 모두 가능)")
 
-    tests = sorted(_REG, key=_order)
-    sel = [t for t in tests if _match(t, args.only)]
 
-    if args.list:
-        for t in tests:
-            mark = " " if _match(t, args.only) else "-"
-            print(f"{mark} [{t['group']:<8}] {t['name']}")
-        print(f"\n총 {len(tests)}건 (선택 {len(sel)}건)")
-        return 0
-    if not sel:
-        print(f"일치하는 테스트가 없습니다: {args.only}")
-        return 2
-
-    print(f"자가진단 시작 — 원본 {SRC} · 테스트 {len(sel)}건")
-    t0 = time.perf_counter()
-    tmp = Path(tempfile.mkdtemp(prefix="webtoon-selftest-"))
-    results: list[tuple[str, dict, str]] = []
-    box: Box | None = None
-    try:
-        box = Box(tmp / "repo")
-        box.build()
-        for t in sel:
-            status, detail, _secs = run_one(box, t)
-            results.append((status, t, detail))
-    except KeyboardInterrupt:
-        print("\n중단했습니다.")
-        return 130
-    finally:
-        if box is not None:
-            box.close()
-        fails = [r for r in results if r[0] == "FAIL"]
-        if args.keep and fails:
-            print(f"\n샌드박스 보존: {tmp}")
-        else:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    npass = sum(1 for s, _, _ in results if s == "PASS")
-    nskip = sum(1 for s, _, _ in results if s == "SKIP")
-    fails = [(t, d) for s, t, d in results if s == "FAIL"]
+def print_summary(results: list[tuple[str, dict, str, float]], elapsed: float) -> int:
+    npass = sum(1 for s, _t, _d, _x in results if s == "PASS")
+    skips = [(t, d) for s, t, d, _x in results if s == "SKIP"]
+    gaps = [(t, d) for s, t, d, _x in results if s == "GAP"]
+    fails = [(t, d) for s, t, d, _x in results if s == "FAIL"]
     print("-" * 64)
-    print(f"통과 {npass} · 실패 {len(fails)} · 건너뜀 {nskip}"
-          f"  (총 {len(results)}건, {time.perf_counter() - t0:.1f}초)")
-    if nskip:
-        for s, t, d in results:
-            if s == "SKIP":
-                print(f"  SKIP [{t['group']}] {t['name']} — {d}")
+    print(f"통과 {npass} · 실패 {len(fails)} · 건너뜀 {len(skips)} · 공백 {len(gaps)}"
+          f"  (총 {len(results)}건, {elapsed:.1f}초)")
+    if skips:
+        print("환경 SKIP — 이 PC 에서 검사할 수 없을 뿐, 코드 문제가 아닙니다:")
+        for t, d in skips:
+            print(f"  [{t['group']}] {t['name']} — {d}")
+    if gaps:
+        print("구조적 공백(GAP) — 검사 대상이 아직 없습니다. 도착하면 그대로 회귀 잠금이 됩니다:")
+        for t, d in gaps:
+            print(f"  [{t['group']}] {t['name']}")
+            print(f"      └ {d}")
+        print("  (계약이 다 왔는지 확인: python tools/selftest.py --strict)")
+    slow = sorted(results, key=lambda r: -r[3])[:3]
+    if elapsed > 20 and slow:
+        print("가장 느린 항목: " + " · ".join(f"{t['name'].split()[0]} {x:.1f}초"
+                                              for _s, t, _d, x in slow))
     if fails:
         print("실패 항목:")
         for t, d in fails:
@@ -1955,8 +2491,59 @@ def main(argv: list[str] | None = None) -> int:
             if first:
                 print(f"      └ {first}")
         return 1
-    print("자가진단 전체 통과. 파이프라인 정상입니다.")
+    if gaps:                 # --strict 면 여기 오지 않는다(GAP 이 이미 FAIL 로 집계된다)
+        print(f"자가진단 통과 — 다만 구조적 공백 {len(gaps)}건이 아직 검사되지 않았습니다.")
+    else:
+        print("자가진단 전체 통과. 파이프라인 정상입니다.")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="selftest.py", description="패키지 자가진단 (샌드박스 사본에서 실행)")
+    ap.add_argument("-k", "--only", action="append", default=[], metavar="패턴",
+                    help="그룹·이름에 이 문자열이 든 테스트만 실행 (여러 번 지정 가능)")
+    ap.add_argument("--list", action="store_true", help="테스트 목록을 그룹별로 출력")
+    ap.add_argument("--keep", action="store_true", help="실패 시 샌드박스를 지우지 않고 경로 출력")
+    ap.add_argument("--strict", action="store_true",
+                    help="구조적 공백(GAP)도 실패로 취급 — 계약이 전부 도착했는지 확인용")
+    args = ap.parse_args(argv)
+
+    tests = sorted(_REG, key=_order)
+    sel = [t for t in tests if _match(t, args.only)]
+
+    if args.list:
+        print_list(tests, args.only)
+        return 0
+    if not sel:
+        print(f"일치하는 테스트가 없습니다: {args.only}")
+        print(f"쓸 수 있는 그룹: {' '.join(GROUPS)}  (전체 목록은 --list)")
+        return 2
+
+    print(f"자가진단 시작 — 원본 {SRC} · 테스트 {len(sel)}건"
+          + (" · strict(GAP=실패)" if args.strict else ""))
+    t0 = time.perf_counter()
+    tmp = Path(tempfile.mkdtemp(prefix="webtoon-selftest-"))
+    results: list[tuple[str, dict, str, float]] = []
+    box: Box | None = None
+    try:
+        box = Box(tmp / "repo")
+        box.build()
+        for t in sel:
+            status, detail, secs = run_one(box, t, strict=args.strict)
+            results.append((status, t, detail, secs))
+    except KeyboardInterrupt:
+        print("\n중단했습니다.")
+        return 130
+    finally:
+        if box is not None:
+            box.close()
+        if args.keep and any(r[0] == "FAIL" for r in results):
+            print(f"\n샌드박스 보존: {tmp}")
+        else:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    return print_summary(results, time.perf_counter() - t0)
 
 
 if __name__ == "__main__":

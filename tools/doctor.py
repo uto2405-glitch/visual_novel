@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import inspect
 import json
 import os
 import shutil
@@ -93,6 +95,44 @@ def check_tools() -> None:
     add("실행 환경", "선택 모듈", OK,
         (("있음: " + ", ".join(have)) if have else "없음") +
         ((" · 미설치: " + ", ".join(f"{n}({OPTIONAL_TOOLS[n]})" for n in lack)) if lack else ""))
+    check_skew()
+
+
+# 웹 스튜디오가 넘기는 인자를 설치된 도구가 실제로 받는지 — 파일을 섞어 복원하면
+# 옛 도구 + 새 서버 조합이 되어 기능이 조용히 죽는다(즐겨찾기 인화·PWA 아이콘 등).
+# 예전에는 webapp 이 요청마다 inspect.signature 로 확인했다. 진단은 여기서 한 번만 한다.
+SKEW_EXPECT = (
+    ("print_export", "export_batch",
+     ("only_ids", "mode", "bg", "marks", "upscale", "order_prefix"), "즐겨찾기 인화·여백/재단선 옵션"),
+    ("export_pwa", "export",
+     ("cover_id", "font_spec", "icon_from_cut", "icon_scene"), "PWA 표지·글꼴·아이콘 옵션"),
+)
+
+
+def check_skew() -> None:
+    """버전 스큐 — 도구 파일들이 서로 같은 세대인가(요청 경로가 아니라 진단에서 한 번만)."""
+    bad, unknown = [], []
+    for mod_name, fn_name, expect, what in SKEW_EXPECT:
+        try:
+            params = inspect.signature(
+                getattr(importlib.import_module(mod_name), fn_name)).parameters
+        except Exception as exc:
+            unknown.append(f"{mod_name}.{fn_name}({type(exc).__name__})")
+            continue
+        missing = [p for p in expect if p not in params]
+        if missing:
+            bad.append(f"{mod_name}.{fn_name} 에 {', '.join(missing)} 없음 → {what} 실패")
+    if bad:
+        add("실행 환경", "도구 버전 정합", ERR,
+            " / ".join(bad) + (" / 확인 불가: " + ", ".join(unknown) if unknown else ""),
+            "tools/ 를 한 세대로 맞추세요 — 같은 백업 스냅샷에서 함께 복원하면 됩니다 "
+            "(python tools/backup_project.py list → restore --snapshot <스탬프>).")
+    elif unknown:
+        add("실행 환경", "도구 버전 정합", WARN, "확인 불가: " + ", ".join(unknown),
+            "해당 모듈을 직접 import 해 보고 오류를 확인하세요.")
+    else:
+        add("실행 환경", "도구 버전 정합", OK,
+            f"{len(SKEW_EXPECT)}개 도구가 서버가 기대하는 인자를 모두 받습니다")
 
 
 def check_disk() -> None:
@@ -206,7 +246,38 @@ def check_project() -> None:
     add("프로젝트", "화풍(output.visual_style)", OK if style else WARN,
         style[:60] if style else "미지정 — 코드 기본 화풍이 쓰입니다")
 
+    check_gen_size()
     check_scenes(mf)
+
+
+def check_gen_size() -> None:
+    """생성 크기 상한과 인화 목표의 모순 — 돈이 새기 전에 잡는다.
+
+    문서는 "인화하려면 output.min_long_edge_px 를 1800/2250/3600 으로 올려라"고 안내하는데,
+    image_generator.max_long_edge_px 를 함께 올리지 않으면 요청이 상한(기본 2048px)으로 깎인다.
+    **과금은 요청대로 되고** 결과는 인화 규격과 검사기 A3 양쪽에 미달한다.
+    판정은 makefun_client 한 곳에 있고(중복 구현 금지) doctor 는 그 결과를 전달만 한다.
+    """
+    try:
+        import makefun_client as mkc
+        plan = mkc.size_plan()
+        warns = mkc.size_warnings(plan)
+    except Exception as exc:
+        add("프로젝트", "생성 크기 상한", WARN, f"makefun_client 로 확인할 수 없습니다: {exc}",
+            "python tools/makefun_client.py --check 로 직접 확인하세요.")
+        return
+    detail = (f"요청 {plan['want']}px → 실제 {plan['long']}px "
+              f"(상한 {plan['cap']}px{', 기본값' if plan['cap_is_default'] else ''})")
+    if warns:
+        add("프로젝트", "생성 크기 상한", ERR,
+            detail + " — 요청이 조용히 깎인 채 과금됩니다",
+            f"manifest image_generator.max_long_edge_px 를 {plan['want']} 이상으로 올리세요. "
+            "그대로 두면 인화 규격과 검사기 A3(긴 변 ≥ min_long_edge_px) 양쪽에 미달합니다.")
+    elif plan["cap_is_default"]:
+        add("프로젝트", "생성 크기 상한", OK,
+            detail + " — 인화용으로 min_long_edge_px 를 올릴 때 max_long_edge_px 도 함께 올리세요")
+    else:
+        add("프로젝트", "생성 크기 상한", OK, detail)
 
 
 def check_scenes(mf: dict | None = None) -> None:

@@ -70,7 +70,7 @@ images/raw/<scene_id>/         후보 이미지 보관
 output/viewer/ · output/pwa/   감상본 · 설치형 번들
 output/print/<규격>/           인화 마스터 (TIFF + JPEG + spec_sheet.json)
 backups/                       project zip + sha256 체크섬
-templates/ · examples/         빈 템플릿 · 복사만 하면 PASS 나는 데모
+templates/ · examples/         빈 템플릿 + 프롬프트 틀·에셋 가이드 · 복사만 하면 PASS 나는 데모
 docs/                          운영 문서
 ```
 
@@ -107,7 +107,8 @@ python tools/check_protocol.py
 | 감상본 내보내기 | `python tools/export_viewer.py` / `python tools/export_pwa.py` |
 | 인화 규격 판정 | `python tools/print_preflight.py` |
 | 인화 마스터 굽기 | `python tools/print_export.py --size 4x6 --contact` (Pillow 필요) |
-| 백업 · 무결성 | `python tools/backup_project.py snapshot` / `verify` |
+| 백업 (이미지 포함) | `python tools/backup_project.py snapshot --with-images --dest D:/backup` |
+| 무결성 · 복원 | `python tools/backup_project.py verify` / `restore --dry-run` → `restore` |
 | 비밀값 스캔 | `python tools/secret_scan.py` |
 | 자가진단(회귀) | `python tools/selftest.py` — **전체 통과**를 확인한다 (서버 포트를 쓰므로 스튜디오는 끄고 실행) |
 
@@ -139,6 +140,13 @@ MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해�
 같은 장면 원본에서 감상본과 인화물이 함께 파생된다.
 매니페스트 기본 `min_long_edge_px: 1024` 는 화면 감상 기준이라 **엽서 인화에는 부족하다**
 (300DPI 에서 긴 변 약 3.4인치). 4×6 엽서에 1200×1800px, 5×7 에 1500×2250px 이 필요하다.
+
+> **⚠ 값을 올릴 때는 두 개를 함께 올린다.** `output.min_long_edge_px` 만 2250·3600 으로 올리면
+> 생성 요청이 `image_generator.max_long_edge_px`(기본 **2048**)에서 잘려 나가고,
+> 올려 둔 기준 때문에 그 장면이 검사기 **A3 FAIL** 이 된다 — 돈은 쓰고 규격은 못 맞춘다.
+> 확인은 과금 없이: `python tools/makefun_client.py --check` → `생성 크기 … · 상한 …px`.
+> (→ [docs/SCHEMA.md](docs/SCHEMA.md) §1.3)
+
 `python tools/print_preflight.py` 로 컷별 판정 후 주문한다 — 실무 절차는
 **[docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md)**.
 
@@ -151,7 +159,9 @@ MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해�
 | [docs/ENV_SETUP.md](docs/ENV_SETUP.md) | 토큰을 영구 등록할 때, 재부팅 후 401 이 날 때 |
 | [docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md) | 실물 인화를 주문할 때 |
 | [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) | 감상본을 인터넷에 올릴까 고민될 때 |
-| [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md) | 뭔가 깨졌을 때, PC 를 새로 세팅할 때 |
+| [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md) | 뭔가 깨졌을 때, PC 를 새로 세팅할 때 (백업·복원 절차) |
+| [templates/free-assets-ko.md](templates/free-assets-ko.md) | 폰트·BGM·효과음을 무료로 구할 때 (라이선스 등급별) |
+| [templates/grok-prompts-ko.md](templates/grok-prompts-ko.md) | 그록에 붙여넣을 한글 프롬프트 틀이 필요할 때 |
 | [CLAUDE.md](CLAUDE.md) | 제작 프로토콜 원칙·금지 조항 |
 | [protocol/SCORECARD.md](protocol/SCORECARD.md) | 판정 기준 원문 (수정 금지) |
 | [NO_TOKEN_TASKS.md](NO_TOKEN_TASKS.md) | **다음에 할 일 · 진행 상태** (상태의 단일 출처) |

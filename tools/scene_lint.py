@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """연출 리듬 + 분기 무결성 린터 — 검사기(A1~A8)와 별개의 '자문' 도구.
 
-두 가지를 본다.
+세 가지를 본다.
   1) 연출 리듬: 컷 연속성·감정 단조로움·대사 길이·시간대/등장인물/카메라 표기의 흔들림.
      '틀렸다'가 아니라 '단조롭다/어색하다/표기가 섞였다'를 경고한다.
   2) 분기 무결성: 감상본(export_viewer)의 분기 엔진이 실제로 어떻게 도는지를 그대로
      모사해, 절대 도달할 수 없는 길과 끝이 닫히지 않은 길을 찾는다.
      dangling-goto / branch-order / unreachable-scene / open-branch / affection-unreachable.
+  3) 프롬프트 상태: 되돌림(revise) 뒤에 남은 프롬프트와 그 때문에 지금 A6 가 FAIL 을 내는
+     장면 — '고장'과 '아직 다시 만들지 않은 중간 상태'를 구분해 준다.
+     stale-prompt / anchor-missing.
 
 검사기(check_protocol)는 분기 필드를 보지 않는다 — 분기는 '규격 위반'이 아니라 '설계
 오류'라서 자문 계층이 올바른 위치다. 그래서 여기서는 어떤 경우에도 PASS/FAIL 을 만들지
@@ -203,6 +206,39 @@ def _check_time(scenes, add) -> None:
             add("warn", "time-mixed",
                 f"프롬프트에 서로 다른 시간대 표현이 섞임({words}) — "
                 "장소 앵커에 시간대 묘사가 박혀 있는지 확인", sid)
+
+
+def _check_prompt_state(scenes, add) -> None:
+    """되돌림 이후 남은 프롬프트 · 지금 A6 가 FAIL 을 낼 앵커 — '정상적인 중간 상태'의 설명.
+
+    검사기 A6 는 status 와 무관하게 prompt.grok_output 이 있으면 검사한다. revise 는
+    자료를 보존하므로(그게 의도다) SCENE_PLAN 으로 되돌린 장면에도 프롬프트가 남고,
+    그 사이에 등장인물·장소를 고쳤다면 옛 프롬프트에는 새 앵커가 없다 → A6 FAIL.
+    잘못된 상태가 아니라 '아직 프롬프트를 다시 만들지 않은 상태'인데 화면에는 FAIL 로만
+    보인다. 그 둘을 사람이 구분할 수 있게 이유와 다음 할 일을 여기서 말해 준다.
+    """
+    import scene_ops   # 앵커 추출 규칙의 단일 출처(지연 import — 린터는 위층을 모듈 수준에서 안 쓴다)
+    for sc in scenes:
+        prompt = _prompt_of(sc)
+        if not prompt:
+            continue
+        sid = _s(sc.get("scene_id", "?"))
+        status = _s(sc.get("status"))
+        # A6 와 같은 판정: 앵커 원문이나 그 id 중 하나라도 프롬프트에 있으면 통과.
+        missing = [ref or "?" for ref, anchor in scene_ops.scene_anchors(sc)
+                   if anchor not in prompt and (ref or "") not in prompt]
+        if status == "SCENE_PLAN":
+            add("warn", "stale-prompt",
+                "계획 단계로 되돌렸는데 이전 프롬프트가 남아 있음(revise 의 자료 보존) — "
+                "검사기 A6 는 상태와 무관하게 프롬프트가 있으면 검사하므로, 프롬프트를 "
+                "다시 만들기 전까지 이 장면은 옛 프롬프트로 계속 채점된다", sid)
+        if missing:
+            tail = (" 되돌린 뒤 등장인물·장소를 바꾼 정상적인 중간 상태일 수 있다 — "
+                    "프롬프트를 다시 만들면 사라진다." if status in ("SCENE_PLAN", "PROMPT") else
+                    " 이미지 단계 이후이므로 프롬프트를 고치거나 되돌려야 한다.")
+            add("warn", "anchor-missing",
+                f"프롬프트에 {', '.join(missing)} 의 앵커가 없어 지금 검사기 A6 가 FAIL 이다 —"
+                + tail + " (스튜디오의 '앵커 자동 보정'이 원문 그대로 채워 준다)", sid)
 
 
 def _check_camera_vocab(scenes, add) -> None:
@@ -472,6 +508,7 @@ def lint_scenes() -> dict:
 
     _check_offcast(scenes, mf, add)
     _check_time(scenes, add)
+    _check_prompt_state(scenes, add)
     _check_camera_vocab(scenes, add)
     _check_branching(scenes, mf, add)
 
@@ -503,6 +540,10 @@ def main() -> int:
         print("카메라 표준 어휘")
         print("  shot : " + " / ".join(STD_SHOTS))
         print("  angle: " + " / ".join(STD_ANGLES))
+        print("-" * 56)
+    if any(f["rule"] in ("stale-prompt", "anchor-missing") for f in r["findings"]):
+        print("참고: 검사기 A6 는 status 와 무관하게 prompt.grok_output 이 있으면 검사한다.")
+        print("  되돌린(revise) 장면에 남은 프롬프트도 계속 채점 대상이다 — 자료 보존의 대가다.")
         print("-" * 56)
     if any(f["rule"] in BRANCH_RULES for f in r["findings"]):
         print("분기 점검 기준: choices→선택지 / ending→종료 / branch→조건 만족 첫 항목 / 그 외 다음 순서")

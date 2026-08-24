@@ -1,7 +1,6 @@
 {
   "scene_id": "SCENE-001",
   "scene_order": 1,
-  "episode": 1,
   "status": "SCENE_PLAN",
   "location_id": "LOC-001",
   "time": "",

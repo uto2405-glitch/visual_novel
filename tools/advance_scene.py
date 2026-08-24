@@ -4,7 +4,7 @@
 각 명령의 상세 옵션: python tools/advance_scene.py <명령> --help
 
   status                          전체 진행 현황표 + 다음 할 일
-  new [SCENE-ID]                  다음 번호 장면 생성 (id·order 자동)
+  new [SCENE-ID]                  다음 번호 장면 생성 (id·order 자동, 화는 마지막 장면에서 승계)
   set-prompt SID [--file F]       Grok 출력 저장, 상태 → PROMPT (미지정 시 붙여넣기,
                                   종료: Windows Ctrl+Z+Enter / mac·Linux Ctrl+D)
   add-images SID 파일...           후보 복사·기록 → 자동 검사 → PASS 시 REVIEW_HUMAN
@@ -101,6 +101,15 @@ def _ops():
     return scene_ops
 
 
+def _inherit_episode():
+    """새 장면이 이어받을 화 번호(없으면 None) — 규칙의 정본은 vn_compose.last_episode 하나다.
+
+    지연 import 인 이유는 _ops() 와 같다(저장소 계층이 위층을 모듈 수준에서 부르지 않는다).
+    """
+    import vn_compose
+    return vn_compose.last_episode()
+
+
 def _print_fails(fails: str) -> None:
     if fails.strip():
         print(fails)
@@ -125,15 +134,25 @@ def cmd_new(args: argparse.Namespace) -> None:
     nums = [int(m.group(1)) for s in scenes
             if (m := re.fullmatch(r"SCENE-(\d+)", s.get("scene_id", "")))]
     sid = args.scene_id or f"SCENE-{(max(nums) + 1 if nums else 1):03d}"
-    if not re.fullmatch(r"SCENE-\d+", sid):
-        die(f"scene_id 는 SCENE-<숫자> 형식이어야 합니다: {sid!r} "
-            "(비표준 이름은 검사기·진행표에서 누락되어 order 무결성을 깹니다).")
+    # 형식 판정의 정본은 vn_core.is_scene_id 하나다. 예전에는 여기만 두 자리를 허용해
+    # 'SCENE-1' 장면이 만들어졌고(검사기도 통과), 정작 웹 스튜디오·scene_ops 가 그 id 를
+    # 거부해서 **영영 진행시킬 수 없는 장면**이 생겼다.
+    if not vn_core.is_scene_id(sid):
+        die(f"scene_id 는 SCENE-001 처럼 'SCENE-' + 3자리 이상 숫자여야 합니다: {sid!r} "
+            "(SCENE-1 같은 이름은 웹 스튜디오가 거부해 그 장면을 진행시킬 수 없습니다).")
     path = scene_path(sid)
     if path.exists():
         die(f"{sid} 는 이미 존재합니다.")
     sc = load(TEMPLATE)
     sc["scene_id"] = sid
     sc["scene_order"] = max((s.get("scene_order", 0) for s in scenes), default=0) + 1
+    # 화(episode)는 지금 작업 중인 마지막 장면에서 이어받는다. 승계하지 않으면 templates
+    # 기본값(1화)이 조용히 붙어 3화를 쓰는 중에 만든 장면이 1화에 끼어든다.
+    ep = _inherit_episode()
+    if ep is None:
+        sc.pop("episode", None)     # 화를 쓰지 않는 작품 — 없는 정보를 만들어 붙이지 않는다
+    else:
+        sc["episode"] = ep
     if MANIFEST.exists():
         mf = load(MANIFEST)
         chars = [c.get("character_id") for c in mf.get("characters", []) if c.get("character_id")]
@@ -149,7 +168,8 @@ def cmd_new(args: argparse.Namespace) -> None:
             die(f"{sid} 는 이미 존재합니다.")
         SCENES.mkdir(parents=True, exist_ok=True)
         save(path, sc)
-    print(f"생성: project/scenes/{sid}.json (scene_order={sc['scene_order']})")
+    print(f"생성: project/scenes/{sid}.json (scene_order={sc['scene_order']}"
+          + (f", {sc['episode']}화" if sc.get("episode") else "") + ")")
     print("다음: 장면 계획(purpose/action_beat/emotion/camera/dialogue)을 채운 뒤")
     print(f"      python tools/make_grok_input.py {sid}")
 

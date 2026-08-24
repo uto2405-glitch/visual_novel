@@ -25,6 +25,9 @@ project/story/memory_*.json
 # 재구성 백업 잔재 (backups/ 로 이관 전 과거 흔적)
 project/scenes_backup_*/
 
+# 붙여넣기용 프롬프트 입력 (make_grok_input 이 매번 다시 만든다 — 추적할 이유가 없다)
+project/grok_inputs/
+
 # 로컬 사용자 설정·작업 잡파일
 .claude/settings.local.json
 scratch/
