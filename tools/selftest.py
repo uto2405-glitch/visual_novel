@@ -645,6 +645,20 @@ def main() -> int:
             sc1p.write_text(sc1_orig, encoding="utf-8")
             check("T40 손상 장면 → state 스킵 생존 + SystemExit 경로 400(절단 아님)",
                   stA == 200 and skipped_ok and cpf == 400)
+
+            # T41 — 타임캡슐 감상본: 단일 HTML 에 장면·이미지 내장 + 스크롤 모드 + 주입 무사용
+            def _appr2(d):
+                d["status"] = "APPROVED"
+                d["assets"]["selected_image"] = "images/raw/SCENE-002/s2.png"
+            edit_json(box / "project" / "scenes" / "SCENE-002.json", _appr2)
+            spec_tc = importlib.util.spec_from_file_location("tc_box", str(box / "tools" / "export_viewer.py"))
+            tcm = importlib.util.module_from_spec(spec_tc)
+            spec_tc.loader.exec_module(tcm)
+            out_tc = tcm.export(False, 800, 80)
+            html_tc = out_tc.read_text(encoding="utf-8")
+            check("T41 타임캡슐 감상본(단일 HTML·이미지 내장·스크롤 모드)",
+                  out_tc.exists() and "data:image" in html_tc and "bScroll" in html_tc
+                  and html_tc.count("innerHTML") == 0)
         finally:
             web.terminate()
             mock.shutdown()

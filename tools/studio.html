@@ -115,6 +115,15 @@ color:var(--sub);font-size:12px;text-align:center;padding:10px}
 .galcard .fav{position:absolute;top:6px;right:6px;width:30px;height:30px;border-radius:50%;
 border:none;background:rgba(18,13,9,.6);color:#8b7d68;font-size:15px;cursor:pointer;line-height:30px;padding:0}
 .galcard .fav.on{color:var(--warn)}
+/* 세로 스크롤 리딩 */
+.scrollview{position:fixed;inset:0;background:var(--bg);overflow-y:auto;z-index:8;-webkit-overflow-scrolling:touch}
+.scrollview .topbar{position:sticky;top:0;background:rgba(36,28,21,.93);padding:10px 14px;
+display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);z-index:2}
+.scrollview .cuts{max-width:820px;margin:0 auto;padding-bottom:44px}
+.scrollview .cuts img{width:100%;display:block}
+.scrollview .say{padding:12px 18px;border-bottom:1px solid var(--line);word-break:keep-all;overflow-wrap:anywhere}
+.scrollview .say b{font-weight:800}
+.scrollview .say .nar{color:var(--sub);font-style:italic;display:block;text-align:center}
 /* 시네마틱 오버레이(비네트+레터박스) */
 .vnfx{position:absolute;inset:0;pointer-events:none;z-index:1}
 .vnfx::after{content:"";position:absolute;inset:0;
@@ -248,7 +257,10 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 위치는 자동 저장되어 [이어보기]로 재개됩니다. 이미지가 없는 장면은 설명이 나레이션으로 표시됩니다.</p>
 <div class="row">
 <button class="btn" id="btnPlay">처음부터 감상</button>
-<button class="btn ghost" id="btnResume" hidden>이어보기</button></div>
+<button class="btn ghost" id="btnResume" hidden>이어보기</button>
+<button class="btn ghost" id="btnScrollView">세로 스크롤로 읽기</button>
+<button class="btn ghost" id="btnExportViewer">감상본 내보내기 (HTML)</button></div>
+<p class="small" id="exportViewerMsg" style="margin-top:8px"></p>
 </section>
 
 <section id="tab-gallery">
@@ -272,6 +284,11 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 연출 린터는 컷·감정·대사 리듬을 <b>자문</b>만 합니다(PASS/FAIL 아님).</p>
 </section>
 </main>
+
+<div id="scrollView" class="scrollview" hidden>
+<div class="topbar"><b id="svTitle"></b>
+<button class="vnbtn" id="btnSvClose">닫기 (Esc)</button></div>
+<div class="cuts" id="svCuts"></div></div>
 
 <div id="stage" role="dialog" aria-modal="true" aria-label="비주얼 노벨 뷰어" tabindex="-1" aria-hidden="true">
 <div id="stageImg"></div>
@@ -615,6 +632,28 @@ async function playFrom(sceneId){await refresh();
  if(idx<0){alert("장면을 찾을 수 없습니다.");return}
  startPlayback(false,idx)}
 $("galFavOnly").onchange=renderGallery;
+
+// ---- 세로 스크롤 웹툰 리딩 + 감상본 내보내기 ----
+function openScrollView(){const c=$("svCuts");c.replaceChildren();
+ $("svTitle").textContent=S.title||"작품";
+ const list=S.scenes.filter(s=>s.image_url||(s.dialogue||[]).length);
+ if(!list.length){alert("표시할 장면이 없습니다.");return}
+ for(const sc of list){
+  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;im.loading="lazy";c.appendChild(im)}
+  for(const d of (sc.dialogue||[])){const say=el("div","say");
+   if(d.speaker_id){const b=el("b",null,charName(d.speaker_id)+"  ");
+    b.style.color=charColor(d.speaker_id)||"var(--jade)";
+    say.appendChild(b);say.appendChild(el("span",null,d.text||""))}
+   else say.appendChild(el("span","nar",d.text||""));
+   c.appendChild(say)}}
+ $("scrollView").hidden=false}
+$("btnScrollView").onclick=async()=>{await refresh();openScrollView()};
+$("btnSvClose").onclick=()=>{$("scrollView").hidden=true};
+document.addEventListener("keydown",e=>{if(!$("scrollView").hidden&&e.key==="Escape")$("scrollView").hidden=true});
+$("btnExportViewer").onclick=async()=>{$("exportViewerMsg").textContent="내보내는 중… (이미지 내장)";
+ try{const d=await api("/api/export-viewer",{});
+  $("exportViewerMsg").textContent=d.file+" ("+d.mb+"MB) — 이 파일 하나로 폰에서도 재생됩니다"}
+ catch(e){$("exportViewerMsg").textContent="실패: "+e.message}};
 
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));

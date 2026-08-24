@@ -299,6 +299,15 @@ def r_lint(b):
     return scene_lint.lint_scenes()
 
 
+def r_export_viewer(b):
+    # 타임캡슐 감상본: 승인 장면+이미지+뷰어를 단일 HTML 로 (Pillow 있으면 용량 최적화)
+    import export_viewer
+    out = export_viewer.export(bool(b.get("all")),
+                               int(b.get("max_edge", 1600)), int(b.get("quality", 85)))
+    return {"file": out.relative_to(ROOT).as_posix(),
+            "mb": round(out.stat().st_size / 1_000_000, 2)}
+
+
 POST_ROUTES = {
     "/api/chat": r_chat, "/api/storyline": r_storyline,
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,
@@ -306,6 +315,7 @@ POST_ROUTES = {
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
+    "/api/export-viewer": r_export_viewer,
 }
 
 
