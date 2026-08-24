@@ -17,6 +17,7 @@ Grok AI가 스토리를 씬·행동 비트·장면으로 분해하고, 각 장�
 - [ ] 웹 스튜디오로 첫 작품: 스토리 탭에서 스토리라인 → 장면 10개 구성 → 파일럿 3장면 보정
 
 ### 완료됨
+- [x] v5.6 대규모 개선 라운드 + 울트라 검증: webapp POST_ROUTES 라우팅 리팩토링(404/비-dict 400/10MB 상한), 신규 도구 scene_lint(연출 리듬 자문, /api/lint)·backup_project(sha256 스냅/verify), 뷰어 회상 갤러리+즐겨찾기·백로그 영속화·시네마틱 모드·엔딩 크레딧·2모드 nav·그록 한글 프롬프트 틀 7종. 울트라 검증(5렌즈+비평가) 확정 9건 수정 — 디스패처 SystemExit 포착, state 관용 로더(손상 장면 스킵), 린터 방탄화, playFrom scene_id화. selftest 43종. GitHub 3커밋 푸시 (2026-08-24)
 - [x] v5.5 인화 파이프라인 + 모바일 + 적대적 리뷰: **인화 마스터 익스포트**(tools/print_export.py — Pillow, 목표 규격 300DPI cover-크롭·LANCZOS·블리드·sRGB TIFF/JPEG + spec_sheet + 컨택트시트) + /api/export + 장면탭 UI. 4렌즈 적대적 리뷰로 확정 결함 수정(최대규격 면적기준 오보고·parse_size 음수/0·scene_id 경로탈출·eff_dpi_src 정의·0px 가드·표시/판정 일치). **스튜디오+데모 모바일 반응형**(nav 가로바·세로스택·터치타깃·뷰어 컨트롤 wrap·iOS 확대방지). selftest 39종 (2026-08-24)
 - [x] v5.4 VN 뷰어 전문가 채점(6.17/10)·개선 + 인화 프리플라이트: 뷰어 P0/P1(긴대사 클램프·한국어 조판·포커스 트랩·이름표 대비·onerror·skip-미열람·글자크기·aria) 반영, 회상/장면점프/UI숨김/전체화면/스와이프 포함. tools/print_preflight.py(규격별 DPI/크롭 판정) + /api/preflight + 카드 배지. VN 데모 아티팩트(📻). (2026-08-24)
 - [x] v5.2 수동 모드 웹 통합 + 적대적 감사: 장면 탭에 grok.com 복붙 경로(compose-input/compose-manual/grok-input/set-prompt) 추가, 6렌즈 감사로 21건 CONFIRMED, 편집가능 결함 15종 수정(critical 키유출 리다이렉트 포함) + 회귀 T26~T34, selftest 37건. check_protocol 제안 9종은 protocol/AUDIT-2026-08-24.md 에 기록(수정 금지라 보고만) (2026-08-24)
