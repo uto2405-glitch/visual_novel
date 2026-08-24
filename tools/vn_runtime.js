@@ -2,9 +2,13 @@
 /* tools/vn_runtime.js — VN 재생 엔진(단일 출처).
  *
  * 스튜디오 뷰어(tools/studio.html)와 감상본(tools/export_viewer.py)이 이 파일 하나를 쓴다.
- *  - 감상본: export_viewer 가 빌드할 때 __RUNTIME__ 자리에 이 파일 내용을 그대로 인라인한다
- *            (단일 HTML 자기완결 성질 유지 — 외부 요청 0).
- *  - 스튜디오: <script src="/studio/vn_runtime.js" defer> 로 같은 파일을 읽는다.
+ *  - 감상본: export_viewer 가 빌드할 때 TEMPLATE 의 런타임 자리표시자에 이 파일 내용을 그대로
+ *            인라인한다 (단일 HTML 자기완결 성질 유지 — 외부 요청 0).
+ *            그래서 이 파일 안에는 그 자리표시자 토큰을 글자 그대로 쓰지 않는다 —
+ *            쓰면 인라인된 사본에 남아 "치환되지 않은 자리표시자" 로 오진된다(자가진단 J04).
+ *  - 스튜디오: /studio/vn_runtime.js 라우트로 같은 파일을 defer 로 읽어 간다.
+ *            (여기에 script 시작 태그를 글자 그대로 쓰지 않는 이유도 위와 같다 — 인라인된
+ *             사본에 남으면 감상본이 외부 스크립트를 참조하는 것으로 오진된다.)
  *
  * 정본 데이터 스키마는 export_viewer.build_data() 의 것이다:
  *   data  = {title, scenes:[...], dating:{max,start_affection}|null, episodes:[{ep,title}]}

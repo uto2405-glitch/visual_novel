@@ -28,6 +28,7 @@ import hashlib
 import html as _html
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -65,7 +66,7 @@ UI_TEXT = ("VISUAL NOVEL · 소장본 처음부터 감상 ▸ 이어보기 세�
            "아직 지나온 대사가 없습니다. 지금 읽음 새 장면 — 끝 — 탭하면 닫힙니다 "
            "위아래 화살표로 고르고 Enter 선택지를 먼저 고르세요. 그만 보려면 버튼을 누르세요. "
            "호감도 올라감 내려감 감상 완료 개 장면 오프라인 자족 파일 "
-           "이미지 없음 이미지를 불러올 수 없음 ♥ ()[]「」『』…,.!?~-—:;\"'%/ "
+           "이미지 없음 이미지를 불러올 수 없음 ♥ ●+−×() []「」『』…,.!?~-—:;\"'%/ "
            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
 
@@ -445,9 +446,13 @@ body{background:var(--bg);color:var(--ink);font-family:"Pretendard","Noto Sans K
 font-size:15px;line-height:1.6;-webkit-tap-highlight-color:rgba(224,166,75,.25)}
 __FONTCSS__
 button{font:inherit;cursor:pointer;touch-action:manipulation}
-.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
-clip:rect(0 0 0 0);white-space:nowrap;border:0}
 :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+/* 재생 화면은 공용 엔진(vn_runtime.js)이 통째로 그린다. 여기서는 색만 소장본 팔레트로 맞춘다 —
+   엔진은 --vnr-* 가 없으면 자기 기본색으로 그리므로, 이 블록이 사라져도 재생은 죽지 않는다. */
+.vnr{--vnr-stage:#0E0A07;--vnr-ink:var(--ink);--vnr-sub:var(--sub);--vnr-line:var(--line);
+--vnr-accent:var(--amber);--vnr-accent-d:#8A5F1E;--vnr-seal:#C43D2B;
+--vnr-paper:var(--paper);--vnr-paper-ink:var(--pink);--vnr-panel:#20180F;--vnr-panel2:#2B2115}
+/* ---- 표지 ---- */
 #card{position:fixed;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;
 justify-content:center;gap:14px;background:radial-gradient(120% 90% at 50% 40%,#241A12,#100B07);text-align:center;padding:20px}
 #card h1{font-size:clamp(26px,7vw,44px);letter-spacing:-.01em;text-shadow:0 2px 18px rgba(0,0,0,.75)}
@@ -465,82 +470,14 @@ border-radius:99px;padding:8px 14px;font-size:12.5px;font-weight:600}
 #scrim{position:absolute;inset:0;
 background:radial-gradient(115% 85% at 50% 38%,rgba(21,15,10,.42),rgba(14,10,6,.95))}
 #card>*:not(#cover):not(#scrim){position:relative;z-index:1}
-#stage{position:fixed;inset:0;background:#0E0A07;display:none}
-#stage.on{display:block}
-#img{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-#img img{max-width:100%;max-height:100%;object-fit:contain}
-#img .empty{color:var(--sub);padding:26px;text-align:center}
-#tap{position:absolute;inset:0;cursor:pointer}
-#bar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:3;flex-wrap:wrap;justify-content:flex-end;
-align-items:center}
-#bar .b{background:rgba(30,24,18,.72);color:var(--ink);border:1px solid var(--line);border-radius:8px;
-padding:7px 11px;font-size:12px;font-weight:600}
-#bar .b.on{color:var(--amber);border-color:var(--amber)}
-#prog{position:absolute;top:14px;left:12px;z-index:3;font-size:11px;color:var(--sub);
-background:rgba(30,24,18,.72);border:1px solid var(--line);border-radius:99px;padding:4px 10px}
-#dlg{position:absolute;left:50%;transform:translateX(-50%);bottom:18px;width:min(860px,93%);z-index:2;
-background:var(--paper);color:var(--pink);border-radius:13px;padding:13px 18px;cursor:pointer;
-box-shadow:0 16px 40px -14px rgba(0,0,0,.7)}
-#dlg.top{bottom:auto;top:56px}
-#dlg.narr{background:rgba(18,13,9,.82);color:var(--paper)}
-#dlg.narr #txt{text-align:center;font-style:italic}
-#who{display:inline-block;font-size:12px;font-weight:800;padding:2px 11px;border-radius:99px;margin-bottom:6px;color:#fff}
-#txt{font-size:var(--dlg-fs,clamp(15px,2.4vw,18px));line-height:1.62;min-height:1.6em;white-space:pre-wrap;
-max-height:34vh;overflow-y:auto;overflow-wrap:anywhere;word-break:keep-all;line-break:strict}
-#aff{align-self:center;font-weight:700;color:#F2C0B6;background:rgba(196,61,43,.22);
-border:1px solid #C43D2B;border-radius:99px;padding:4px 10px;font-size:12px;transition:transform .18s ease}
-#aff.bump{transform:scale(1.16);background:rgba(196,61,43,.5)}
-#choices{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;
-display:flex;flex-direction:column;gap:12px;width:min(560px,88%)}
-#choices[hidden]{display:none}
-#choices button{background:rgba(24,18,12,.95);color:var(--ink);border:1px solid var(--amber);
-border-radius:12px;padding:14px 18px;font:inherit;font-size:15px;cursor:pointer;text-align:left;
-box-shadow:0 8px 24px -10px rgba(0,0,0,.7)}
-#choices button:hover,#choices button:focus-visible{background:rgba(224,166,75,.22)}
-/* 백로그(지난 대사) */
-#log{position:absolute;inset:0;z-index:6;background:rgba(12,8,5,.95);display:flex;flex-direction:column}
-#log[hidden]{display:none}
-#logHead{display:flex;justify-content:space-between;align-items:center;gap:10px;
-padding:12px 14px;border-bottom:1px solid var(--line)}
-#logHead .b{background:rgba(30,24,18,.72);color:var(--ink);border:1px solid var(--line);
-border-radius:8px;padding:7px 11px;font-size:12px;font-weight:600}
-#logInner{flex:1;overflow-y:auto;padding:6px 12px 28px;-webkit-overflow-scrolling:touch}
-#logInner .row{display:block;width:100%;text-align:left;background:none;border:none;color:inherit;
-font:inherit;padding:11px 12px;border-bottom:1px solid var(--line);border-radius:8px;
-word-break:keep-all;overflow-wrap:anywhere}
-#logInner .row:hover,#logInner .row:focus-visible{background:rgba(224,166,75,.14)}
-#logInner .row b{font-weight:800}
-#logInner .row .nar{color:var(--sub);font-style:italic}
-#logInner .none{color:var(--sub);padding:16px 12px}
-/* 설정 오버레이 */
-#set{position:absolute;inset:0;z-index:7;display:flex;align-items:flex-end;justify-content:center;
-background:rgba(10,7,4,.72)}
-#set[hidden]{display:none}
-#set .panel{width:min(560px,100%);background:#20180F;border:1px solid var(--line);
-border-radius:14px 14px 0 0;padding:14px 16px 20px;display:flex;flex-direction:column;gap:13px}
-#set .head{display:flex;justify-content:space-between;align-items:center}
-#set .row{display:flex;flex-direction:column;gap:7px}
-#set .row[hidden]{display:none}
-#set .lbl{color:var(--sub);font-size:12px;letter-spacing:.04em}
-#set .seg{display:flex;gap:6px;flex-wrap:wrap}
-#set .sb{background:rgba(30,24,18,.9);color:var(--ink);border:1px solid var(--line);
-border-radius:9px;padding:9px 13px;font-size:13px}
-#set .sb.on{color:var(--amber);border-color:var(--amber)}
-#set .b{background:rgba(30,24,18,.72);color:var(--ink);border:1px solid var(--line);
-border-radius:8px;padding:7px 11px;font-size:12px;font-weight:600}
-@media(max-width:640px){
- #bar{flex-wrap:wrap;gap:5px;max-width:calc(100% - 16px)}
- #bar .b{padding:8px 10px;font-size:12px}
- #dlg{bottom:14px;padding:12px 15px} #dlg.top{top:52px}
- #txt{font-size:var(--dlg-fs,clamp(15px,4.2vw,18px));max-height:32vh}
- #choices{width:92%} #choices button{padding:13px 15px;font-size:14.5px}
-}
+/* ---- 세로 스크롤 웹툰 모드 ---- */
 #scroll{position:fixed;inset:0;background:var(--bg);display:none;overflow-y:auto;z-index:4;
 -webkit-overflow-scrolling:touch}
 #scroll.on{display:block}
 #scroll .cut{max-width:820px;margin:0 auto}
 #scroll .cut img{width:100%;display:block}
-#scroll .say{padding:12px 18px;border-bottom:1px solid var(--line)}
+#scroll .say{padding:12px 18px;border-bottom:1px solid var(--line);
+word-break:keep-all;overflow-wrap:anywhere}
 #scroll .say b{font-weight:800}
 #scroll .say .nar{color:var(--sub);font-style:italic;text-align:center;display:block}
 #scroll .say .pick{color:var(--amber)}
@@ -551,27 +488,16 @@ padding:10px 14px;display:flex;justify-content:space-between;align-items:center;
 #scroll .topbar .b{background:rgba(30,24,18,.72);color:var(--ink);border:1px solid var(--line);
 border-radius:8px;padding:6px 10px;font-size:12px}
 .small{color:var(--sub);font-size:12px}
+[hidden]{display:none!important}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-/* ---- safe-area(노치·홈바) — 대사창·버튼이 가려지지 않게 (마지막에 두어 우선) ---- */
+/* ---- safe-area(노치·홈바) — 표지·스크롤 모드가 가려지지 않게 (마지막에 두어 우선).
+       재생 화면 쪽 safe-area 는 엔진 CSS 가 자체적으로 처리한다. ---- */
 body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
 #card{padding:calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
  calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left))}
-#bar{top:calc(10px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right))}
-#prog{top:calc(14px + env(safe-area-inset-top));left:calc(12px + env(safe-area-inset-left))}
-#dlg{bottom:calc(18px + env(safe-area-inset-bottom))}
-#dlg.top{top:calc(56px + env(safe-area-inset-top))}
-#choices{padding-bottom:env(safe-area-inset-bottom)}
-#logHead{padding-top:calc(12px + env(safe-area-inset-top))}
-#logInner{padding-left:calc(12px + env(safe-area-inset-left));
- padding-right:calc(12px + env(safe-area-inset-right));
- padding-bottom:calc(28px + env(safe-area-inset-bottom))}
-#set .panel{padding-bottom:calc(20px + env(safe-area-inset-bottom))}
 #scroll .topbar{padding-top:calc(10px + env(safe-area-inset-top))}
 #scroll .cut{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
  padding-bottom:calc(44px + env(safe-area-inset-bottom))}
-@media(max-width:640px){
- #dlg{bottom:calc(14px + env(safe-area-inset-bottom))}
- #dlg.top{top:calc(52px + env(safe-area-inset-top))}}
 </style></head><body>
 <div id="card">
 <img id="cover" alt="" hidden><div id="scrim"></div>
@@ -584,34 +510,6 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div id="eps" hidden role="group" aria-label="화 선택"></div>
 </div>
 
-<div id="stage">
-<div id="img"></div><div id="tap"></div>
-<span id="prog" aria-live="off"></span>
-<div id="bar" role="toolbar" aria-label="감상 도구">
-<span id="aff" hidden></span>
-<button class="b" id="bAuto" aria-pressed="false">자동</button>
-<button class="b" id="bLog" aria-expanded="false">기록</button>
-<button class="b" id="bSet" aria-expanded="false">설정</button>
-<button class="b" id="bToScroll">스크롤</button>
-<button class="b" id="bExit">닫기</button></div>
-<div id="choices" hidden role="group" aria-label="선택지"></div>
-<div id="dlg" role="group" aria-label="대사"><span id="who"></span><div id="txt"></div>
-<div class="small" style="text-align:right;margin-top:5px;opacity:.6">탭/Space 진행 · ← 이전 · L 기록 · S 설정 · Esc 닫기</div></div>
-<div id="log" hidden role="dialog" aria-modal="true" aria-label="지난 대사">
-<div id="logHead"><b>지난 대사</b>
-<button class="b" id="bLogClose">닫기</button></div><div id="logInner"></div></div>
-<div id="set" hidden role="dialog" aria-modal="true" aria-label="설정">
-<div class="panel"><div class="head"><b>설정</b><button class="b" id="bSetClose">닫기</button></div>
-<div class="row"><span class="lbl" id="lblFs">글자 크기</span>
-<span class="seg" id="segFs" role="group" aria-labelledby="lblFs"></span></div>
-<div class="row"><span class="lbl" id="lblSp">텍스트 속도</span>
-<span class="seg" id="segSp" role="group" aria-labelledby="lblSp"></span></div>
-<div class="row" id="rowEp" hidden><span class="lbl" id="lblEp">화 이동</span>
-<span class="seg" id="segEp" role="group" aria-labelledby="lblEp"></span></div>
-</div></div>
-<span class="sr" id="srLine" aria-live="polite"></span>
-</div>
-
 <div id="scroll">
 <div class="topbar"><b id="scTitle"></b>
 <span><button class="b" id="bToVN">VN 모드</button>
@@ -619,269 +517,112 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div class="cut" id="cuts"></div>
 </div>
 
+<script>__RUNTIME__</script>
 <script>
 "use strict";
-const DATA=__DATA__;
-const $=id=>document.getElementById(id);
-const el=(t,c,x)=>{const n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n};
-const REDUCE=matchMedia("(prefers-reduced-motion: reduce)").matches;
-const SPEEDS=[[0,"즉시"],[18,"빠름"],[28,"보통"],[46,"느림"]];
-const FS=[[15,"작게"],[17,"보통"],[19,"크게"],[22,"아주 크게"]];
-let vi=0,di=0,ended=false,revealing=false,timer=null,aTimer=null,autoOn=false,full="";
-let aff=0,awaiting=false,path=[];        // 분기 엔진: 호감도 · 선택지 대기 · 지나온 장면
-let hist=[],histKeys=new Set();          // 백로그(지난 대사)
-const K={pos:"tc:pos:"+DATA.title,set:"tc:set:"+DATA.title,hist:"tc:hist:"+DATA.title};
-let SET={sp:2,fs:1};
-try{const s=JSON.parse(localStorage.getItem(K.set)||"{}");
- if(typeof s.sp==="number"&&SPEEDS[s.sp])SET.sp=s.sp;
- if(typeof s.fs==="number"&&FS[s.fs])SET.fs=s.fs}catch(e){}
-function applyFs(){document.documentElement.style.setProperty("--dlg-fs",FS[SET.fs][0]+"px")}
-function saveSet(){try{localStorage.setItem(K.set,JSON.stringify(SET))}catch(e){}}
-function savePos(){try{localStorage.setItem(K.pos,JSON.stringify({vi,di,aff,path}))}catch(e){}}
-function loadPos(){try{return JSON.parse(localStorage.getItem(K.pos)||"null")}catch(e){return null}}
-function saveHist(){try{localStorage.setItem(K.hist,JSON.stringify(hist.slice(-500)))}catch(e){}}
-function loadHist(){try{const h=JSON.parse(localStorage.getItem(K.hist)||"[]");return Array.isArray(h)?h:[]}catch(e){return []}}
-const dlen=s=>(s.lines||[]).length||1;
-const say=t=>{const n=$("srLine");if(n)n.textContent=t};
+/* 감상본 부팅 — 재생은 위에 인라인된 공용 엔진(tools/vn_runtime.js)이 전담한다.
+   여기 남은 것은 이 파일에만 있는 껍데기뿐이다: 표지 · 세로 스크롤 모드 · 화 선택.
+   덕분에 스튜디오 뷰어와 감상본이 같은 연출·같은 단축키·같은 엔딩 규약으로 재생된다. */
+var DATA=__DATA__;
+var $=function(id){return document.getElementById(id)};
+var el=function(t,c,x){var n=document.createElement(t);
+ if(c)n.className=c;if(x!=null)n.textContent=x;return n};
 
-// ---- 화(episode) ----
-const EPS=Array.isArray(DATA.episodes)?DATA.episodes:[];
-const epTitle=ep=>{const e=EPS.find(x=>x.ep===ep);return e&&e.title?e.title:""};
-const epLabel=ep=>ep+"화"+(epTitle(ep)?" · "+epTitle(ep):"");
-const epFirst=ep=>DATA.scenes.findIndex(s=>s.ep===ep);
+function hideShell(){$("card").classList.add("hide");$("scroll").classList.remove("on")}
+function showCard(){$("scroll").classList.remove("on");$("card").classList.remove("hide");
+ var b=$("bStart");if(b&&b.focus)b.focus()}
 
-// ---- 분기 엔진(호감도·선택지·엔딩) ----
-const affMax=()=>(DATA.dating&&DATA.dating.max)||100;
-const affStart=()=>(DATA.dating&&typeof DATA.dating.start_affection==="number")?DATA.dating.start_affection:30;
-const clampAff=v=>Math.max(0,Math.min(affMax(),v));
-function updateAff(d){const m=$("aff");if(!DATA.dating){m.hidden=true;return}
- m.hidden=false;m.textContent="♥ "+aff+" / "+affMax()+(d?(d>0?"  +"+d:"  "+d):"");
- if(d){m.classList.add("bump");setTimeout(()=>{m.classList.remove("bump");
-  m.textContent="♥ "+aff+" / "+affMax()},1100)}}
-const idxOf=id=>DATA.scenes.findIndex(s=>s.id===id);
-function nextIndex(sc){
- if(sc.branch&&sc.branch.length){   // 조건 만족하는 첫 분기로(위에서부터)
-  for(const b of sc.branch){if(aff>=(b.min||0)){const i=idxOf(b.goto);if(i>=0)return i}}
-  return -1}
- return vi+1<DATA.scenes.length?vi+1:-1}
-function goTo(idx){path.push(vi);vi=idx;di=0;ended=false;renderImg();show()}
-function hideChoices(){const box=$("choices");box.replaceChildren();box.hidden=true;
- awaiting=false;$("dlg").style.opacity=""}
-function showChoices(sc){awaiting=true;clearTimeout(aTimer);
- const box=$("choices");box.replaceChildren();
- for(const c of sc.choices){const b=el("button",null,c.text||"…");b.onclick=()=>pick(c);box.appendChild(b)}
- box.hidden=false;$("dlg").style.opacity=".3";
- say("선택지 "+sc.choices.length+"개 · 위아래 화살표로 고르고 Enter");
- const first=box.querySelector("button");if(first)first.focus()}
-function pick(c){hideChoices();
- const d=c.affection||0;if(d){aff=clampAff(aff+d)}updateAff(d);savePos();
- if(d)say(d>0?"호감도 "+d+" 올라감":"호감도 "+Math.abs(d)+" 내려감");
- const nx=c.goto?idxOf(c.goto):(vi+1<DATA.scenes.length?vi+1:-1);
- if(nx<0){end();return}goTo(nx)}
+/* ---- 세로 스크롤 웹툰 모드(이 감상본에만 있는 읽기 방식) ---- */
+var scrollBuilt=false;
+function buildScroll(){
+ if(scrollBuilt)return;
+ scrollBuilt=true;
+ var box=$("cuts"),curEp=null;
+ DATA.scenes.forEach(function(sc){
+  if(sc.ep&&sc.ep!==curEp){curEp=sc.ep;box.appendChild(el("div","ep",player?player.epLabel(sc.ep):sc.ep+"화"))}
+  if(sc.img){var im=el("img");im.src=sc.img;im.alt=sc.purpose||sc.id;im.loading="lazy";
+   im.decoding="async";box.appendChild(im)}
+  (sc.lines||[]).forEach(function(l){var s=el("div","say");
+   if(l.n){var b=el("b",null,l.n+"  ");b.style.color=l.c||"var(--amber)";
+    s.appendChild(b);s.appendChild(el("span",null,l.t||""))}
+   else s.appendChild(el("span","nar",l.t||""));
+   box.appendChild(s)});
+  (sc.choices||[]).forEach(function(c){var s=el("div","say");   // 스크롤 모드는 선택지를 목록으로만
+   s.appendChild(el("span","pick","▸ "+(c.text||"")));box.appendChild(s)})})}
+function openScroll(){
+ if(player&&player.isOpen())player.exit();   // exit() 가 표지를 되돌린 뒤 그 위를 덮는다
+ buildScroll();
+ $("card").classList.add("hide");$("scroll").classList.add("on");
+ var b=$("bToVN");if(b&&b.focus)b.focus()}
+function closeScroll(){$("scroll").classList.remove("on");showCard()}
 
-function renderImg(){const sc=DATA.scenes[vi],box=$("img");box.replaceChildren();
- if(!sc)return;
- if(sc.img){const im=el("img");im.src=sc.img;im.alt=sc.purpose||sc.id;box.appendChild(im)}
- else box.appendChild(el("div","empty",sc.purpose||sc.id))}
-function type(t){clearInterval(timer);full=t;const e=$("txt");const ms=SPEEDS[SET.sp][0];
- if(REDUCE||ms<=0){e.textContent=t;e.scrollTop=e.scrollHeight;revealing=false;shown();return}
- revealing=true;const cs=[...t];let i=0;e.textContent="";
- timer=setInterval(()=>{i++;e.textContent=cs.slice(0,i).join("");e.scrollTop=e.scrollHeight;
-  if(i>=cs.length){clearInterval(timer);revealing=false;shown()}},ms)}
-function shown(){clearTimeout(aTimer);
- if(autoOn&&!awaiting&&!logOpen()&&!setOpen())aTimer=setTimeout(()=>adv(1),1400+full.length*22)}
-function record(n,t,c){const k=vi+":"+di;if(histKeys.has(k))return;
- histKeys.add(k);hist.push({n:n,t:t,c:c,vi:vi,di:di});saveHist()}
-function show(){const sc=DATA.scenes[vi];if(!sc)return;
- $("prog").textContent=(sc.ep?sc.ep+"화 · ":"")+(vi+1)+" / "+DATA.scenes.length
-  +(dlen(sc)>1?" · "+(di+1)+"/"+dlen(sc):"");
- const line=(sc.lines||[])[di],dlg=$("dlg"),who=$("who");
- dlg.classList.toggle("top",!!(line&&line.p==="top"));
- if(line&&line.n){dlg.classList.remove("narr");who.style.display="inline-block";
-  who.textContent=line.n;who.style.background=line.c||"#2F6B59";
-  const h=(line.c||"").replace("#","");
-  const lum=h.length>=6?(.299*parseInt(h.slice(0,2),16)+.587*parseInt(h.slice(2,4),16)+.114*parseInt(h.slice(4,6),16)):0;
-  who.style.color=lum>150?"#17110D":"#fff";
-  record(line.n,line.t||"",line.c||null);say(line.n+": "+(line.t||""))}
- else{dlg.classList.add("narr");who.style.display="none";
-  record("",line?(line.t||""):(sc.purpose||""),null);say(line?(line.t||""):(sc.purpose||""))}
- type(line?line.t:(sc.purpose||"…"));savePos()}
-function adv(step){
- if(setOpen()){closeSet();return}
- if(logOpen()){closeLog();return}
- if(awaiting)return;                       // 선택지 대기 중엔 선택해야 진행
- if(ended){exit();return}
- if(step>0&&revealing){clearInterval(timer);$("txt").textContent=full;revealing=false;shown();return}
- const sc=DATA.scenes[vi];if(!sc)return;clearTimeout(aTimer);
- if(step>0){
-  if(di+1<dlen(sc)){di++;show();return}
-  if(sc.choices&&sc.choices.length){showChoices(sc);return}   // 장면 끝 → 선택지
-  if(sc.ending){end();return}                                 // 엔딩 장면
-  const nx=nextIndex(sc);                                     // 분기 or 선형
-  if(nx<0){end();return}
-  goTo(nx);return}
- if(di>0){di--;show();return}
- const prev=path.length?path.pop():(vi>0?vi-1:-1);             // 분기 경로를 따라 되돌아감
- if(prev<0||prev>=DATA.scenes.length)return;
- vi=prev;di=dlen(DATA.scenes[vi])-1;ended=false;renderImg();show()}
-function endLabel(sc){if(!sc)return "";
- if(sc.ending_label)return String(sc.ending_label);
- return typeof sc.ending==="string"?sc.ending:""}   // 예전 문자열 ending 도 계속 받아준다
-function end(){ended=true;setAuto(false);hideChoices();
- const lab=endLabel(DATA.scenes[vi]);
- const dlg=$("dlg");dlg.classList.remove("top");dlg.classList.add("narr");$("who").style.display="none";
- const msg="— 끝 —\\n\\n『"+DATA.title+"』"+(lab?"\\n엔딩 · "+lab:"")+"\\n\\n(탭하면 닫힙니다)";
- $("txt").textContent=msg;say(msg);
- try{localStorage.removeItem(K.pos)}catch(e){}}
-function setAuto(on){autoOn=on;const b=$("bAuto");
- b.classList.toggle("on",on);b.setAttribute("aria-pressed",on?"true":"false")}
-function start(resume,at){ended=false;$("card").classList.add("hide");
- $("scroll").classList.remove("on");$("stage").classList.add("on");
- setAuto(false);clearTimeout(aTimer);closeLog(true);closeSet(true);hideChoices();
- const pos=resume?loadPos():null;
- if(pos){hist=loadHist();histKeys=new Set(hist.map(h=>h.vi+":"+h.di));
-  path=Array.isArray(pos.path)?pos.path.filter(n=>typeof n==="number"):[]}
- else{hist=[];histKeys=new Set();path=[];saveHist()}
- aff=clampAff(pos&&typeof pos.aff==="number"?pos.aff:affStart());
- if(typeof at==="number"){vi=at;di=0;path=[]}
- else{vi=pos&&pos.vi<DATA.scenes.length?pos.vi:0;di=pos&&pos.di<dlen(DATA.scenes[vi])?pos.di:0}
- updateAff(0);renderImg();show()}
-function exit(){clearInterval(timer);setAuto(false);
- clearTimeout(aTimer);closeLog(true);closeSet(true);hideChoices();   // 자동 끄고 닫아야 뒤에서 되살아나지 않는다
- $("stage").classList.remove("on");$("card").classList.remove("hide");
- $("bResume").hidden=!loadPos();$("bStart").focus()}
+/* ---- 공용 엔진 부팅 ---- */
+var player=window.VNRuntime?window.VNRuntime.mount({
+ data:DATA,
+ storageKey:"tc",
+ imageSrc:function(sc){return (sc&&sc.img)||""},   // 감상본은 전부 내장 data URI
+ onExit:showCard,
+ onSavedChange:function(has){var b=$("bResume");if(b)b.hidden=!has},
+ backgroundNodes:function(){return [$("card"),$("scroll")]},
+ extraButtons:[{label:"스크롤",title:"세로 스크롤로 읽기",onClick:openScroll}]
+}):null;
 
-// ---- 오버레이 공통(포커스 되돌리기 · Tab 가두기) ----
-const FOCUSABLE="button:not([disabled]),[href],input,select,textarea,[tabindex]:not([tabindex='-1'])";
-let lastFocus=null;
-function trapTab(box,e){if(e.key!=="Tab")return;
- const f=Array.prototype.slice.call(box.querySelectorAll(FOCUSABLE))
-  .filter(n=>n.offsetWidth>0||n.offsetHeight>0);
- if(!f.length)return;
- const first=f[0],last=f[f.length-1],cur=document.activeElement;
- if(e.shiftKey&&(cur===first||!box.contains(cur))){e.preventDefault();last.focus()}
- else if(!e.shiftKey&&(cur===last||!box.contains(cur))){e.preventDefault();first.focus()}}
-function restoreFocus(){try{if(lastFocus&&lastFocus.focus)lastFocus.focus()}catch(e){}lastFocus=null}
+function play(resume,at){
+ if(!player){$("meta").textContent="재생 엔진을 불러오지 못했습니다.";return}
+ hideShell();
+ if(!player.start(!!resume,at))showCard()}
 
-// ---- 백로그 패널 ----
-const logOpen=()=>!$("log").hidden;
-function closeLog(quiet){const was=logOpen();$("log").hidden=true;
- $("bLog").setAttribute("aria-expanded","false");
- if(was&&!quiet)restoreFocus();
- if(autoOn&&!revealing&&!ended&&!awaiting&&!setOpen())shown()}
-function renderLog(){const box=$("logInner");box.replaceChildren();
- if(!hist.length){box.appendChild(el("div","none","아직 지나온 대사가 없습니다."));return}
- for(const h of hist){const row=el("button","row");
-  if(h.n){const b=el("b",null,h.n+"  ");if(h.c)b.style.color=h.c;row.appendChild(b);
-   row.appendChild(el("span",null,h.t))}
-  else row.appendChild(el("span","nar",h.t));
-  row.onclick=()=>jump(h.vi,h.di);
-  box.appendChild(row)}
- box.scrollTop=box.scrollHeight}
-function toggleLog(){if(logOpen()){closeLog();return}
- closeSet(true);clearTimeout(aTimer);renderLog();   // 선택지 대기 중이면 그 위를 덮기만 한다(선택은 유지)
- lastFocus=document.activeElement;
- $("log").hidden=false;$("bLog").setAttribute("aria-expanded","true");$("bLogClose").focus()}
-function jump(v,d){closeLog(true);hideChoices();ended=false;const before=vi;vi=v;di=d;
- if(vi!==before)renderImg();show();$("bLog").focus()}
-
-// ---- 설정 오버레이 ----
-const setOpen=()=>!$("set").hidden;
-function seg(box,labels,cur,pick){box.replaceChildren();
- labels.forEach((lb,i)=>{const b=el("button","sb",lb);
-  if(i===cur){b.classList.add("on");b.setAttribute("aria-pressed","true")}
-  else if(cur>=0)b.setAttribute("aria-pressed","false");
-  b.onclick=()=>pick(i);box.appendChild(b)})}
-function renderSet(){
- seg($("segFs"),FS.map(f=>f[1]),SET.fs,i=>{SET.fs=i;applyFs();saveSet();renderSet()});
- seg($("segSp"),SPEEDS.map(s=>s[1]),SET.sp,i=>{SET.sp=i;saveSet();renderSet()});
- const row=$("rowEp");
- if(EPS.length<2){row.hidden=true;return}
- row.hidden=false;const box=$("segEp");box.replaceChildren();
- for(const e of EPS){const i=epFirst(e.ep);if(i<0)continue;
-  const b=el("button","sb",epLabel(e.ep));b.onclick=()=>goEpisode(i);box.appendChild(b)}}
-function toggleSet(){if(setOpen()){closeSet();return}
- closeLog(true);clearTimeout(aTimer);renderSet();
- lastFocus=document.activeElement;
- $("set").hidden=false;$("bSet").setAttribute("aria-expanded","true");$("bSetClose").focus()}
-function closeSet(quiet){const was=setOpen();$("set").hidden=true;
- $("bSet").setAttribute("aria-expanded","false");
- if(was&&!quiet)restoreFocus();
- if(autoOn&&!revealing&&!ended&&!awaiting&&!logOpen())shown()}
-function goEpisode(i){closeSet(true);hideChoices();ended=false;path=[];
- vi=i;di=0;renderImg();show();$("bSet").focus()}
-
-// ---- 세로 스크롤 웹툰 모드 ----
-function buildScroll(){const box=$("cuts");if(box.childElementCount)return;
- let curEp=null;
- for(const sc of DATA.scenes){
-  if(sc.ep&&sc.ep!==curEp){curEp=sc.ep;box.appendChild(el("div","ep",epLabel(sc.ep)))}
-  if(sc.img){const im=el("img");im.src=sc.img;im.alt=sc.purpose||sc.id;im.loading="lazy";box.appendChild(im)}
-  for(const l of (sc.lines||[])){const s=el("div","say");
-   if(l.n){const b=el("b",null,l.n+"  ");b.style.color=l.c||"var(--amber)";s.appendChild(b);
-    s.appendChild(el("span",null,l.t))}
-   else s.appendChild(el("span","nar",l.t));
-   box.appendChild(s)}
-  for(const c of (sc.choices||[])){const s=el("div","say");   // 스크롤 모드는 선택지를 목록으로만
-   s.appendChild(el("span","pick","▸ "+(c.text||"")));box.appendChild(s)}}}
-function openScroll(){buildScroll();$("card").classList.add("hide");
- $("stage").classList.remove("on");$("scroll").classList.add("on");$("bToVN").focus()}
-
-function buildEps(){const box=$("eps");box.replaceChildren();
- if(EPS.length<2){box.hidden=true;return}
- for(const e of EPS){const i=epFirst(e.ep);if(i<0)continue;
-  const b=el("button",null,epLabel(e.ep));b.onclick=()=>start(false,i);box.appendChild(b)}
+function buildEps(){
+ var box=$("eps");
+ box.replaceChildren();
+ var eps=player?player.episodes():[];
+ if(eps.length<2){box.hidden=true;return}
+ eps.forEach(function(e){
+  var i=player.epFirstIndex(e.ep);
+  if(i<0)return;
+  var b=el("button",null,player.epLabel(e.ep));
+  b.type="button";
+  b.addEventListener("click",function(){play(false,i)});
+  box.appendChild(b)});
  box.hidden=false}
 
-$("bStart").onclick=()=>start(false);
-$("bResume").onclick=()=>start(true);
+$("bStart").onclick=function(){play(false)};
+$("bResume").onclick=function(){play(true)};
 $("bScroll").onclick=openScroll;
-$("bToScroll").onclick=()=>{clearInterval(timer);clearTimeout(aTimer);closeLog(true);closeSet(true);openScroll()};
-$("bToVN").onclick=()=>{$("scroll").classList.remove("on");start(false,vi)};
-$("bScExit").onclick=()=>{$("scroll").classList.remove("on");$("card").classList.remove("hide");$("bStart").focus()};
-$("bExit").onclick=exit;
-$("bLog").onclick=toggleLog;$("bLogClose").onclick=()=>closeLog();
-$("bSet").onclick=toggleSet;$("bSetClose").onclick=()=>closeSet();
-$("set").onclick=e=>{if(e.target===$("set"))closeSet()};   // 어두운 바깥을 눌러도 닫힌다
-$("bAuto").onclick=()=>{setAuto(!autoOn);if(autoOn&&!revealing)shown();else clearTimeout(aTimer)};
-$("tap").onclick=()=>adv(1);$("dlg").onclick=()=>adv(1);
-let tx=0,ty=0;
-$("tap").addEventListener("touchstart",e=>{const t=e.changedTouches[0];tx=t.clientX;ty=t.clientY},{passive:true});
-$("tap").addEventListener("touchend",e=>{const t=e.changedTouches[0],dx=t.clientX-tx,dy=t.clientY-ty;
- if(Math.abs(dx)>45&&Math.abs(dx)>Math.abs(dy))adv(dx<0?1:-1)},{passive:true});
-addEventListener("keydown",e=>{
- const t=e.target,tag=t&&t.tagName;
- // 폼 컨트롤 위에서는 뷰어 단축키가 입력을 가로채지 않는다
+$("bToVN").onclick=function(){$("scroll").classList.remove("on");play(false,player?player.index():0)};
+$("bScExit").onclick=closeScroll;
+
+/* 표지·스크롤 모드의 키 처리. 재생 중에는 엔진이 키를 맡으므로 손대지 않는다. */
+document.addEventListener("keydown",function(e){
+ if(player&&player.isOpen())return;
+ var t=e.target,tag=t&&t.tagName;
  if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT"||(t&&t.isContentEditable))return;
- if(setOpen()){trapTab($("set"),e);
-  if(e.key==="Escape"){e.preventDefault();closeSet()}return}
- if(logOpen()){trapTab($("log"),e);
-  if(e.key==="Escape"||e.key==="l"||e.key==="L"){e.preventDefault();closeLog()}return}
- if($("scroll").classList.contains("on")){if(e.key==="Escape")$("bScExit").click();return}
- if(!$("stage").classList.contains("on")){
-  if((e.key==="Enter"||e.key===" ")&&tag!=="BUTTON"){e.preventDefault();start(false)}return}
- if((e.key===" "||e.key==="Enter")&&tag==="BUTTON")return;   // 버튼에 포커스가 있으면 버튼이 먼저
- if(e.key==="Escape"){if(awaiting)return;exit();return}
- if(e.key==="l"||e.key==="L"){toggleLog();return}
- if(e.key==="s"||e.key==="S"){toggleSet();return}
- if(awaiting){                                              // 선택지: 위아래로 고른다
-  const bs=Array.prototype.slice.call($("choices").querySelectorAll("button"));
-  if(!bs.length||(e.key!=="ArrowDown"&&e.key!=="ArrowUp"))return;
-  e.preventDefault();const i=bs.indexOf(document.activeElement);
-  bs[e.key==="ArrowDown"?(i+1)%bs.length:(i<=0?bs.length-1:i-1)].focus();return}
- if(e.key==="ArrowLeft"){adv(-1);return}
- if(e.key===" "||e.key==="ArrowRight"||e.key==="Enter"){e.preventDefault();adv(1);return}
- if(e.key==="a"||e.key==="A")$("bAuto").click()});
-applyFs();
+ if($("scroll").classList.contains("on")){
+  if(e.key==="Escape"){e.preventDefault();closeScroll()}
+  return}
+ if((e.key==="Enter"||e.key===" ")&&tag!=="BUTTON"){e.preventDefault();play(false)}});
+
 buildEps();
+var epCount=player?player.episodes().length:0;
 $("meta").textContent=DATA.scenes.length+"개 장면"
- +(EPS.length>1?" · "+EPS.length+"화":"")+" · 오프라인 자족 파일";
+ +(epCount>1?" · "+epCount+"화":"")+" · 오프라인 자족 파일";
 $("scTitle").textContent=DATA.title;
-$("bResume").hidden=!loadPos();
 if(typeof DATA.cover==="number"&&DATA.scenes[DATA.cover]&&DATA.scenes[DATA.cover].img){
- const cv=$("cover");cv.src=DATA.scenes[DATA.cover].img;cv.hidden=false}
+ var cv=$("cover");cv.src=DATA.scenes[DATA.cover].img;cv.hidden=false}
 </script></body></html>
 """
+
+
+def load_runtime() -> str:
+    """스튜디오와 공용인 재생 엔진 원문. 없으면 감상본을 굽지 않는다.
+
+    반쯤 완성된 감상본(엔진 없는 껍데기)을 내보내는 편보다, 여기서 멈추고 이유를 말하는 편이
+    낫다 — 파일 하나가 곧 소장본이라 나중에 고쳐 배포할 방법이 없다.
+    """
+    try:
+        return RUNTIME_JS.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise VNError(f"재생 엔진을 읽지 못했습니다: {RUNTIME_JS} ({exc})") from exc
 
 
 def build_html(include_all: bool, max_edge: int, quality: int,
@@ -889,11 +630,18 @@ def build_html(include_all: bool, max_edge: int, quality: int,
                webp: bool = False, use_cache: bool = True):
     """(data, html) 반환 — 단일 파일 export 와 PWA 번들이 공유."""
     data = build_data(include_all, max_edge, quality, cover_id, webp, use_cache)
-    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    # 자리표시자 토큰이 작품 텍스트에 섞여 있어도 치환 대상이 되지 않게 중화한다
+    # (JSON 의 \\u005f 는 '_' 로 되살아나므로 내용은 그대로다 — "</" 를 다루는 방식과 같다).
+    payload = (json.dumps(data, ensure_ascii=False)
+               .replace("</", "<\\/")
+               .replace("__RUNTIME__", "__RUNTIME\\u005f_"))
     fcss = font_css(find_font(font_spec), used_text(data))
-    # 제목은 <title>·<h1> 에 그대로 들어가므로 이스케이프한다(따옴표·꺾쇠가 든 제목이 문서를 깨지 않게).
-    html = (TEMPLATE.replace("__TITLE__", html_escape(data["title"]))
-            .replace("__FONTCSS__", fcss).replace("__DATA__", payload))
+    parts = {"__TITLE__": html_escape(data["title"]),   # 꺾쇠·따옴표 든 제목이 문서를 깨지 않게
+             "__FONTCSS__": fcss,
+             "__RUNTIME__": load_runtime(),             # 감상본 자기완결: 엔진을 통째로 품는다
+             "__DATA__": payload}
+    # 한 번에 치환한다 — 순차 치환이면 앞서 넣은 값 안의 토큰이 다시 치환될 수 있다.
+    html = re.sub(r"__(?:TITLE|FONTCSS|RUNTIME|DATA)__", lambda m: parts[m.group(0)], TEMPLATE)
     return data, html
 
 
