@@ -1,0 +1,61 @@
+{
+  "scene_id": "SCENE-005",
+  "scene_order": 5,
+  "status": "PROMPT",
+  "location_id": "LOC-003",
+  "time": "해질녘",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "노을 강변에 다다라 하루를 마무리한다 (호감도로 엔딩 분기)",
+  "action_beat": "노을을 바라보며 지혜가 조용히 웃는다",
+  "emotion": "잔잔한 두근거림",
+  "camera": {
+    "shot": "two shot",
+    "angle": "eye level",
+    "framing": "노을 속 둘",
+    "focus": "마주보는 눈"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat black hair, casual shirt, facing each other on a riverside walkway at sunset, orange and violet sky reflecting on the water",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "오늘… 참 좋았다. 그치?",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(지금이야. 말할 수 있을까—)",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1,
+  "branch": [
+    {
+      "min": 55,
+      "goto": "SCENE-006"
+    },
+    {
+      "min": 0,
+      "goto": "SCENE-007"
+    }
+  ]
+}

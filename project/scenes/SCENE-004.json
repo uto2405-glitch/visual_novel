@@ -1,48 +1,51 @@
 {
   "scene_id": "SCENE-004",
   "scene_order": 4,
-  "status": "PROMPT",
-  "location_id": "LOC-001",
-  "time": "비 오는 오후",
+  "status": "APPROVED",
+  "location_id": "LOC-002",
+  "time": "오후",
   "characters": [
+    "CHAR-001",
     "CHAR-002"
   ],
   "props": [],
-  "purpose": "서씨가 하람의 이야기를 조용히 들으며 공감한다",
-  "action_beat": "서씨가 말없이 하람의 이야기를 듣고 부러진 살을 손가락으로 어루만진다",
-  "emotion": "따뜻한 공감과 안타까움",
+  "purpose": "지혜가 넘어질 뻔한 걸 붙잡아 준다",
+  "action_beat": "휘청이는 지혜의 팔을 재빨리 받쳐 준다",
+  "emotion": "두근거림",
   "camera": {
-    "shot": "medium shot",
+    "shot": "medium",
     "angle": "eye level",
-    "framing": "over-the-shoulder from Haram toward Mrs. Seo",
-    "focus": "Mrs. Seo's gentle expression and hands on the umbrella"
+    "framing": "맞닿은 두 사람",
+    "focus": "붙잡은 손"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat and 60-year-old Korean woman, short silver hair, round glasses, work apron inside a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, the older woman gently touching the broken ribs of a blue umbrella while listening with a soft, understanding look",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean boy, neat black hair, casual shirt catching 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings by the arm as she stumbles on a spring park path with cherry blossoms falling, soft pink petals in the air, petals swirling",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
-      "speaker_id": "CHAR-002",
-      "text": "그래… 그런 우산이었구나.",
+      "speaker_id": "CHAR-001",
+      "text": "앗-! …고마워. 놀랐잖아.",
       "placement": "bottom"
     },
     {
       "speaker_id": "CHAR-002",
-      "text": "아버지 생각이 많이 나겠구나.",
+      "text": "(가까워진 거리에, 심장이 빨라진다.)",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [],
-    "selected_image": ""
+    "raw_images": [
+      "images/raw/SCENE-004/SCENE-004_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-004/SCENE-004_a-2.png"
   },
   "review": {
-    "auto": "PENDING",
-    "human": "PENDING",
+    "auto": "PASS",
+    "human": "PASS",
     "score": null,
     "notes": []
   },

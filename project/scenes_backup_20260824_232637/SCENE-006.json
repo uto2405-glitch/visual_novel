@@ -1,0 +1,51 @@
+{
+  "scene_id": "SCENE-006",
+  "scene_order": 6,
+  "status": "PROMPT",
+  "location_id": "LOC-001",
+  "time": "비 오는 오후",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "수선이 본격적으로 시작되며 부러진 살을 교체한다",
+  "action_beat": "서씨가 도구를 꺼내 부러진 살을 하나하나 제거하고 새 살로 교체하기 시작한다",
+  "emotion": "집중과 정성",
+  "camera": {
+    "shot": "close-up",
+    "angle": "high angle",
+    "framing": "tight on hands and umbrella",
+    "focus": "Mrs. Seo’s careful hands replacing a rib"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "60-year-old Korean woman, short silver hair, round glasses, work apron working at a bench in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, carefully removing broken ribs from a blue umbrella and inserting new ones with precise tools, focused expression",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "정말… 고칠 수 있을까요?",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "천천히, 하나씩 하면 된단다.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

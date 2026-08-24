@@ -1,16 +1,16 @@
 {
   "scene_id": "SCENE-003",
   "scene_order": 3,
-  "status": "APPROVED",
+  "status": "PROMPT",
   "location_id": "LOC-002",
   "time": "오후",
   "characters": [
     "CHAR-001"
   ],
   "props": [],
-  "purpose": "벚꽃 공원을 나란히 걷는다",
-  "action_beat": "흩날리는 벚꽃 아래를 걷는다",
-  "emotion": "설렘과 평온",
+  "purpose": "벚꽃 공원을 함께 걷는다",
+  "action_beat": "흩날리는 벚꽃 아래 나란히 걷는다",
+  "emotion": "포근함",
   "camera": {
     "shot": "wide",
     "angle": "eye level",
@@ -32,14 +32,12 @@
     }
   ],
   "assets": {
-    "raw_images": [
-      "images/raw/SCENE-003/SCENE-003_a-2.png"
-    ],
-    "selected_image": "images/raw/SCENE-003/SCENE-003_a-2.png"
+    "raw_images": [],
+    "selected_image": ""
   },
   "review": {
-    "auto": "PASS",
-    "human": "PASS",
+    "auto": "PENDING",
+    "human": "PENDING",
     "score": null,
     "notes": []
   },

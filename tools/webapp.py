@@ -99,6 +99,8 @@ def state() -> dict:
             "selected_image": sc.get("assets", {}).get("selected_image", ""),
             "review": sc.get("review", {}), "image_url": scene_image_url(sc),
             "print": scene_print(sc),
+            "choices": sc.get("choices", []), "branch": sc.get("branch", []),
+            "ending": bool(sc.get("ending")),
         })
     scenes.sort(key=lambda s: s.get("scene_order") or 0)
     storyline, chat = "", []
@@ -112,7 +114,9 @@ def state() -> dict:
     model = ""
     if mf and isinstance(mf.get("orchestrator"), dict):
         model = mf["orchestrator"].get("api", {}).get("model", "")
+    dating = (mf or {}).get("dating") if isinstance((mf or {}).get("dating"), dict) else None
     return {"manifest": bool(mf), "title": (mf or {}).get("title", ""),
+            "dating": dating,
             "key_set": xai_client.key_set(), "model": model,
             "characters": [{"id": c.get("character_id"), "name": c.get("name", "")}
                            for c in (mf or {}).get("characters", [])],

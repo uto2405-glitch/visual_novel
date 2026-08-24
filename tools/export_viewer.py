@@ -104,14 +104,22 @@ def build_data(include_all: bool, max_edge: int, quality: int) -> dict:
             info = chars.get(spk)
             lines.append({"n": info["name"] if info else "", "c": info["color"] if info else "",
                           "t": str(d.get("text", "")), "p": d.get("placement", "bottom")})
-        scenes.append({"id": sc.get("scene_id", "?"), "order": sc.get("scene_order", 0),
-                       "purpose": str(sc.get("purpose", "")),
-                       "img": image_data_uri(ROOT / sel, max_edge, quality),
-                       "lines": lines})
+        entry = {"id": sc.get("scene_id", "?"), "order": sc.get("scene_order", 0),
+                 "purpose": str(sc.get("purpose", "")),
+                 "img": image_data_uri(ROOT / sel, max_edge, quality),
+                 "lines": lines}
+        if isinstance(sc.get("choices"), list) and sc["choices"]:
+            entry["choices"] = sc["choices"]
+        if isinstance(sc.get("branch"), list) and sc["branch"]:
+            entry["branch"] = sc["branch"]
+        if sc.get("ending"):
+            entry["ending"] = True
+        scenes.append(entry)
     scenes.sort(key=lambda s: s.get("order") or 0)
     if not scenes:
         raise RuntimeError("내보낼 장면이 없습니다. (selected_image 있는 APPROVED 장면 — --all 로 전체)")
-    return {"title": mf.get("title") or "무제", "scenes": scenes}
+    dating = mf.get("dating") if isinstance(mf.get("dating"), dict) else None
+    return {"title": mf.get("title") or "무제", "scenes": scenes, "dating": dating}
 
 
 TEMPLATE = """<!DOCTYPE html>
@@ -153,6 +161,21 @@ box-shadow:0 16px 40px -14px rgba(0,0,0,.7)}
 #who{display:inline-block;font-size:12px;font-weight:800;padding:2px 11px;border-radius:99px;margin-bottom:6px;color:#fff}
 #txt{font-size:clamp(15px,2.4vw,18px);line-height:1.62;min-height:1.6em;white-space:pre-wrap;
 max-height:34vh;overflow-y:auto;overflow-wrap:anywhere;word-break:keep-all;line-break:strict}
+#aff{align-self:center;font-weight:700;color:#F2C0B6;background:rgba(196,61,43,.22);
+border:1px solid #C43D2B;border-radius:99px;padding:4px 10px;font-size:12px}
+#choices{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;
+display:flex;flex-direction:column;gap:12px;width:min(560px,88%)}
+#choices button{background:rgba(24,18,12,.95);color:var(--ink);border:1px solid var(--amber);
+border-radius:12px;padding:14px 18px;font:inherit;font-size:15px;cursor:pointer;text-align:left;
+box-shadow:0 8px 24px -10px rgba(0,0,0,.7)}
+#choices button:hover,#choices button:focus-visible{background:rgba(224,166,75,.22);outline:none}
+@media(max-width:640px){
+ #bar{flex-wrap:wrap;gap:5px;max-width:calc(100% - 16px)}
+ .b{padding:8px 10px;font-size:12px}
+ #dlg{bottom:14px;padding:12px 15px} #dlg.top{top:52px}
+ #txt{font-size:var(--dlg-fs,clamp(15px,4.2vw,18px));max-height:32vh}
+ #choices{width:92%} #choices button{padding:13px 15px;font-size:14.5px}
+}
 #scroll{position:fixed;inset:0;background:var(--bg);display:none;overflow-y:auto;z-index:4;
 -webkit-overflow-scrolling:touch}
 #scroll.on{display:block}
@@ -294,13 +317,22 @@ $("bResume").hidden=!loadPos();
 """
 
 
-def export(include_all: bool, max_edge: int, quality: int) -> Path:
+def build_html(include_all: bool, max_edge: int, quality: int):
+    """(data, html) 반환 — 단일 파일 export 와 PWA 번들이 공유."""
     data = build_data(include_all, max_edge, quality)
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     html = TEMPLATE.replace("__TITLE__", data["title"]).replace("__DATA__", payload)
+    return data, html
+
+
+def safe_name(title: str) -> str:
+    return ("".join(c for c in title if c.isalnum() or c in " -_가-힣").strip()) or "viewer"
+
+
+def export(include_all: bool, max_edge: int, quality: int) -> Path:
+    data, html = build_html(include_all, max_edge, quality)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    safe = "".join(c for c in data["title"] if c.isalnum() or c in " -_가-힣") or "viewer"
-    out = OUT_DIR / f"{safe.strip() or 'viewer'}.html"
+    out = OUT_DIR / f"{safe_name(data['title'])}.html"
     out.write_text(html, encoding="utf-8")
     return out
 

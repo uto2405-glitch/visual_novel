@@ -1,0 +1,51 @@
+{
+  "scene_id": "SCENE-001",
+  "scene_order": 1,
+  "status": "PROMPT",
+  "location_id": "LOC-001",
+  "time": "오후",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "카페에서 이지혜와 만나 데이트가 시작된다",
+  "action_beat": "창가 자리에서 지혜가 밝게 손을 흔든다",
+  "emotion": "설렘",
+  "camera": {
+    "shot": "medium",
+    "angle": "eye level",
+    "framing": "창가 지혜",
+    "focus": "지혜의 미소"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving brightly at a window seat in a cozy warm wood-toned cafe near a school, afternoon sunlight through the window",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "여기야 여기~ 오래 기다렸어?",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(오늘… 꼭 마음을 전하고 싶은데.)",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

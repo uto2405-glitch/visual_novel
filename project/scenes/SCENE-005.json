@@ -1,48 +1,51 @@
 {
   "scene_id": "SCENE-005",
   "scene_order": 5,
-  "status": "PROMPT",
-  "location_id": "LOC-001",
-  "time": "비 오는 오후",
+  "status": "APPROVED",
+  "location_id": "LOC-003",
+  "time": "해질녘",
   "characters": [
+    "CHAR-001",
     "CHAR-002"
   ],
   "props": [],
-  "purpose": "고치기 어려운 상태를 확인하지만 정성껏 고치겠다고 결심한다",
-  "action_beat": "서씨가 부러진 살 여러 개를 가리키며 쉽지는 않겠지만 반드시 고치겠다고 말한다",
-  "emotion": "결의와 따뜻한 책임감",
+  "purpose": "노을 강변에서 조용히 마음이 가까워진다",
+  "action_beat": "노을을 나란히 바라본다",
+  "emotion": "잔잔한 두근거림",
   "camera": {
-    "shot": "medium close-up",
+    "shot": "two shot",
     "angle": "eye level",
-    "framing": "Mrs. Seo dominant in frame with umbrella",
-    "focus": "Mrs. Seo's determined eyes and the damaged ribs"
+    "framing": "노을 속 둘",
+    "focus": "마주보는 눈"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "60-year-old Korean woman, short silver hair, round glasses, work apron in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, holding a broken blue umbrella and pointing carefully at its snapped ribs with a resolute yet kind expression",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat black hair, casual shirt, standing close watching the sunset on a riverside walkway at sunset, orange and violet sky reflecting on the water",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
-      "speaker_id": "CHAR-002",
-      "text": "살이 여럿 부러져서 쉽진 않겠지만…",
+      "speaker_id": "CHAR-001",
+      "text": "오늘… 참 좋았다. 그치?",
       "placement": "bottom"
     },
     {
       "speaker_id": "CHAR-002",
-      "text": "정성껏 고쳐줄게. 기다려 보렴.",
+      "text": "응. 다음에도, 또 같이 오자.",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [],
-    "selected_image": ""
+    "raw_images": [
+      "images/raw/SCENE-005/SCENE-005_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-005/SCENE-005_a-2.png"
   },
   "review": {
-    "auto": "PENDING",
-    "human": "PENDING",
+    "auto": "PASS",
+    "human": "PASS",
     "score": null,
     "notes": []
   },

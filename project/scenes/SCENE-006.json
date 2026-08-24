@@ -1,49 +1,51 @@
 {
   "scene_id": "SCENE-006",
   "scene_order": 6,
-  "status": "PROMPT",
-  "location_id": "LOC-001",
-  "time": "비 오는 오후",
+  "status": "APPROVED",
+  "location_id": "LOC-003",
+  "time": "해질녘",
   "characters": [
     "CHAR-001",
     "CHAR-002"
   ],
   "props": [],
-  "purpose": "수선이 본격적으로 시작되며 부러진 살을 교체한다",
-  "action_beat": "서씨가 도구를 꺼내 부러진 살을 하나하나 제거하고 새 살로 교체하기 시작한다",
-  "emotion": "집중과 정성",
+  "purpose": "여운을 남기며 하루가 저문다 (엔딩)",
+  "action_beat": "지혜가 환하게 웃으며 손을 내민다",
+  "emotion": "따뜻한 여운",
   "camera": {
     "shot": "close-up",
-    "angle": "high angle",
-    "framing": "tight on hands and umbrella",
-    "focus": "Mrs. Seo's careful hands replacing a rib"
+    "angle": "eye level",
+    "framing": "내민 손과 미소",
+    "focus": "지혜의 미소"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "60-year-old Korean woman, short silver hair, round glasses, work apron working at a bench in a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, carefully removing broken ribs from a blue umbrella and inserting new ones with precise tools, focused expression",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, close-up, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings reaching out her hand with a bright warm smile toward 18-year-old Korean boy, neat black hair, casual shirt on a riverside walkway at sunset, orange and violet sky reflecting on the water",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
       "speaker_id": "CHAR-001",
-      "text": "정말… 고칠 수 있을까요?",
+      "text": "그럼… 갈까? 같이.",
       "placement": "bottom"
     },
     {
       "speaker_id": "CHAR-002",
-      "text": "천천히, 하나씩 하면 된단다.",
+      "text": "(이 하루가, 시작이었으면 좋겠다.)",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [],
-    "selected_image": ""
+    "raw_images": [
+      "images/raw/SCENE-006/SCENE-006_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-006/SCENE-006_a-2.png"
   },
   "review": {
-    "auto": "PENDING",
-    "human": "PENDING",
+    "auto": "PASS",
+    "human": "PASS",
     "score": null,
     "notes": []
   },

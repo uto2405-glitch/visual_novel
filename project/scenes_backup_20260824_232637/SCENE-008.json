@@ -1,0 +1,51 @@
+{
+  "scene_id": "SCENE-008",
+  "scene_order": 8,
+  "status": "PROMPT",
+  "location_id": "LOC-001",
+  "time": "비 오는 오후",
+  "characters": [
+    "CHAR-002",
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "수선이 완료되고 되살아난 우산을 하람에게 건넨다",
+  "action_beat": "서씨가 완전히 고쳐진 파란 우산을 하람에게 건네주고 하람이 감사의 인사를 전한다",
+  "emotion": "감사와 작은 기쁨",
+  "camera": {
+    "shot": "medium two-shot",
+    "angle": "eye level",
+    "framing": "both facing each other, umbrella being handed over",
+    "focus": "the restored blue umbrella passing between hands"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat and 60-year-old Korean woman, short silver hair, round glasses, work apron inside a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, the older woman handing a fully repaired blue umbrella to the girl who receives it with grateful eyes",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-002",
+      "text": "자, 이제 다시 펼 수 있단다.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-001",
+      "text": "감사합니다… 정말 고맙습니다.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

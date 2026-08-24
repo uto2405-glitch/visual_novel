@@ -1,6 +1,6 @@
 {
   "project_id": "PROJECT-001",
-  "title": "비 그친 우산 가게",
+  "title": "두근두근 연애 시뮬레이터",
   "language": "ko-KR",
   "orchestrator": {
     "provider": "Grok (SuperGrok 구독 · 수동 복붙)",
@@ -9,7 +9,7 @@
       "base_url": "https://api.x.ai/v1",
       "model": "grok-4.6",
       "key_env": "XAI_API_KEY",
-      "note": "수동 모드 — grok.com 복붙으로 운용(크레딧 0). 자동화 원하면 크레딧 충전 후 mode 를 api 로"
+      "note": "수동 모드 — grok.com 복붙으로 운용(크레딧 0)"
     }
   },
   "image_generator": {
@@ -29,53 +29,61 @@
   "characters": [
     {
       "character_id": "CHAR-001",
-      "name": "하람",
+      "name": "이지혜",
       "version": 1,
       "profile": {
-        "age": "17",
+        "age": "18",
         "gender_presentation": "여성",
-        "hair": "낮게 묶은 긴 흑발",
-        "eyes": "크고 둥근 눈",
+        "hair": "밝은 갈색 반묶음 세미롱",
+        "eyes": "또렷한 갈색 눈",
         "build": "보통",
-        "wardrobe": "노란 우비",
-        "signature_props": ["낡은 파란 우산"]
+        "wardrobe": "파스텔 니트 가디건",
+        "signature_props": ["작은 별 귀걸이"]
       },
       "reference_images": [],
-      "prompt_anchor": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat"
+      "prompt_anchor": "18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings"
     },
     {
       "character_id": "CHAR-002",
-      "name": "서씨 아주머니",
+      "name": "나",
       "version": 1,
       "profile": {
-        "age": "60대",
-        "gender_presentation": "여성",
-        "hair": "은발 단발",
-        "eyes": "온화한 주름눈",
-        "build": "자그마함",
-        "wardrobe": "작업 앞치마",
-        "signature_props": ["돋보기 안경"]
+        "age": "18",
+        "gender_presentation": "남성",
+        "hair": "단정한 검은 머리",
+        "eyes": "검정",
+        "build": "보통",
+        "wardrobe": "캐주얼 셔츠",
+        "signature_props": []
       },
       "reference_images": [],
-      "prompt_anchor": "60-year-old Korean woman, short silver hair, round glasses, work apron"
+      "prompt_anchor": "18-year-old Korean boy, neat black hair, casual shirt"
     }
   ],
   "locations": [
     {
       "location_id": "LOC-001",
-      "name": "우산 가게",
+      "name": "학교 앞 카페",
       "version": 1,
-      "description": "천장에 우산이 매달린 오래된 목조 수선집, 따뜻한 백열등",
+      "description": "따뜻한 우드톤의 아담한 카페, 창밖으로 오후 햇살",
       "reference_images": [],
-      "prompt_anchor": "cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light"
+      "prompt_anchor": "cozy warm wood-toned cafe near a school, afternoon sunlight through the window"
     },
     {
       "location_id": "LOC-002",
-      "name": "비 그친 골목",
+      "name": "벚꽃 공원",
       "version": 1,
-      "description": "비가 막 그친 젖은 골목, 물웅덩이에 하늘이 비치고 옅은 무지개",
+      "description": "벚꽃이 흩날리는 봄 공원 산책로",
       "reference_images": [],
-      "prompt_anchor": "rain-soaked alley after the rain, puddles reflecting the sky, faint rainbow"
+      "prompt_anchor": "spring park path with cherry blossoms falling, soft pink petals in the air"
+    },
+    {
+      "location_id": "LOC-003",
+      "name": "노을 강변",
+      "version": 1,
+      "description": "노을이 지는 강변 산책로",
+      "reference_images": [],
+      "prompt_anchor": "riverside walkway at sunset, orange and violet sky reflecting on the water"
     }
   ],
   "props": []

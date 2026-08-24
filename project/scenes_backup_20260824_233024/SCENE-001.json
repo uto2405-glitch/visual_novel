@@ -1,7 +1,7 @@
 {
   "scene_id": "SCENE-001",
   "scene_order": 1,
-  "status": "APPROVED",
+  "status": "PROMPT",
   "location_id": "LOC-001",
   "time": "오후",
   "characters": [
@@ -9,8 +9,8 @@
     "CHAR-002"
   ],
   "props": [],
-  "purpose": "카페에서 이지혜와 만나 하루가 시작된다",
-  "action_beat": "창가에서 지혜가 밝게 손을 흔든다",
+  "purpose": "카페에서 이지혜와 만나 데이트가 시작된다",
+  "action_beat": "창가 자리에서 지혜가 밝게 손을 흔든다",
   "emotion": "설렘",
   "camera": {
     "shot": "medium",
@@ -33,19 +33,17 @@
     },
     {
       "speaker_id": "CHAR-002",
-      "text": "(오늘 하루, 오래 기억에 남을 것 같아.)",
+      "text": "(오늘… 꼭 마음을 전하고 싶은데.)",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [
-      "images/raw/SCENE-001/SCENE-001_a-2.png"
-    ],
-    "selected_image": "images/raw/SCENE-001/SCENE-001_a-2.png"
+    "raw_images": [],
+    "selected_image": ""
   },
   "review": {
-    "auto": "PASS",
-    "human": "PASS",
+    "auto": "PENDING",
+    "human": "PENDING",
     "score": null,
     "notes": []
   },

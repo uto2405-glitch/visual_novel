@@ -1,0 +1,57 @@
+{
+  "scene_id": "SCENE-002",
+  "scene_order": 2,
+  "status": "PROMPT",
+  "location_id": "LOC-001",
+  "time": "오후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "지혜가 뭘 마실지 물으며 첫 선택",
+  "action_beat": "메뉴판을 넘기며 나를 바라본다",
+  "emotion": "장난기",
+  "camera": {
+    "shot": "two shot",
+    "angle": "eye level",
+    "framing": "마주 앉은 둘",
+    "focus": "메뉴판"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat black hair, casual shirt, sitting across a table looking at a menu in a cozy warm wood-toned cafe near a school, afternoon sunlight through the window",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "난 뭐 마시지? 너가 골라줄래?",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1,
+  "choices": [
+    {
+      "text": "\"넌 딸기라떼 좋아하잖아.\" (취향을 기억)",
+      "affection": 15,
+      "goto": "SCENE-003"
+    },
+    {
+      "text": "\"아무거나 시켜.\"",
+      "affection": -5,
+      "goto": "SCENE-003"
+    }
+  ]
+}

@@ -115,6 +115,14 @@ color:var(--sub);font-size:12px;text-align:center;padding:10px}
 .galcard .fav{position:absolute;top:6px;right:6px;width:30px;height:30px;border-radius:50%;
 border:none;background:rgba(18,13,9,.6);color:#8b7d68;font-size:15px;cursor:pointer;line-height:30px;padding:0}
 .galcard .fav.on{color:var(--warn)}
+/* 분기 엔진: 호감도 미터 + 선택지 */
+#affMeter{background:rgba(196,61,43,.22);border-color:var(--seal);color:#F2C0B6;font-weight:700}
+#choices{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;
+display:flex;flex-direction:column;gap:12px;width:min(560px,86%)}
+#choices button{background:rgba(24,18,12,.94);color:var(--ink);border:1px solid var(--jade);
+border-radius:12px;padding:14px 18px;font:inherit;font-size:15px;cursor:pointer;text-align:left;
+box-shadow:0 8px 24px -10px rgba(0,0,0,.7)}
+#choices button:hover,#choices button:focus-visible{background:var(--jade-d);border-color:var(--jade);outline:none}
 /* 세로 스크롤 리딩 */
 .scrollview{position:fixed;inset:0;background:var(--bg);overflow-y:auto;z-index:8;-webkit-overflow-scrolling:touch}
 .scrollview .topbar{position:sticky;top:0;background:rgba(36,28,21,.93);padding:10px 14px;
@@ -296,6 +304,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <div id="cinemaFx" class="vnfx" hidden><div class="lb top"></div><div class="lb bot"></div></div>
 <div id="stageClick"></div>
 <div id="stageBar"><span class="chip" id="stageProg"></span>
+<span class="chip" id="affMeter" hidden></span>
 <button class="vnbtn" id="btnAuto" title="자동 진행 (A)">자동</button>
 <button class="vnbtn" id="btnSkip" title="스킵 (Ctrl)">스킵</button>
 <button class="vnbtn" id="btnScenes" title="장면 이동 (C)">장면</button>
@@ -306,6 +315,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <button class="vnbtn" id="btnExit" title="닫기 (Esc)">닫기</button></div>
 <div id="dlg"><span id="dlgName"></span><div id="dlgText"></div>
 <div id="dlgHint">클릭하여 계속 ▸</div></div>
+<div id="choices" hidden></div>
 <div id="vnLog" class="vnpanel" role="dialog" aria-modal="true" aria-label="기록" hidden><h3>기록 (BACKLOG)</h3>
 <div id="vnLogInner"></div>
 <button class="vnbtn" id="btnLogClose" style="align-self:flex-end">닫기</button></div>
@@ -680,6 +690,7 @@ $("btnLint").onclick=async()=>{const o=$("lintOut");o.hidden=false;o.textContent
  catch(e){o.textContent="실패: "+e.message}};
 // ---- 비주얼 노벨 뷰어 (VN 런타임) ----
 let vi=0,di=0,ended=false;
+let affection=30,awaitingChoice=false;   // 분기 엔진(연애 시뮬 등)
 let revealing=false,revealTimer=null,fullText="",autoTimer=null;
 let autoOn=false,skipOn=false;
 let history=[],historyKeys=new Set();
@@ -708,7 +719,28 @@ function loadVN(){try{const s=JSON.parse(localStorage.getItem("vn:settings")||"{
  if(typeof s.cinema==="boolean")VN.cinema=s.cinema}catch(e){}applyFs()}
 function saveVN(){try{localStorage.setItem("vn:settings",JSON.stringify(VN))}catch(e){}applyFs()}
 const posKey=()=>"vn:pos:"+(S.title||"_");
-function savePos(){try{localStorage.setItem(posKey(),JSON.stringify({vi,di}))}catch(e){}}
+function savePos(){try{localStorage.setItem(posKey(),JSON.stringify({vi,di,aff:affection}))}catch(e){}}
+// ---- 분기 엔진 ----
+const affMax=()=>(S.dating&&S.dating.max)||100;
+const clampAff=v=>Math.max(0,Math.min(affMax(),v));
+function updateAff(){const m=$("affMeter");if(!m)return;
+ if(S.dating){m.hidden=false;m.textContent="♥ "+affection+" / "+affMax()}else m.hidden=true}
+const idxOfScene=id=>S.scenes.findIndex(s=>s.scene_id===id);
+function nextIndex(sc){
+ if(sc.branch&&sc.branch.length){
+  for(const b of sc.branch){if(affection>=(b.min||0)){const i=idxOfScene(b.goto);if(i>=0)return i}}
+  return -1}
+ return vi+1<S.scenes.length?vi+1:-1}
+function goToIndex(idx){const before=vi;vi=idx;di=0;ended=false;
+ if(vi!==before)renderImage();showLine()}
+function showChoices(sc){awaitingChoice=true;clearTimeout(autoTimer);
+ const box=$("choices");box.replaceChildren();
+ sc.choices.forEach(c=>{const b=el("button",null,c.text);b.onclick=()=>pickChoice(c);box.appendChild(b)});
+ box.hidden=false;$("dlg").style.opacity=".3"}
+function pickChoice(c){awaitingChoice=false;$("choices").hidden=true;$("dlg").style.opacity="";
+ affection=clampAff(affection+(c.affection||0));updateAff();savePos();
+ const nx=c.goto?idxOfScene(c.goto):(vi+1<S.scenes.length?vi+1:-1);
+ if(nx<0){endPlayback();return}goToIndex(nx)}
 function loadPos(){try{return JSON.parse(localStorage.getItem(posKey())||"null")}catch(e){return null}}
 function clearPos(){try{localStorage.removeItem(posKey())}catch(e){}}
 const histKey=()=>"vn:hist:"+(S.title||"_");
@@ -769,15 +801,20 @@ function showLine(){const sc=S.scenes[vi];if(!sc)return;
 
 function advance(step){
  if(panelOpen()){closePanels();return}
+ if(awaitingChoice)return;                 // 선택지 대기 중엔 진행 불가(선택해야 함)
  if(ended){exitStage();return}
  if(step>0&&revealing){completeText();return}
  const sc=S.scenes[vi];if(!sc)return;clearTimeout(autoTimer);
- const before=vi;
- if(step>0){if(di+1<dlen(sc))di++;else{vi++;di=0}}
- else{if(di>0)di--;else if(vi>0){vi--;di=dlen(S.scenes[vi])-1}}
- if(vi>=S.scenes.length){endPlayback();return}
- if(vi!==before)renderImage();
- showLine()}
+ if(step>0){
+  if(di+1<dlen(sc)){di++;showLine();return}
+  if(sc.choices&&sc.choices.length){showChoices(sc);return}   // 장면 끝 → 선택지
+  if(sc.ending){endPlayback();return}                          // 엔딩 장면
+  const nx=nextIndex(sc);                                      // 분기 or 선형
+  if(nx<0){endPlayback();return}
+  goToIndex(nx);return}
+ else{
+  if(di>0){di--;showLine();return}
+  if(vi>0){vi--;di=dlen(S.scenes[vi])-1;renderImage();showLine()}}}
 
 function endPlayback(){ended=true;clearTimeout(autoTimer);clearInterval(revealTimer);
  setAuto(false);setSkip(false);const dlg=$("dlg");dlg.classList.remove("top");dlg.classList.add("narration");
@@ -786,6 +823,7 @@ function endPlayback(){ended=true;clearTimeout(autoTimer);clearInterval(revealTi
  $("stageProg").textContent=S.scenes.length+" / "+S.scenes.length;clearPos()}
 
 function exitStage(){clearTimeout(autoTimer);clearInterval(revealTimer);
+ awaitingChoice=false;$("choices").hidden=true;$("dlg").style.opacity="";
  $("stage").classList.remove("on");$("stage").setAttribute("aria-hidden","true");
  bgNodes().forEach(n=>{n.inert=false});
  if(_returnFocus&&_returnFocus.focus)_returnFocus.focus()}
@@ -853,6 +891,9 @@ function startPlayback(resume,at){if(!S.scenes.length){alert("장면이 없습�
  else{history=[];historyKeys=new Set();saveHistory()}
  if(typeof at==="number"&&at>=0&&at<S.scenes.length){vi=at;di=0}   // 갤러리: 그 장면부터
  else{vi=pos&&pos.vi<S.scenes.length?pos.vi:0;di=pos&&pos.di<dlen(S.scenes[vi])?pos.di:0}
+ affection=(pos&&typeof pos.aff==="number")?pos.aff
+  :((S.dating&&typeof S.dating.start_affection==="number")?S.dating.start_affection:30);
+ awaitingChoice=false;$("choices").hidden=true;$("dlg").style.opacity="";updateAff();
  setAuto(false);setSkip(false);closePanels();setUiHidden(false);
  _returnFocus=document.activeElement;
  bgNodes().forEach(n=>{n.inert=true});   // 배경 비활성 — 포커스/스크린리더 트랩

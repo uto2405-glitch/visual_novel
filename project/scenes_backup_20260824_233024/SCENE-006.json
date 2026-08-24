@@ -1,0 +1,52 @@
+{
+  "scene_id": "SCENE-006",
+  "scene_order": 6,
+  "status": "PROMPT",
+  "location_id": "LOC-003",
+  "time": "해질녘",
+  "characters": [
+    "CHAR-002",
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "고백 성공 — 해피 엔딩",
+  "action_beat": "용기를 내 마음을 전하고, 지혜가 환하게 웃는다",
+  "emotion": "벅찬 행복",
+  "camera": {
+    "shot": "close-up",
+    "angle": "eye level",
+    "framing": "맞잡은 손",
+    "focus": "웃는 지혜"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, close-up, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat black hair, casual shirt, holding hands with a bright happy smile on a riverside walkway at sunset, orange and violet sky reflecting on the water",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-002",
+      "text": "지혜야. 나… 너를 좋아해.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-001",
+      "text": "…응. 나도. 계속 기다렸는걸.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1,
+  "ending": true
+}

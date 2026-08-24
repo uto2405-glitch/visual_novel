@@ -1,49 +1,51 @@
 {
   "scene_id": "SCENE-002",
   "scene_order": 2,
-  "status": "PROMPT",
+  "status": "APPROVED",
   "location_id": "LOC-001",
-  "time": "비 오는 오후",
+  "time": "오후",
   "characters": [
-    "CHAR-002",
-    "CHAR-001"
+    "CHAR-001",
+    "CHAR-002"
   ],
   "props": [],
-  "purpose": "서씨 아주머니가 우산을 받아 상태를 살피기 시작한다",
-  "action_beat": "서씨가 우산을 건네받아 조심스럽게 펼쳐 보며 부러진 살들을 확인한다",
-  "emotion": "관심과 연민",
+  "purpose": "마주 앉아 음료를 나누며 이야기한다",
+  "action_beat": "따뜻한 음료를 사이에 두고 웃는다",
+  "emotion": "포근함",
   "camera": {
-    "shot": "medium two-shot",
+    "shot": "two shot",
     "angle": "eye level",
-    "framing": "both figures balanced, umbrella between them",
-    "focus": "the broken blue umbrella in Mrs. Seo's hands"
+    "framing": "마주 앉은 둘",
+    "focus": "웃는 표정"
   },
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat and 60-year-old Korean woman, short silver hair, round glasses, work apron inside a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, the older woman carefully examining a broken blue umbrella with several snapped ribs while the girl watches anxiously",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat black hair, casual shirt, sharing warm drinks across a table in a cozy warm wood-toned cafe near a school, afternoon sunlight through the window",
     "external_generator": "",
     "external_model": ""
   },
   "dialogue": [
     {
-      "speaker_id": "CHAR-002",
-      "text": "아이고, 많이 상했구나. 어디 한번 보자.",
+      "speaker_id": "CHAR-001",
+      "text": "네가 골라준 딸기라떼, 역시 맛있다.",
       "placement": "bottom"
     },
     {
-      "speaker_id": "CHAR-001",
-      "text": "네… 부탁드립니다.",
+      "speaker_id": "CHAR-002",
+      "text": "취향 기억하고 있었거든.",
       "placement": "bottom"
     }
   ],
   "assets": {
-    "raw_images": [],
-    "selected_image": ""
+    "raw_images": [
+      "images/raw/SCENE-002/SCENE-002_a-2.png"
+    ],
+    "selected_image": "images/raw/SCENE-002/SCENE-002_a-2.png"
   },
   "review": {
-    "auto": "PENDING",
-    "human": "PENDING",
+    "auto": "PASS",
+    "human": "PASS",
     "score": null,
     "notes": []
   },

@@ -1,0 +1,45 @@
+{
+  "scene_id": "SCENE-010",
+  "scene_order": 10,
+  "status": "PROMPT",
+  "location_id": "LOC-002",
+  "time": "비가 그친 오후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "되살아난 우산을 펴 들고 무지개가 걸린 골목을 걸으며 마음을 다잡는다",
+  "action_beat": "하람이 파란 우산을 활짝 펴 들고 젖은 골목을 천천히 걸어가며 슬픔과 희망을 함께 안는다",
+  "emotion": "슬픔은 남지만 다시 펼 수 있는 희망",
+  "camera": {
+    "shot": "wide shot",
+    "angle": "slightly low angle",
+    "framing": "Haram walking into the depth of the alley under the rainbow",
+    "focus": "Haram under the open blue umbrella with the faint rainbow above"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat walking slowly through a rain-soaked alley after the rain, puddles reflecting the sky, faint rainbow, holding an open repaired blue umbrella above her head, a soft bittersweet expression as she moves forward",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "아버지… 이제 다시 펼 수 있어요.",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

@@ -87,6 +87,25 @@ def _as_order(v, fallback: int) -> int:
         return fallback
 
 
+def _norm_choices(v) -> list:
+    """선택지 정규화 — [{text, affection(int), goto(scene_id)}]. (연애 시뮬 등 분기용)"""
+    out = []
+    for c in v if isinstance(v, list) else []:
+        if isinstance(c, dict) and str(c.get("text", "")).strip():
+            out.append({"text": str(c["text"]), "affection": _as_order(c.get("affection", 0), 0),
+                        "goto": str(c.get("goto", ""))})
+    return out
+
+
+def _norm_branch(v) -> list:
+    """호감도 분기 정규화 — [{min(int), goto(scene_id)}]. 첫 조건 만족으로 이동."""
+    out = []
+    for b in v if isinstance(v, list) else []:
+        if isinstance(b, dict) and str(b.get("goto", "")).strip():
+            out.append({"min": _as_order(b.get("min", 0), 0), "goto": str(b["goto"])})
+    return out
+
+
 def _build_scene(it: dict, index: int, char_ids: list, loc_ids: set, locs: list) -> dict:
     """장면 원소 1개 → 장면 dict. 어떤 필드가 잘못된 타입이어도 기본값으로 흡수(크래시 없음)."""
     sc = adv.load(TEMPLATE)
@@ -108,6 +127,15 @@ def _build_scene(it: dict, index: int, char_ids: list, loc_ids: set, locs: list)
     cam = it.get("camera") if isinstance(it.get("camera"), dict) else {}
     sc["camera"] = {k: str(cam.get(k, "")) for k in ("shot", "angle", "framing", "focus")}
     sc["prompt"]["grok_output"] = str(it.get("image_prompt", ""))
+    # 분기 엔진(선택) — 있을 때만 실어 나른다(선형 작품은 깨끗하게 유지). 검사기는 이 필드를 무시.
+    ch = _norm_choices(it.get("choices"))
+    if ch:
+        sc["choices"] = ch
+    br = _norm_branch(it.get("branch"))
+    if br:
+        sc["branch"] = br
+    if it.get("ending"):
+        sc["ending"] = True
     return sc
 
 

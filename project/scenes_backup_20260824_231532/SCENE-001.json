@@ -1,0 +1,45 @@
+{
+  "scene_id": "SCENE-001",
+  "scene_order": 1,
+  "status": "PROMPT",
+  "location_id": "LOC-001",
+  "time": "비 오는 오후",
+  "characters": [
+    "CHAR-001"
+  ],
+  "props": [],
+  "purpose": "하람이 아버지의 부러진 우산을 들고 수선집을 찾아 들어온다",
+  "action_beat": "하람이 노란 비옷을 입고 부러진 파란 우산을 움켜쥔 채 가게 문을 열고 들어선다",
+  "emotion": "쓸쓸함과 조심스러운 기대",
+  "camera": {
+    "shot": "medium shot",
+    "angle": "eye level",
+    "framing": "centered on Haram at the doorway",
+    "focus": "Haram holding the broken blue umbrella"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "17-year-old Korean girl, long black hair in a low ponytail, big round eyes, yellow raincoat standing just inside the entrance of a cozy old umbrella repair shop, dozens of umbrellas hanging from a wooden ceiling, warm incandescent light, clutching a broken blue umbrella with snapped ribs, rain droplets still on her coat, looking hesitant yet hopeful",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "안녕하세요… 이 우산 좀 고쳐주실 수 있나요?",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}
