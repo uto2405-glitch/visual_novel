@@ -11,6 +11,7 @@ __pycache__/
 # 대용량 생성물 (원본은 별도 백업 권장)
 images/raw/
 output/
+backups/
 
 # 로컬 사용자 설정·작업 잡파일
 .claude/settings.local.json

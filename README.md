@@ -85,6 +85,9 @@ SuperGrok 구독과 xAI API 는 **별도 결제 트랙**이다. 구독에 API �
 | 승인·잠금 | `python tools/advance_scene.py approve SCENE-001` |
 | 진행 현황 | `python tools/advance_scene.py status` |
 | 인화 규격 판정 | `python tools/print_preflight.py` (선택 이미지가 실물 인화에 적합한지 규격별 DPI/크롭) |
+| 인화 마스터 굽기 | `python tools/print_export.py --size 5x7 --contact` (Pillow 필요, output/print/ 에 TIFF+JPEG) |
+| 연출 리듬 자문 | `python tools/scene_lint.py` (컷·감정·대사 리듬 경고 — PASS/FAIL 아님) |
+| 백업·무결성 | `python tools/backup_project.py snapshot` / `verify` (project zip + sha256, 비트로트 탐지) |
 | 자가진단(수정 후 회귀) | `python tools/selftest.py` |
 
 APPROVED 장면만 출력 패키지(DELIVERY.md)에 넣는다. 출력 기준은 개인 소장 인화 기본(긴 변 1024px, 매니페스트에서 조정).

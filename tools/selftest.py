@@ -69,7 +69,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="webtoon-selftest-") as td:
         box = Path(td) / "repo"
         shutil.copytree(SRC, box, ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", ".git", "grok_inputs", "grok_outputs"))
+            "__pycache__", "*.pyc", ".git", "grok_inputs", "grok_outputs", "backups", "output"))
         # 샌드박스의 작업 영역을 빈 상태로 초기화 (사용자 데이터가 복사돼 왔어도 원본은 불변)
         shutil.rmtree(box / "project", ignore_errors=True)
         (box / "project" / "scenes").mkdir(parents=True)
@@ -587,6 +587,64 @@ def main() -> int:
                       and bad_size and safe_ok)
             else:
                 check("T36 인화 마스터 익스포트(Pillow 미설치 → 스킵)", True)
+
+            # T37 — 연출 리듬 린터 (런 감지 로직 + /api/lint 엔드포인트)
+            spec_sl = importlib.util.spec_from_file_location("sl_box", str(box / "tools" / "scene_lint.py"))
+            slm = importlib.util.module_from_spec(spec_sl)
+            spec_sl.loader.exec_module(slm)
+            runs = slm._runs(["a", "a", "a", "b", "c"])
+            st, d = wapi("/api/lint", {})
+            check("T37 연출 리듬 린터(런 감지 + /api/lint)",
+                  runs == [("a", 0, 3)] and st == 200
+                  and isinstance(d.get("findings"), list) and "summary" in d)
+
+            # T38 — 백업 스냅 + sha256 무결성(변조 감지)
+            import datetime as _dt
+            spec_bp = importlib.util.spec_from_file_location("bp_box", str(box / "tools" / "backup_project.py"))
+            bpm = importlib.util.module_from_spec(spec_bp)
+            spec_bp.loader.exec_module(bpm)
+            rc_snap = bpm.snapshot(_dt.datetime(2026, 1, 1, 0, 0, 0))
+            rc_ver = bpm.verify()                       # 스냅 직후 → 정상(0)
+            mfp = box / "project" / "manifest.json"
+            _orig = mfp.read_text(encoding="utf-8")
+            mfp.write_text(_orig + "\n ", encoding="utf-8")   # 변조
+            rc_ver2 = bpm.verify()                      # 이상 감지 → 1
+            mfp.write_text(_orig, encoding="utf-8")     # 복구
+            check("T38 백업 스냅 + 무결성 변조 감지",
+                  rc_snap == 0 and rc_ver == 0 and rc_ver2 == 1)
+
+            # T39 — POST 라우터 가드: 없는 경로 404, 비-dict 본문 400
+            c404 = c400 = None
+            try:
+                wapi("/api/does-not-exist", {})
+            except urllib.error.HTTPError as e:
+                c404 = e.code
+            try:
+                req39 = ur.Request(f"http://127.0.0.1:{web_port}/api/check", data=b"[1,2]",
+                                   headers={"Content-Type": "application/json"})
+                opener.open(req39, timeout=10)
+            except urllib.error.HTTPError as e:
+                c400 = e.code
+            check("T39 POST 라우터 가드(없는 경로 404 · 비-dict 본문 400)",
+                  c404 == 404 and c400 == 400)
+
+            # T40 — 손상 장면 관용: /api/state 는 해당 장면만 스킵하고 생존,
+            #        SystemExit(die) 경로는 연결 절단 대신 400
+            sc1p = box / "project" / "scenes" / "SCENE-001.json"
+            sc1_orig = sc1p.read_text(encoding="utf-8")
+            sc1p.write_text('[{"scene_id":"SCENE-001"}]', encoding="utf-8")
+            stA, dA = wapi("/api/state")
+            skipped_ok = all(s.get("scene_id") != "SCENE-001" for s in dA.get("scenes", []))
+            cpf = None
+            try:
+                wapi("/api/preflight", {"scene_id": "SCENE-001"})
+            except urllib.error.HTTPError as e:
+                cpf = e.code
+            except Exception:
+                cpf = -1  # RemoteDisconnected 등 = 절단(실패)
+            sc1p.write_text(sc1_orig, encoding="utf-8")
+            check("T40 손상 장면 → state 스킵 생존 + SystemExit 경로 400(절단 아님)",
+                  stA == 200 and skipped_ok and cpf == 400)
         finally:
             web.terminate()
             mock.shutdown()

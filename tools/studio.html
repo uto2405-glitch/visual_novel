@@ -104,6 +104,23 @@ border-radius:8px;padding:9px 12px;font:inherit;font-size:13px;cursor:pointer;di
 #stage.uihidden #dlg,#stage.uihidden #stageBar{opacity:0;pointer-events:none}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
 clip:rect(0,0,0,0);white-space:nowrap;border:0}
+/* 회상 갤러리 */
+.galgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.galcard{position:relative;background:var(--panel);border:1px solid var(--line);
+border-radius:10px;overflow:hidden;cursor:pointer}
+.galcard img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block}
+.galcard .empty{width:100%;aspect-ratio:2/3;display:flex;align-items:center;justify-content:center;
+color:var(--sub);font-size:12px;text-align:center;padding:10px}
+.galcard .cap{padding:7px 9px;font-size:12px;color:var(--sub)}
+.galcard .fav{position:absolute;top:6px;right:6px;width:30px;height:30px;border-radius:50%;
+border:none;background:rgba(18,13,9,.6);color:#8b7d68;font-size:15px;cursor:pointer;line-height:30px;padding:0}
+.galcard .fav.on{color:var(--warn)}
+/* 시네마틱 오버레이(비네트+레터박스) */
+.vnfx{position:absolute;inset:0;pointer-events:none;z-index:1}
+.vnfx::after{content:"";position:absolute;inset:0;
+background:radial-gradient(125% 100% at 50% 45%,transparent 58%,rgba(0,0,0,.5) 100%)}
+.vnfx .lb{position:absolute;left:0;right:0;height:7%;background:#000}
+.vnfx .lb.top{top:0}.vnfx .lb.bot{bottom:0}
 [hidden]{display:none!important}
 @media(prefers-reduced-motion:reduce){#stageImg img{transition:none}}
 @media(prefers-reduced-motion:no-preference){.btn,nav button,.thumbs img{transition:all .15s}}
@@ -148,6 +165,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <button data-tab="check">검사</button>
 <div class="navlabel">감상</div>
 <button data-tab="viewer">뷰어</button>
+<button data-tab="gallery">갤러리</button>
 </nav>
 
 <section id="tab-story" class="on">
@@ -233,15 +251,31 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <button class="btn ghost" id="btnResume" hidden>이어보기</button></div>
 </section>
 
+<section id="tab-gallery">
+<div class="eyebrow">회상 · CG 갤러리</div>
+<p class="small" style="margin-bottom:10px">승인된 장면을 모아 봅니다. 썸네일을 누르면 <b>그 장면부터 감상</b>,
+★ 로 명장면을 모으면 그대로 <b>인화 후보</b>가 됩니다.</p>
+<div class="row" style="margin-bottom:12px">
+<label class="small"><input type="checkbox" id="galFavOnly"> 즐겨찾기만</label>
+<span class="small" id="galMsg"></span></div>
+<div id="galGrid" class="galgrid"></div>
+</section>
+
 <section id="tab-check">
 <div class="eyebrow">자동 검사 (SCORECARD A1~A8)</div>
+<div class="row">
 <button class="btn" id="btnCheck">전체 검사 실행</button>
+<button class="btn ghost" id="btnLint">연출 리듬 린터</button></div>
 <pre id="checkOut" style="margin-top:12px">아직 실행 전.</pre>
+<pre id="lintOut" style="margin-top:10px" hidden></pre>
+<p class="small" style="margin-top:6px">검사기(A1~A8)는 PASS/FAIL 을 만드는 필수 관문이고,
+연출 린터는 컷·감정·대사 리듬을 <b>자문</b>만 합니다(PASS/FAIL 아님).</p>
 </section>
 </main>
 
 <div id="stage" role="dialog" aria-modal="true" aria-label="비주얼 노벨 뷰어" tabindex="-1" aria-hidden="true">
 <div id="stageImg"></div>
+<div id="cinemaFx" class="vnfx" hidden><div class="lb top"></div><div class="lb bot"></div></div>
 <div id="stageClick"></div>
 <div id="stageBar"><span class="chip" id="stageProg"></span>
 <button class="vnbtn" id="btnAuto" title="자동 진행 (A)">자동</button>
@@ -266,6 +300,8 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <input type="range" id="setFs" min="14" max="26" step="1"></label>
 <label style="flex-direction:row;align-items:center;gap:8px">
 <input type="checkbox" id="setSkipAll"> 스킵이 안 읽은 대사도 건너뜀 (끄면 새 대사에서 자동 정지)</label>
+<label style="flex-direction:row;align-items:center;gap:8px">
+<input type="checkbox" id="setCinema"> 시네마틱 모드 (비네트 + 레터박스)</label>
 <p class="small">텍스트 속도 0 = 즉시 표시. 설정은 이 브라우저에 저장됩니다.</p>
 <button class="vnbtn" id="btnSetClose" style="align-self:flex-end">닫기</button></div>
 <div id="vnScenes" class="vnpanel" role="dialog" aria-modal="true" aria-label="장면 이동" hidden><h3>장면 이동</h3>
@@ -293,7 +329,7 @@ async function refresh(){S=await api("/api/state");
  $("chipModel").textContent="모델 "+(S.model&&S.model!=="TBD"?S.model:"미지정");
  $("chipModel").className="chip "+(S.model&&S.model!=="TBD"?"ok":"bad");
  if(!$("storyline").value)$("storyline").value=S.storyline||"";
- renderChat();renderScenes()}
+ renderChat();renderScenes();renderGallery()}
 function renderChat(){const box=$("chatlog");box.replaceChildren();
  for(const m of S.chat)box.appendChild(el("div","msg "+m.role,m.content));
  box.scrollTop=box.scrollHeight}
@@ -558,19 +594,45 @@ function sceneCard(sc){
  return card}
 function renderScenes(){const box=$("sceneList");box.replaceChildren();
  for(const sc of S.scenes)box.appendChild(sceneCard(sc))}
+// ---- 회상 갤러리 + 즐겨찾기 ----
+function renderGallery(){const grid=$("galGrid");if(!grid)return;grid.replaceChildren();
+ const fav=loadFav(),favOnly=$("galFavOnly").checked;
+ const list=S.scenes.filter(s=>s.status==="APPROVED"&&(!favOnly||fav.has(s.scene_id)));
+ if(!list.length){grid.appendChild(el("p","small",favOnly?"즐겨찾기한 장면이 없습니다.":"승인된 장면이 아직 없습니다 — 장면을 승인하면 여기 모입니다."));return}
+ for(const sc of list){const card=el("div","galcard");
+  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;card.appendChild(im)}
+  else card.appendChild(el("div","empty",sc.purpose||sc.scene_id));
+  card.appendChild(el("div","cap",(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id)));
+  card.onclick=()=>playFrom(sc.scene_id);
+  const star=el("button","fav"+(fav.has(sc.scene_id)?" on":""),"★");
+  star.setAttribute("aria-label","즐겨찾기(인화 후보)");star.title="즐겨찾기(인화 후보)";
+  star.onclick=(e)=>{e.stopPropagation();const f=loadFav();
+   if(f.has(sc.scene_id))f.delete(sc.scene_id);else f.add(sc.scene_id);saveFav(f);
+   $("galMsg").textContent="즐겨찾기 "+f.size+"개 (인화 후보)";renderGallery()};
+  card.appendChild(star);grid.appendChild(card)}}
+async function playFrom(sceneId){await refresh();
+ const idx=S.scenes.findIndex(s=>s.scene_id===sceneId);   // refresh 후 재검색 — stale 인덱스 방지
+ if(idx<0){alert("장면을 찾을 수 없습니다.");return}
+ startPlayback(false,idx)}
+$("galFavOnly").onchange=renderGallery;
 
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));
  document.querySelectorAll("section").forEach(x=>x.classList.remove("on"));
- b.classList.add("on");$("tab-"+b.dataset.tab).classList.add("on")});
+ b.classList.add("on");$("tab-"+b.dataset.tab).classList.add("on");
+ if(b.dataset.tab==="gallery")renderGallery()});
 $("btnCheck").onclick=async()=>{const d=await api("/api/check",{});
  $("checkOut").textContent=d.output};
+$("btnLint").onclick=async()=>{const o=$("lintOut");o.hidden=false;o.textContent="점검 중…";
+ try{const d=await api("/api/lint",{});
+  o.textContent=d.findings.length?d.summary+"\n\n"+d.findings.map(f=>(f.level==="warn"?"⚠ ":"· ")+"["+f.scene_id+"] "+f.message).join("\n"):"연출 리듬 양호 — 특이사항 없음"}
+ catch(e){o.textContent="실패: "+e.message}};
 // ---- 비주얼 노벨 뷰어 (VN 런타임) ----
 let vi=0,di=0,ended=false;
 let revealing=false,revealTimer=null,fullText="",autoTimer=null;
 let autoOn=false,skipOn=false;
 let history=[],historyKeys=new Set();
-const VN={textSpeed:26,autoDelay:1500,fs:17,skipAll:false};
+const VN={textSpeed:26,autoDelay:1500,fs:17,skipAll:false,cinema:false};
 const REDUCE=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const NAME_COLORS=["#5FB39A","#D9A441","#C77DBB","#6FA8DC","#E07A5F","#84C18B","#B58BE0","#E0A458"];
 function charColor(id){if(!id)return null;let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;
@@ -591,12 +653,20 @@ function loadVN(){try{const s=JSON.parse(localStorage.getItem("vn:settings")||"{
  if(typeof s.textSpeed==="number")VN.textSpeed=s.textSpeed;
  if(typeof s.autoDelay==="number")VN.autoDelay=s.autoDelay;
  if(typeof s.fs==="number")VN.fs=s.fs;
- if(typeof s.skipAll==="boolean")VN.skipAll=s.skipAll}catch(e){}applyFs()}
+ if(typeof s.skipAll==="boolean")VN.skipAll=s.skipAll;
+ if(typeof s.cinema==="boolean")VN.cinema=s.cinema}catch(e){}applyFs()}
 function saveVN(){try{localStorage.setItem("vn:settings",JSON.stringify(VN))}catch(e){}applyFs()}
 const posKey=()=>"vn:pos:"+(S.title||"_");
 function savePos(){try{localStorage.setItem(posKey(),JSON.stringify({vi,di}))}catch(e){}}
 function loadPos(){try{return JSON.parse(localStorage.getItem(posKey())||"null")}catch(e){return null}}
 function clearPos(){try{localStorage.removeItem(posKey())}catch(e){}}
+const histKey=()=>"vn:hist:"+(S.title||"_");
+function saveHistory(){try{localStorage.setItem(histKey(),JSON.stringify(history.slice(-500)))}catch(e){}}
+function loadHistory(){try{const h=JSON.parse(localStorage.getItem(histKey())||"[]");return Array.isArray(h)?h:[]}catch(e){return []}}
+const favKey=()=>"vn:fav:"+(S.title||"_");
+function loadFav(){try{return new Set(JSON.parse(localStorage.getItem(favKey())||"[]"))}catch(e){return new Set()}}
+function saveFav(set){try{localStorage.setItem(favKey(),JSON.stringify([...set]))}catch(e){}}
+function applyCinema(){const fx=$("cinemaFx");if(fx)fx.hidden=!VN.cinema}
 
 // 이미지: 크로스페이드 + 다음 장면 프리로드
 function renderImage(){const sc=S.scenes[vi],box=$("stageImg"),url=sc&&sc.image_url;
@@ -615,7 +685,7 @@ function renderImage(){const sc=S.scenes[vi],box=$("stageImg"),url=sc&&sc.image_
  const nx=S.scenes[vi+1];if(nx&&nx.image_url){const p=new Image();p.src=nx.image_url}}
 
 function recordHistory(name,text,color){const k=vi+":"+di;if(historyKeys.has(k))return;
- historyKeys.add(k);history.push({name,text,color,vi,di})}
+ historyKeys.add(k);history.push({name,text,color,vi,di});saveHistory()}
 
 function typeText(text){clearInterval(revealTimer);fullText=text;const t=$("dlgText");
  if(REDUCE||skipOn||VN.textSpeed<=0){t.textContent=text;t.scrollTop=t.scrollHeight;revealing=false;onShown();return}
@@ -660,7 +730,8 @@ function advance(step){
 
 function endPlayback(){ended=true;clearTimeout(autoTimer);clearInterval(revealTimer);
  setAuto(false);setSkip(false);const dlg=$("dlg");dlg.classList.remove("top");dlg.classList.add("narration");
- $("dlgName").style.display="none";$("dlgText").textContent="— 끝 — (클릭하면 닫힙니다)";
+ $("dlgName").style.display="none";
+ $("dlgText").textContent="— 끝 —"+(S.title?"\n\n『"+S.title+"』":"")+"\n\n(클릭하면 닫힙니다)";
  $("stageProg").textContent=S.scenes.length+" / "+S.scenes.length;clearPos()}
 
 function exitStage(){clearTimeout(autoTimer);clearInterval(revealTimer);
@@ -712,20 +783,25 @@ function setSkip(on){skipOn=on;if(on)autoOn=false;
 function syncSettings(){$("setTextSpeed").value=VN.textSpeed;
  $("setTextSpeedVal").textContent=VN.textSpeed<=0?"즉시":VN.textSpeed+"ms/자";
  $("setAutoDelay").value=VN.autoDelay;$("setAutoDelayVal").textContent=(VN.autoDelay/1000).toFixed(1)+"초";
- $("setFs").value=VN.fs;$("setFsVal").textContent=VN.fs+"px";$("setSkipAll").checked=VN.skipAll}
+ $("setFs").value=VN.fs;$("setFsVal").textContent=VN.fs+"px";$("setSkipAll").checked=VN.skipAll;
+ $("setCinema").checked=VN.cinema}
 $("setTextSpeed").oninput=e=>{VN.textSpeed=+e.target.value;syncSettings();saveVN()};
 $("setAutoDelay").oninput=e=>{VN.autoDelay=+e.target.value;syncSettings();saveVN()};
 $("setFs").oninput=e=>{VN.fs=+e.target.value;syncSettings();saveVN()};
 $("setSkipAll").onchange=e=>{VN.skipAll=e.target.checked;saveVN()};
+$("setCinema").onchange=e=>{VN.cinema=e.target.checked;saveVN();applyCinema()};
 
 // 시작/재개
 let _returnFocus=null;
 const bgNodes=()=>[...document.querySelectorAll("body > *")].filter(n=>n.id!=="stage");
 function setUiHidden(h){$("stage").classList.toggle("uihidden",h);$("stageBar").inert=h}
-function startPlayback(resume){if(!S.scenes.length){alert("장면이 없습니다. 먼저 장면을 구성하세요.");return}
- loadSeen();history=[];historyKeys=new Set();ended=false;
+function startPlayback(resume,at){if(!S.scenes.length){alert("장면이 없습니다. 먼저 장면을 구성하세요.");return}
+ loadSeen();ended=false;applyCinema();
  const pos=resume?loadPos():null;
- vi=pos&&pos.vi<S.scenes.length?pos.vi:0;di=pos&&pos.di<dlen(S.scenes[vi])?pos.di:0;
+ if(pos){history=loadHistory();historyKeys=new Set(history.map(h=>h.vi+":"+h.di))}
+ else{history=[];historyKeys=new Set();saveHistory()}
+ if(typeof at==="number"&&at>=0&&at<S.scenes.length){vi=at;di=0}   // 갤러리: 그 장면부터
+ else{vi=pos&&pos.vi<S.scenes.length?pos.vi:0;di=pos&&pos.di<dlen(S.scenes[vi])?pos.di:0}
  setAuto(false);setSkip(false);closePanels();setUiHidden(false);
  _returnFocus=document.activeElement;
  bgNodes().forEach(n=>{n.inert=true});   // 배경 비활성 — 포커스/스크린리더 트랩

@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import advance_scene as adv  # noqa: E402
 import make_grok_input  # noqa: E402
 import print_preflight  # noqa: E402
+import scene_lint  # noqa: E402
 import vn_compose  # noqa: E402
 import xai_client  # noqa: E402
 
@@ -73,11 +74,22 @@ def scene_print(sc: dict) -> dict | None:
             "long_in": r["max_long_in_at_target"]}
 
 
+def _load_json_safe(path: Path) -> dict | None:
+    """손상/비-dict JSON 은 None — 파일 하나가 UI 전체(/api/state)를 죽이지 못하게 한다."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def state() -> dict:
-    mf = adv.load(MANIFEST) if MANIFEST.exists() else None
+    mf = _load_json_safe(MANIFEST) if MANIFEST.exists() else None
     scenes = []
     for f in (sorted(adv.SCENES.glob("SCENE-*.json")) if adv.SCENES.exists() else []):
-        sc = adv.load(f)
+        sc = _load_json_safe(f)
+        if sc is None:
+            continue  # 손상 장면은 건너뛰고 나머지 UI 는 살린다
         scenes.append({
             "scene_id": sc.get("scene_id"), "scene_order": sc.get("scene_order"),
             "status": sc.get("status"), "purpose": sc.get("purpose", ""),
@@ -194,6 +206,109 @@ def select_image(sid: str, rel: str) -> dict:
             "fails": "\n".join(l for l in out.splitlines() if "FAIL" in l)}
 
 
+# ---------------------------------------------------------------- POST 라우팅
+# 각 핸들러는 요청 body(dict) 를 받아 응답 dict 를 반환하거나 RuntimeError 를 던진다.
+def r_chat(b):
+    return {"reply": do_chat(b.get("messages", []))}
+
+
+def r_storyline(b):
+    with adv.WRITE_LOCK:
+        STORY_DIR.mkdir(parents=True, exist_ok=True)
+        (STORY_DIR / "storyline.md").write_text(b.get("text", ""), encoding="utf-8")
+    return {"ok": True}
+
+
+def r_compose(b):
+    return vn_compose.compose_scenes(int(b.get("count", 10)), bool(b.get("force")))
+
+
+def r_compose_input(b):
+    return {"instruction": vn_compose.build_compose_instruction(int(b.get("count", 10)))}
+
+
+def r_compose_manual(b):
+    exp = int(b["count"]) if str(b.get("count", "")).strip() else None
+    return vn_compose.compose_from_json(b.get("text", ""), bool(b.get("force")), expected=exp)
+
+
+def r_grok_input(b):
+    _require_scene(b.get("scene_id"))
+    return {"text": make_grok_input.build_input(b["scene_id"])}
+
+
+def r_set_prompt(b):
+    return set_scene_prompt(b.get("scene_id"), b.get("text", ""))
+
+
+def r_preflight(b):
+    _require_scene(b.get("scene_id"))
+    sc = adv.load(adv.scene_path(b["scene_id"]))
+    sel = (sc.get("assets", {}).get("selected_image") or "").strip()
+    if not sel:
+        raise RuntimeError("선택된 이미지가 없습니다. 먼저 이미지를 선택하세요.")
+    size = print_preflight.image_size(ROOT / sel)
+    if not size:
+        return {"px": None, "rows": [], "printable": None}
+    return print_preflight.preflight_image(size[0], size[1], int(b.get("dpi", 300)))
+
+
+def r_export(b):
+    # 서버는 Pillow 없이도 뜨도록 지연 임포트
+    try:
+        import print_export
+    except Exception:
+        raise RuntimeError("인화 내보내기는 Pillow 가 필요합니다:  python -m pip install Pillow")
+    inc_all = bool(b.get("all"))
+    if b.get("contact_only"):
+        made = print_export.contact_sheet(print_export.collect(None, inc_all))
+        return {"contact": bool(made), "count": 0}
+    try:
+        short_in, long_in = print_export.parse_size(str(b.get("size", "5x7")))
+    except SystemExit as e:
+        raise RuntimeError(str(e))
+    summ = print_export.export_batch(
+        short_in, long_in, int(b.get("dpi", 300)), float(b.get("bleed", 0)),
+        str(b.get("anchor", "center")), inc_all, None, bool(b.get("skip_upscale")))
+    if b.get("contact"):
+        print_export.contact_sheet(print_export.collect(None, inc_all))
+    return {"count": summ["count"], "dir": summ["dir"], "upscaled": summ["upscaled"],
+            "skipped": summ["skipped"], "missing": summ["missing"]}
+
+
+def r_register(b):
+    return register_images(b["scene_id"])
+
+
+def r_select(b):
+    return select_image(b["scene_id"], b["image"])
+
+
+def r_approve(b):
+    _require_scene(b.get("scene_id"))
+    adv.do_approve(b["scene_id"])
+    return {"status": "APPROVED"}
+
+
+def r_check(b):
+    code, out = adv.run_checker()
+    return {"pass": code == 0, "output": out}
+
+
+def r_lint(b):
+    return scene_lint.lint_scenes()
+
+
+POST_ROUTES = {
+    "/api/chat": r_chat, "/api/storyline": r_storyline,
+    "/api/compose": r_compose, "/api/compose-input": r_compose_input,
+    "/api/compose-manual": r_compose_manual, "/api/grok-input": r_grok_input,
+    "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
+    "/api/register-images": r_register, "/api/select": r_select,
+    "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
+}
+
+
 # ---------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -215,6 +330,15 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             self._json({"error": "forbidden host"}, 403)
             return
+        try:
+            self._get()
+        except (Exception, SystemExit) as exc:  # 어떤 실패도 응답 없는 절단 대신 JSON 오류로
+            try:
+                self._json({"error": f"서버 처리 실패: {exc}"}, 500)
+            except OSError:
+                pass
+
+    def _get(self):
         if self.path == "/" or self.path.startswith("/?"):
             try:
                 body = STUDIO_HTML.read_bytes()
@@ -252,80 +376,22 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             self._json({"error": "forbidden host"}, 403)
             return
+        handler = POST_ROUTES.get(self.path)
+        if handler is None:
+            self._json({"error": "not found"}, 404)
+            return
         try:
             length = int(self.headers.get("Content-Length") or 0)
+            if length > 10_000_000:
+                raise RuntimeError("요청 본문이 너무 큽니다(10MB 초과).")
             body = json.loads(self.rfile.read(length) or b"{}")
-            if self.path == "/api/chat":
-                self._json({"reply": do_chat(body.get("messages", []))})
-            elif self.path == "/api/storyline":
-                with adv.WRITE_LOCK:
-                    STORY_DIR.mkdir(parents=True, exist_ok=True)
-                    (STORY_DIR / "storyline.md").write_text(body.get("text", ""), encoding="utf-8")
-                self._json({"ok": True})
-            elif self.path == "/api/compose":
-                self._json(vn_compose.compose_scenes(int(body.get("count", 10)), bool(body.get("force"))))
-            elif self.path == "/api/compose-input":
-                # 수동 모드 ①: grok.com 에 붙여넣을 장면구성 지시문 (API 불필요)
-                self._json({"instruction": vn_compose.build_compose_instruction(int(body.get("count", 10)))})
-            elif self.path == "/api/compose-manual":
-                # 수동 모드 ②: grok.com 이 준 JSON 배열을 붙여넣어 장면 생성 (API 불필요)
-                exp = int(body["count"]) if str(body.get("count", "")).strip() else None
-                self._json(vn_compose.compose_from_json(body.get("text", ""), bool(body.get("force")), expected=exp))
-            elif self.path == "/api/grok-input":
-                # 수동 모드: 장면별 이미지 프롬프트 지시서 (make_grok_input 과 동일)
-                _require_scene(body.get("scene_id"))
-                self._json({"text": make_grok_input.build_input(body["scene_id"])})
-            elif self.path == "/api/set-prompt":
-                # 수동 모드: grok.com 이 준 이미지 프롬프트 출력을 장면에 저장
-                self._json(set_scene_prompt(body.get("scene_id"), body.get("text", "")))
-            elif self.path == "/api/preflight":
-                # 인화 프리플라이트: 선택 이미지의 규격별 DPI/크롭 판정
-                _require_scene(body.get("scene_id"))
-                sc = adv.load(adv.scene_path(body["scene_id"]))
-                sel = (sc.get("assets", {}).get("selected_image") or "").strip()
-                if not sel:
-                    raise RuntimeError("선택된 이미지가 없습니다. 먼저 이미지를 선택하세요.")
-                size = print_preflight.image_size(ROOT / sel)
-                if not size:
-                    self._json({"px": None, "rows": [], "printable": None})
-                else:
-                    self._json(print_preflight.preflight_image(size[0], size[1], int(body.get("dpi", 300))))
-            elif self.path == "/api/export":
-                # 인화 마스터 익스포트(Pillow 필요) — 서버는 Pillow 없이도 뜨도록 지연 임포트
-                try:
-                    import print_export
-                except Exception:
-                    raise RuntimeError("인화 내보내기는 Pillow 가 필요합니다:  python -m pip install Pillow")
-                inc_all = bool(body.get("all"))
-                if body.get("contact_only"):
-                    made = print_export.contact_sheet(print_export.collect(None, inc_all))
-                    self._json({"contact": bool(made), "count": 0})
-                else:
-                    try:
-                        short_in, long_in = print_export.parse_size(str(body.get("size", "5x7")))
-                    except SystemExit as e:
-                        raise RuntimeError(str(e))
-                    summ = print_export.export_batch(
-                        short_in, long_in, int(body.get("dpi", 300)), float(body.get("bleed", 0)),
-                        str(body.get("anchor", "center")), inc_all, None, bool(body.get("skip_upscale")))
-                    if body.get("contact"):
-                        print_export.contact_sheet(print_export.collect(None, inc_all))
-                    self._json({"count": summ["count"], "dir": summ["dir"], "upscaled": summ["upscaled"],
-                                "skipped": summ["skipped"], "missing": summ["missing"]})
-            elif self.path == "/api/register-images":
-                self._json(register_images(body["scene_id"]))
-            elif self.path == "/api/select":
-                self._json(select_image(body["scene_id"], body["image"]))
-            elif self.path == "/api/approve":
-                _require_scene(body.get("scene_id"))
-                adv.do_approve(body["scene_id"])
-                self._json({"status": "APPROVED"})
-            elif self.path == "/api/check":
-                code, out = adv.run_checker()
-                self._json({"pass": code == 0, "output": out})
-            else:
-                self._json({"error": "not found"}, 404)
-        except Exception as exc:  # 실패 사유를 그대로 UI 로
+            if not isinstance(body, dict):
+                raise RuntimeError("요청 본문이 JSON 객체가 아닙니다.")
+            self._json(handler(body))
+        except SystemExit as exc:
+            # CLI 용 die()/sys.exit 가 핸들러 안에서 터져도 응답 없는 절단 대신 400 으로
+            self._json({"error": f"도구가 중단됨(코드 {exc.code}) — 장면/매니페스트 파일 상태를 확인하세요."}, 400)
+        except Exception as exc:  # 실패 사유를 그대로 UI 로 (검사 실패·잘못된 입력 등)
             self._json({"error": str(exc)}, 400)
 
 
