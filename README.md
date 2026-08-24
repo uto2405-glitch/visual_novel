@@ -87,6 +87,7 @@ SuperGrok 구독과 xAI API 는 **별도 결제 트랙**이다. 구독에 API �
 | 인화 규격 판정 | `python tools/print_preflight.py` (선택 이미지가 실물 인화에 적합한지 규격별 DPI/크롭) |
 | 인화 마스터 굽기 | `python tools/print_export.py --size 5x7 --contact` (Pillow 필요, output/print/ 에 TIFF+JPEG) |
 | 연출 리듬 자문 | `python tools/scene_lint.py` (컷·감정·대사 리듬 경고 — PASS/FAIL 아님) |
+| 인물과 대화(로컬 LLM) | 서버: `local_llm/runtime/serve.ps1` → 스튜디오 [대화] 탭 / CLI `python tools/local_llm.py "지혜야 안녕"` |
 | 백업·무결성 | `python tools/backup_project.py snapshot` / `verify` (project zip + sha256, 비트로트 탐지) |
 | 자가진단(수정 후 회귀) | `python tools/selftest.py` |
 

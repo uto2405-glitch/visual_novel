@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import advance_scene as adv  # noqa: E402
+import local_llm  # noqa: E402
 import make_grok_input  # noqa: E402
 import print_preflight  # noqa: E402
 import scene_lint  # noqa: E402
@@ -305,6 +306,24 @@ def r_lint(b):
     return scene_lint.lint_scenes()
 
 
+def r_talk_status(b):
+    return local_llm.status()
+
+
+def r_talk(b):
+    """로컬 LLM 으로 인물과 실제 대화. 인물 페르소나는 매니페스트에서 생성."""
+    msgs = b.get("messages", []) if isinstance(b.get("messages"), list) else []
+    sysmsg, meta = local_llm.persona_prompt(b.get("character_id"))
+    window = msgs[-16:]   # 최근 대화만 전송(로컬 컨텍스트 관리)
+    reply = local_llm.chat([{"role": "system", "content": sysmsg}] + window)
+    with adv.WRITE_LOCK:
+        STORY_DIR.mkdir(parents=True, exist_ok=True)
+        (STORY_DIR / f"talk_{meta['character_id']}.json").write_text(
+            json.dumps({"messages": msgs + [{"role": "assistant", "content": reply}]},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"reply": reply, "name": meta["name"]}
+
+
 def r_upload_image(b):
     """폰 등에서 생성한 이미지를 base64 로 업로드 → images/raw/<scene>/ 저장 후 자동 스캔.
 
@@ -358,6 +377,7 @@ POST_ROUTES = {
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/upload-image": r_upload_image,
+    "/api/talk": r_talk, "/api/talk-status": r_talk_status,
 }
 
 

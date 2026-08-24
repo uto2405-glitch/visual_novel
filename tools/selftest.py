@@ -677,6 +677,22 @@ def main() -> int:
                 code_bad = e.code
             check("T42 폰 이미지 업로드(base64)+자동등록 · 잘못된 확장자 400",
                   saved_ok and code_bad == 400)
+
+            # T43 — 로컬 LLM 대화: 서버 꺼짐 시 status 우아하게 off + 인물 페르소나 생성
+            spec_ll = importlib.util.spec_from_file_location("ll_box", str(box / "tools" / "local_llm.py"))
+            llm = importlib.util.module_from_spec(spec_ll)
+            spec_ll.loader.exec_module(llm)
+            _ll_bak = os.environ.get("LOCAL_LLM_URL")
+            os.environ["LOCAL_LLM_URL"] = "http://127.0.0.1:59999/v1"   # 죽은 포트
+            stll = llm.status()
+            sysmsg, meta = llm.persona_prompt()
+            if _ll_bak is None:
+                os.environ.pop("LOCAL_LLM_URL", None)
+            else:
+                os.environ["LOCAL_LLM_URL"] = _ll_bak
+            check("T43 로컬 LLM: 서버 off→status.up=False + 페르소나 생성",
+                  stll.get("up") is False and isinstance(sysmsg, str)
+                  and meta.get("name") and meta["name"] in sysmsg)
         finally:
             web.terminate()
             mock.shutdown()

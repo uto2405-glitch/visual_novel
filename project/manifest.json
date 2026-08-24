@@ -22,6 +22,11 @@
     "aspect_ratio": "2:3",
     "min_long_edge_px": 1024
   },
+  "talk": {
+    "character_id": "CHAR-001",
+    "relationship": "다정한 여자친구",
+    "base_url": "http://127.0.0.1:8080/v1"
+  },
   "workflow": {
     "human_gates": ["story", "visual_reference", "scene_plan", "image", "delivery"],
     "scene_batch_size": 1

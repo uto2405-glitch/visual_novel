@@ -183,6 +183,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <div class="navlabel">감상</div>
 <button data-tab="viewer">뷰어</button>
 <button data-tab="gallery">갤러리</button>
+<button data-tab="talk">대화</button>
 </nav>
 
 <section id="tab-story" class="on">
@@ -270,6 +271,20 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <button class="btn ghost" id="btnScrollView">세로 스크롤로 읽기</button>
 <button class="btn ghost" id="btnExportViewer">감상본 내보내기 (HTML)</button></div>
 <p class="small" id="exportViewerMsg" style="margin-top:8px"></p>
+</section>
+
+<section id="tab-talk">
+<div class="eyebrow">인물과 대화 · 로컬 LLM</div>
+<p class="small" style="margin-bottom:8px">작품의 인물과 실제로 대화합니다. 로컬 LLM(내 PC) 을 쓰므로 원고가 밖으로 나가지 않습니다.
+<span id="talkStatus" class="chip">확인 중…</span></p>
+<div id="talklog" style="height:52vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);
+border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px"></div>
+<div class="row" style="margin-top:10px">
+<textarea id="talkInput" rows="2" placeholder="인물에게 말을 걸어보세요 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+<button class="btn" id="btnTalk">전송</button>
+<button class="btn ghost" id="btnTalkClear">대화 비우기</button></div>
+<p class="small" style="margin-top:6px">서버 켜기: <b>local_llm/runtime/serve.ps1</b> · 품질↑는 9B/35B 모델로 교체
+(<b>serve.ps1 -Model "models\Qwen3.5-9B-Q4_K_M.gguf"</b>).</p>
 </section>
 
 <section id="tab-gallery">
@@ -668,6 +683,26 @@ async function playFrom(sceneId){await refresh();
  startPlayback(false,idx)}
 $("galFavOnly").onchange=renderGallery;
 
+// ---- 인물과 대화 (로컬 LLM) ----
+let talkChat=[];
+function renderTalk(){const box=$("talklog");box.replaceChildren();
+ for(const m of talkChat)box.appendChild(el("div","msg "+m.role,m.content));
+ box.scrollTop=box.scrollHeight}
+async function talkStatus(){const c=$("talkStatus");
+ try{const d=await api("/api/talk-status",{});
+  if(d.up){c.textContent="로컬 LLM 연결됨";c.className="chip ok"}
+  else{c.textContent="로컬 LLM 꺼짐 — serve.ps1 실행 필요";c.className="chip bad"}}
+ catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}}
+async function talkSend(){const t=$("talkInput").value.trim();if(!t)return;
+ $("talkInput").value="";talkChat.push({role:"user",content:t});renderTalk();
+ const wait=el("div","msg assistant","…");$("talklog").appendChild(wait);$("talklog").scrollTop=1e9;
+ try{const d=await api("/api/talk",{messages:talkChat});
+  talkChat.push({role:"assistant",content:d.reply});renderTalk()}
+ catch(e){wait.textContent="(대화 실패) "+e.message}}
+$("btnTalk").onclick=talkSend;
+$("btnTalkClear").onclick=()=>{talkChat=[];renderTalk()};
+$("talkInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();talkSend()}});
+
 // ---- 세로 스크롤 웹툰 리딩 + 감상본 내보내기 ----
 function openScrollView(){const c=$("svCuts");c.replaceChildren();
  $("svTitle").textContent=S.title||"작품";
@@ -694,7 +729,8 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));
  document.querySelectorAll("section").forEach(x=>x.classList.remove("on"));
  b.classList.add("on");$("tab-"+b.dataset.tab).classList.add("on");
- if(b.dataset.tab==="gallery")renderGallery()});
+ if(b.dataset.tab==="gallery")renderGallery();
+ if(b.dataset.tab==="talk")talkStatus()});
 $("btnCheck").onclick=async()=>{const d=await api("/api/check",{});
  $("checkOut").textContent=d.output};
 $("btnLint").onclick=async()=>{const o=$("lintOut");o.hidden=false;o.textContent="점검 중…";
