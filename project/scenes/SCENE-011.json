@@ -10,7 +10,7 @@
     "CHAR-002"
   ],
   "props": [],
-  "purpose": "오해가 풀리고 한 걸음의 간격이 사라진다 (호감 엔딩)",
+  "purpose": "오해가 풀리고 한 걸음의 간격이 사라진다",
   "action_beat": "지혜가 먼저 웃으며 팔짱을 낀다",
   "emotion": "안도와 설렘",
   "camera": {
@@ -44,6 +44,7 @@
     }
   ],
   "ending": true,
+  "ending_label": "호감 엔딩",
   "assets": {
     "raw_images": [],
     "selected_image": ""

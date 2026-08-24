@@ -49,8 +49,12 @@ border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
 border-radius:50%;width:52px;height:52px;display:flex;align-items:center;justify-content:center;
 font-weight:800;transform:rotate(-9deg);font-size:13px;opacity:.92}
 .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.thumbs img{width:96px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--line);cursor:pointer}
+.thumbs img{width:96px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--line);cursor:pointer;display:block}
 .thumbs img.sel{border-color:var(--jade)}
+/* 후보 썸네일은 button — 키보드 Tab·Enter 로도 고를 수 있어야 한다 */
+.thumbs button{padding:0;border:0;background:none;line-height:0;border-radius:6px;cursor:pointer}
+.thumbs button img{pointer-events:none}
+.thumbs button[aria-pressed=true] img{border-color:var(--jade)}
 pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;
 white-space:pre-wrap;color:var(--sub);font-size:12.5px}
 .small{color:var(--sub);font-size:12px}
@@ -75,7 +79,7 @@ box-shadow:0 8px 30px rgba(0,0,0,.5);cursor:pointer;z-index:2}
 padding:2px 12px;border-radius:999px;margin-bottom:7px;background:var(--jade-d)}
 #dlgText{font-size:var(--dlg-fs,17px);line-height:1.6;min-height:48px;white-space:pre-wrap;
 max-height:38vh;overflow-y:auto;overflow-wrap:anywhere;word-break:keep-all;line-break:strict}
-#dlgHint{margin-top:6px;text-align:right;opacity:.55;font-size:11px;font-style:normal}
+#dlgHint{margin-top:6px;text-align:right;opacity:.78;font-size:11.5px;font-style:normal}
 #stageBar{position:absolute;top:12px;right:14px;display:flex;gap:6px;z-index:3;align-items:center}
 .vnbtn{background:rgba(30,24,18,.72);color:var(--ink);border:1px solid var(--line);
 border-radius:8px;padding:6px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
@@ -112,8 +116,12 @@ border-radius:10px;overflow:hidden;cursor:pointer}
 .galcard .empty{width:100%;aspect-ratio:2/3;display:flex;align-items:center;justify-content:center;
 color:var(--sub);font-size:12px;text-align:center;padding:10px}
 .galcard .cap{padding:7px 9px;font-size:12px;color:var(--sub)}
-.galcard .fav{position:absolute;top:6px;right:6px;width:30px;height:30px;border-radius:50%;
-border:none;background:rgba(18,13,9,.6);color:#8b7d68;font-size:15px;cursor:pointer;line-height:30px;padding:0}
+/* 카드 본체를 button 으로 — 중첩 button 이 되지 않도록 ★/▶ 는 형제로 띄운다 */
+.galcard .galmain{display:block;width:100%;padding:0;border:0;background:none;
+color:inherit;font:inherit;text-align:left;cursor:pointer}
+.galcard .fav{position:absolute;top:6px;right:6px;width:40px;height:40px;border-radius:50%;
+border:none;background:rgba(18,13,9,.66);color:#B4A48C;font-size:17px;cursor:pointer;
+line-height:40px;padding:0;z-index:2}
 .galcard .fav.on{color:var(--warn)}
 /* 분기 엔진: 호감도 미터 + 선택지 */
 #affMeter{background:rgba(196,61,43,.22);border-color:var(--seal);color:#F2C0B6;font-weight:700}
@@ -219,7 +227,7 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 .sceneItem .thx{border:1px dashed var(--line)}
 .sceneItem .tx{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sceneItem .rd{flex-shrink:0;font-size:11px;color:var(--jade)}
-.sceneItem .rd.no{color:var(--sub);opacity:.55}
+.sceneItem .rd.no{color:var(--sub);opacity:.82}
 .sceneItem.here{border-color:var(--jade);background:var(--line)}
 /* ---- 72 · 갤러리 라이트박스 ---- */
 #lightbox{position:fixed;inset:0;z-index:12;background:rgba(6,5,4,.95);
@@ -231,13 +239,27 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
  bottom:calc(12px + env(safe-area-inset-bottom))}
 #lbClose{position:absolute;top:calc(12px + env(safe-area-inset-top));
  right:calc(14px + env(safe-area-inset-right))}
-.galcard .play{position:absolute;top:6px;left:6px;width:30px;height:30px;border-radius:50%;
- border:none;background:rgba(18,13,9,.6);color:var(--jade);font-size:13px;cursor:pointer;
- line-height:30px;padding:0}
+.galcard .play{position:absolute;top:6px;left:6px;width:40px;height:40px;border-radius:50%;
+ border:none;background:rgba(18,13,9,.66);color:var(--jade);font-size:15px;cursor:pointer;
+ line-height:40px;padding:0;z-index:2}
 /* ---- 90 · LAN 접속 QR ---- */
 #qrBox{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px}
 #qrCanvas{background:#fff;border-radius:8px;image-rendering:pixelated}
 #lanAddr{font-size:clamp(15px,3.4vw,20px);font-weight:800;word-break:break-all}
+/* ---- 내보낸 파일 받기(폰) ---- */
+#dlList{margin-top:10px;display:flex;flex-direction:column;gap:2px;max-height:46vh;overflow-y:auto}
+.dlrow{display:flex;gap:10px;align-items:baseline;justify-content:space-between;
+ padding:9px 4px;border-bottom:1px solid var(--line)}
+.dlrow a{color:var(--ink);word-break:break-all;min-height:22px}
+.dlrow a:hover,.dlrow a:focus-visible{color:var(--jade)}
+.dllink{display:inline-block;color:var(--jade);font-weight:700;margin-left:8px;
+ padding:4px 2px;min-height:24px}
+/* ---- PIN 재인증 안내(401 복구) ---- */
+#authGate{position:fixed;inset:0;z-index:20;background:rgba(8,6,4,.92);
+ display:flex;align-items:center;justify-content:center;padding:22px}
+#authGate .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+ padding:20px;max-width:460px;display:flex;flex-direction:column;gap:12px}
+#authGate h2{font-size:16px;font-weight:800}
 /* ---- 88 · safe-area(노치·홈바) — 대사창/버튼이 가려지지 않게 (마지막에 두어 우선) ---- */
 body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
 #dlg{bottom:calc(26px + env(safe-area-inset-bottom))}
@@ -253,9 +275,9 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <header><h1>웹툰 스튜디오</h1><span class="chip" id="chipTitle"></span>
 <span class="chip" id="chipKey"></span><span class="chip" id="chipModel"></span></header>
 <main>
-<nav>
+<nav aria-label="작업 단계">
 <div class="navlabel">소설 만들기</div>
-<button data-tab="story" class="on">스토리</button>
+<button data-tab="story" class="on" aria-current="page">스토리</button>
 <button data-tab="scenes">장면</button>
 <button data-tab="check">검사</button>
 <div class="navlabel">감상</div>
@@ -271,11 +293,13 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 좋은 아이디어가 나오면 오른쪽 스토리라인에 정리하세요.</p>
 <div id="chatlog"></div>
 <div class="row" style="margin-top:10px">
-<textarea id="chatInput" rows="2" placeholder="이야기 아이디어를 적고 Enter (줄바꿈: Shift+Enter)"></textarea>
+<textarea id="chatInput" rows="2" aria-label="로컬 LLM 에게 보낼 메시지"
+ placeholder="이야기 아이디어를 적고 Enter (줄바꿈: Shift+Enter)"></textarea>
 <button class="btn" id="btnSend">전송</button></div>
 </div><div>
 <div class="eyebrow">스토리라인 (장면 구성의 입력)</div>
-<textarea id="storyline" rows="16" placeholder="확정된 스토리라인을 여기에 정리"></textarea>
+<textarea id="storyline" rows="16" aria-label="스토리라인"
+ placeholder="확정된 스토리라인을 여기에 정리"></textarea>
 <div class="row" style="margin-top:8px">
 <button class="btn ghost" id="btnPull">마지막 답변 붙이기</button>
 <button class="btn" id="btnSaveStory">스토리라인 저장</button></div>
@@ -283,10 +307,10 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <details style="margin-top:12px">
 <summary class="small">외부 챗 AI 프롬프트 틀 (예비) — 로컬 LLM 대신 grok.com 등에 붙여넣을 때</summary>
 <div class="row" style="margin-top:8px">
-<select id="frameSel" style="flex:1"></select>
+<select id="frameSel" style="flex:1" aria-label="프롬프트 틀 고르기"></select>
 <button class="btn ghost" id="btnFrameCopy">복사</button>
 <button class="btn ghost" id="btnFrameChat">채팅칸에 넣기</button></div>
-<textarea id="frameText" rows="13" style="margin-top:6px"></textarea>
+<textarea id="frameText" rows="13" style="margin-top:6px" aria-label="프롬프트 틀 내용"></textarea>
 <p class="small" style="margin-top:4px">{중괄호}만 채워서 쓰세요. ③·④는 [장면] 탭의 [지시문 생성] 버튼이
 앵커까지 채워 자동 생성합니다. 전체 틀 문서: templates/grok-prompts-ko.md</p>
 </details>
@@ -296,10 +320,11 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <section id="tab-scenes">
 <div class="eyebrow">2 · 장면 구성(로컬 LLM)  →  3 · 이미지 자동 생성(MakeFun)  →  4 · 선택·승인</div>
 <div class="card"><div class="row">
-장면 수 <input type="number" id="composeCount" value="10" min="1" max="30" style="width:70px">
+장면 수 <input type="number" id="composeCount" value="10" min="1" max="30" style="width:70px"
+ aria-label="만들 장면 수">
 <label class="small"><input type="checkbox" id="composeForce"> 기존 장면 백업 후 재구성</label>
 <button class="btn" id="btnCompose">스토리라인 → 장면 구성</button>
-<span class="small" id="composeMsg"></span></div>
+<span class="small" id="composeMsg" role="status"></span></div>
 <p class="small" style="margin-top:8px">장면 구성은 <b>로컬 LLM</b>이, 이미지는 각 장면의 <b>[🎨 이미지 생성]</b> 버튼이
 <b>MakeFun AI</b> 로 자동 생성해 등록까지 해줍니다. 파일을 직접 넣는 [폴더 스캔]·[📤 업로드] 경로도 그대로 씁니다.</p></div>
 
@@ -311,29 +336,30 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <span class="small">① 지시문 생성 → grok.com 에 붙여넣기</span>
 <button class="btn ghost" id="btnComposeInput">지시문 생성</button>
 <button class="btn ghost" id="btnComposeInputCopy" hidden>복사</button></div>
-<textarea id="composeInput" rows="6" readonly style="margin-top:6px"
+<textarea id="composeInput" rows="6" readonly style="margin-top:6px" aria-label="grok.com 에 붙여넣을 지시문"
  placeholder="[지시문 생성]을 누르면 grok.com 에 붙여넣을 지시문이 여기에 나옵니다."></textarea>
 <div class="row" style="margin-top:10px">
 <span class="small">② grok.com 이 준 JSON 배열을 아래에 붙여넣고 →</span>
 <label class="small"><input type="checkbox" id="composeManualForce"> 기존 장면 백업 후 재구성</label>
 <button class="btn" id="btnComposeManual">장면 생성</button>
-<span class="small" id="composeManualMsg"></span></div>
-<textarea id="composeJson" rows="6" style="margin-top:6px"
+<span class="small" id="composeManualMsg" role="status"></span></div>
+<textarea id="composeJson" rows="6" style="margin-top:6px" aria-label="grok.com 응답 JSON 붙여넣기"
  placeholder="grok.com 응답의 [ ... ] JSON 배열 전체를 여기에 붙여넣기"></textarea>
 </details>
 
 <details class="card" id="printExport">
 <summary class="small">인화 내보내기 · 승인 장면을 실물 인화용 마스터로 (Pillow 필요)</summary>
 <div class="row" style="margin-top:10px">
-규격 <select id="exportSize">
+규격 <select id="exportSize" aria-label="인화 규격">
 <option value="4x6">엽서 4×6</option><option value="5x7" selected>5×7</option>
 <option value="8x10">8×10</option><option value="A5">A5</option><option value="A4">A4</option></select>
-블리드 <input type="number" id="exportBleed" value="0" step="0.125" min="0" style="width:64px">인치
+블리드 <input type="number" id="exportBleed" value="0" step="0.125" min="0" style="width:64px"
+ aria-label="블리드(인치)">인치
 <label class="small"><input type="checkbox" id="exportAll"> 승인 외 포함</label>
 <label class="small"><input type="checkbox" id="exportSkipUp"> 업스케일 제외</label>
 <button class="btn" id="btnExport">마스터 굽기</button>
 <button class="btn ghost" id="btnContact">컨택트시트</button>
-<span class="small" id="exportMsg"></span></div>
+<span class="small" id="exportMsg" role="status"></span></div>
 <p class="small" style="margin-top:6px"><b>output/print/</b> 에 300DPI TIFF+JPEG 와 spec_sheet.json 이 생성됩니다.
 저해상도면 업스케일 경고가 뜹니다 — 외부 AI에서 더 큰 해상도로 생성하세요.</p>
 </details>
@@ -352,14 +378,25 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <button class="btn ghost" id="btnScrollView">세로 스크롤로 읽기</button>
 <button class="btn ghost" id="btnExportViewer">감상본 내보내기 (HTML)</button>
 <button class="btn ghost" id="btnExportPwa">📱 PWA 내보내기</button></div>
-<p class="small" id="exportViewerMsg" style="margin-top:8px"></p>
+<p class="small" id="exportViewerMsg" style="margin-top:8px" role="status"></p>
 
-<details class="card" id="viewerExport" style="margin-top:12px">
+<details class="card" id="dlBox" style="margin-top:12px">
+<summary class="small">📥 내보낸 파일 받기 · 폰에서 바로 저장</summary>
+<p class="small" style="margin:8px 0">감상본 HTML·PWA·인화 마스터 등 <b>output/</b> 에 만들어진 파일 목록입니다.
+폰으로 이 스튜디오에 접속한 뒤 파일 이름을 누르면 그대로 내려받습니다.</p>
+<div class="row"><button class="btn ghost" id="btnDlRefresh">목록 새로고침</button>
+<span class="small" id="dlMsg" role="status"></span></div>
+<div id="dlList"></div>
+</details>
+
+<details class="card" id="viewerExport">
 <summary class="small">감상본 내보내기 옵션 · 범위와 화질</summary>
 <div class="row" style="margin-top:10px">
 <label class="small"><input type="checkbox" id="evAll"> 승인 안 된 장면도 포함</label>
-최대 변 <input type="number" id="evMaxEdge" value="1600" min="480" max="4096" step="80" style="width:88px">px
-화질 <input type="number" id="evQuality" value="85" min="40" max="100" step="5" style="width:72px"></div>
+최대 변 <input type="number" id="evMaxEdge" value="1600" min="480" max="4096" step="80" style="width:88px"
+ aria-label="이미지 최대 변(px)">px
+화질 <input type="number" id="evQuality" value="85" min="40" max="100" step="5" style="width:72px"
+ aria-label="이미지 화질(40~100)"></div>
 <p class="small" style="margin-top:6px">최대 변·화질을 올리면 그림이 선명해지고 파일이 커집니다(폰 소장용은 1600 / 85 권장).
 이 값은 [감상본 내보내기]와 [PWA 내보내기]에 함께 쓰입니다.</p>
 </details>
@@ -368,10 +405,10 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <summary class="small">📱 폰에서 접속 · 주소와 QR 코드</summary>
 <p class="small" style="margin:8px 0">서버를 <b>--lan</b> 옵션으로 켠 뒤, 같은 와이파이의 폰 카메라로 QR 을 비추면 이 스튜디오가 열립니다.</p>
 <div class="row"><span class="small">주소</span>
-<select id="lanPick" style="flex:1;min-width:180px" hidden></select>
+<select id="lanPick" style="flex:1;min-width:180px" aria-label="LAN 접속 주소 고르기" hidden></select>
 <button class="btn ghost" id="btnLanCopy">주소 복사</button></div>
-<div id="qrBox"><canvas id="qrCanvas" width="180" height="180" aria-label="접속 주소 QR 코드"></canvas>
-<div><div id="lanAddr"></div><p class="small" id="qrMsg" style="margin-top:4px"></p></div></div>
+<div id="qrBox"><canvas id="qrCanvas" width="180" height="180" role="img" aria-label="접속 주소 QR 코드"></canvas>
+<div><div id="lanAddr"></div><p class="small" id="qrMsg" style="margin-top:4px" role="status"></p></div></div>
 </details>
 </section>
 
@@ -397,11 +434,12 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
   padding:16px;z-index:5;display:flex;flex-direction:column;gap:10px;cursor:default"></div>
 </div>
 <div class="row" style="margin-top:10px">
-<textarea id="talkInput" rows="2" placeholder="지혜에게 말을 걸어보세요 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+<textarea id="talkInput" rows="2" aria-label="인물에게 보낼 말"
+ placeholder="지혜에게 말을 걸어보세요 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
 <button class="btn" id="btnTalk">전송</button>
 <button class="btn ghost" id="btnTalkShot">📷 이 순간을 사진으로</button>
 <button class="btn ghost" id="btnTalkClear">처음부터</button></div>
-<p class="small" id="talkMsg" style="margin-top:6px"></p>
+<p class="small" id="talkMsg" style="margin-top:6px" role="status"></p>
 <p class="small" style="margin-top:6px">사진을 보여주면 배경 CG 로 바뀝니다 · [기록] = 지난 대화 · 대화창 클릭 = 출력 즉시 완성 ·
 [📷 이 순간을 사진으로] = 지금 대화를 새 장면으로 남기기(이미지는 나중에 [장면] 탭에서 생성).
 대화는 서버에 저장되어 다음에 이어집니다. 서버: <b>local_llm/runtime/serve.ps1</b></p>
@@ -414,11 +452,11 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 ★ 로 명장면을 모으면 그대로 <b>인화 후보</b>가 됩니다.</p>
 <div class="row" style="margin-bottom:12px">
 <label class="small"><input type="checkbox" id="galFavOnly"> 즐겨찾기만 보기</label>
-<select id="favPrintSize" style="width:auto">
+<select id="favPrintSize" style="width:auto" aria-label="즐겨찾기 인화 규격">
 <option value="4x6">엽서 4×6</option><option value="5x7" selected>5×7</option>
 <option value="8x10">8×10</option><option value="A5">A5</option><option value="A4">A4</option></select>
 <button class="btn ghost" id="btnFavPrint">★ 즐겨찾기만 인화</button>
-<span class="small" id="galMsg"></span></div>
+<span class="small" id="galMsg" role="status"></span></div>
 <div id="galGrid" class="galgrid"></div>
 </section>
 
@@ -426,7 +464,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div class="eyebrow">자동 검사 (SCORECARD A1~A8)</div>
 <div class="row">
 <button class="btn" id="btnCheck">전체 검사 실행</button>
-<button class="btn ghost" id="btnLint">연출 리듬 린터</button></div>
+<button class="btn ghost" id="btnLint">연출·분기 린터</button></div>
 <pre id="checkOut" style="margin-top:12px">아직 실행 전.</pre>
 <pre id="lintOut" style="margin-top:10px" hidden></pre>
 <p class="small" style="margin-top:6px">검사기(A1~A8)는 PASS/FAIL 을 만드는 필수 관문이고,
@@ -466,7 +504,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <button class="vnbtn" id="btnExit" title="닫기 (Esc)">닫기</button></div>
 <div id="dlg"><span id="dlgName"></span><div id="dlgText"></div>
 <div id="dlgHint">클릭하여 계속 ▸</div></div>
-<div id="choices" hidden></div>
+<div id="choices" role="group" aria-label="선택지" hidden></div>
 <div id="vnLog" class="vnpanel" role="dialog" aria-modal="true" aria-label="기록" hidden><h3>기록 (BACKLOG)</h3>
 <div id="vnLogInner"></div>
 <button class="vnbtn" id="btnLogClose" style="align-self:flex-end">닫기</button></div>
@@ -496,6 +534,14 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div id="srLine" class="sr-only" aria-live="polite" role="status"></div>
 </div>
 
+<div id="authGate" role="alertdialog" aria-modal="true" aria-labelledby="authGateTtl" hidden>
+<div class="box"><h2 id="authGateTtl">PIN 인증이 필요합니다</h2>
+<p class="small">서버가 다시 시작되었거나 인증이 만료되어 요청이 거부되었습니다.
+아래 [다시 인증하기]를 누르면 PIN 입력 화면으로 돌아갑니다.
+<b>작성 중이던 내용이 있으면 먼저 복사해 두세요</b> — 화면을 새로 여는 동안 사라집니다.</p>
+<div class="row"><button class="btn" id="authReload">다시 인증하기</button>
+<button class="btn ghost" id="authDismiss">나중에 (내용 먼저 복사)</button></div></div></div>
+
 <script>
 "use strict";
 // 안전 규약: 서버 데이터를 HTML 문자열로 조립해 넣지 않는다 (selftest T17 이 감시).
@@ -504,22 +550,60 @@ let S={scenes:[],chat:[],characters:[]};
 const $=id=>document.getElementById(id);
 function el(tag,cls,text){const n=document.createElement(tag);
  if(cls)n.className=cls;if(text!=null)n.textContent=text;return n}
+// 전역 단축키가 폼 컨트롤의 키 입력을 가로채지 않게 하는 가드.
+// (뷰어 설정의 슬라이더에서 ←/→ 를 누르면 값 조절 대신 이야기가 넘어가던 문제)
+const FORM_TAGS={INPUT:1,TEXTAREA:1,SELECT:1,OPTION:1};
+function isTypingTarget(e){const t=e&&e.target;
+ if(!t||!t.tagName)return false;
+ return FORM_TAGS[t.tagName]===1||t.isContentEditable===true}
 const charName=id=>{const c=S.characters.find(c=>c.id===id);return c&&c.name?c.name:id};
-async function api(path,body){const r=await fetch(path,body?{method:"POST",
- headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{});
- const d=await r.json();if(!r.ok)throw new Error(d.error||"오류");return d}
-async function refresh(){S=await api("/api/state");
+// 복사 버튼 6곳이 쓰던 같은 코드 — 실패(비보안 컨텍스트·권한 거부)도 화면에 알린다
+async function copyTo(btn,text,label){
+ try{await navigator.clipboard.writeText(String(text==null?"":text));btn.textContent="복사됨 ✓"}
+ catch(e){btn.textContent="복사 실패 — 직접 선택해 복사하세요"}
+ setTimeout(()=>{btn.textContent=label},1500)}
+// PIN 세션이 끊기면(401 auth_required) 요청마다 실패 문구만 뿌리지 말고 재인증 경로를 준다
+function showAuthGate(){const g=$("authGate");if(!g||!g.hidden)return;
+ g.hidden=false;const b=$("authReload");if(b&&b.focus)b.focus()}
+async function api(path,body){
+ let r;
+ try{r=await fetch(path,body?{method:"POST",
+  headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{})}
+ catch(e){throw new Error("서버에 연결할 수 없습니다 — 스튜디오 서버가 켜져 있는지 확인하세요.")}
+ let d=null;
+ try{d=await r.json()}catch(e){d=null}
+ if(r.status===401&&d&&d.auth_required){showAuthGate();throw new Error("PIN 인증이 필요합니다.")}
+ if(!r.ok)throw new Error((d&&d.error)||("오류 "+r.status));
+ return d}
+function renderChips(){
  $("chipTitle").textContent=S.title||"제목 미정";
  if(S.orch_local){$("chipKey").textContent="스토리: 로컬 LLM";$("chipKey").className="chip ok"}
  else{$("chipKey").textContent="API 키 "+(S.key_set?"연결됨":"미설정");
   $("chipKey").className="chip "+(S.key_set?"ok":"bad")}
  $("chipModel").textContent="이미지: MakeFun "+(S.mf_token?"연결됨":"토큰 미설정");
- $("chipModel").className="chip "+(S.mf_token?"ok":"bad");
+ $("chipModel").className="chip "+(S.mf_token?"ok":"bad")}
+// refresh(opts) — opts.scene 이 주어지면 그 장면 카드 하나만 새로 그린다.
+// 전면 재렌더는 다른 카드에 붙여넣던 그록 응답·펼친 <details> 를 통째로 날려 버렸다(감사 지적).
+async function refresh(opts){
+ const o=opts||{};
+ S=await api("/api/state");
+ renderChips();
  if(!$("storyline").value)$("storyline").value=S.storyline||"";
- syncFav();syncResume();renderChat();renderScenes();renderGallery();renderLan()}
+ syncFav();syncResume();
+ if(o.scene&&renderScene(o.scene)){renderGallery();return}
+ renderChat();renderScenes();renderGallery();renderLan()}
 function renderChat(){const box=$("chatlog");box.replaceChildren();
  for(const m of S.chat)box.appendChild(el("div","msg "+m.role,m.content));
  box.scrollTop=box.scrollHeight}
+// 챗로그는 /api/state 에서 분리돼 있다(폰 전송량) — 스토리 탭에 들어올 때 한 번만 받아온다.
+let chatLoaded=false;
+async function loadChatHistory(){
+ if(chatLoaded||(S.chat&&S.chat.length))return;
+ chatLoaded=true;
+ try{const d=await api("/api/chat-history",{});
+  if(Array.isArray(d.messages)&&d.messages.length){S.chat=d.messages;renderChat()}}
+ catch(e){chatLoaded=false;   // 구버전 서버(라우트 없음)면 조용히 빈 상태로 둔다
+  if(S.chat_count)$("storyMsg").textContent="지난 대화 "+S.chat_count+"줄을 불러오지 못했습니다."}}
 async function send(){const t=$("chatInput").value.trim();if(!t)return;
  $("chatInput").value="";S.chat.push({role:"user",content:t});renderChat();
  try{const d=await api("/api/chat",{messages:S.chat});
@@ -656,12 +740,12 @@ const fsel=$("frameSel");
 for(const k of Object.keys(FRAMES)){const o=el("option",null,k);o.value=k;fsel.appendChild(o)}
 function showFrame(){$("frameText").value=FRAMES[fsel.value]||""}
 fsel.onchange=showFrame;showFrame();
-$("btnFrameCopy").onclick=async()=>{await navigator.clipboard.writeText($("frameText").value);
- $("btnFrameCopy").textContent="복사됨";setTimeout(()=>{$("btnFrameCopy").textContent="복사"},1200)};
+$("btnFrameCopy").onclick=()=>copyTo($("btnFrameCopy"),$("frameText").value,"복사");
 $("btnFrameChat").onclick=()=>{$("chatInput").value=$("frameText").value;$("chatInput").focus()};
 $("btnCompose").onclick=async()=>{$("composeMsg").textContent="구성 중… (수십 초 걸릴 수 있음)";
  try{const d=await api("/api/compose",{count:+$("composeCount").value,force:$("composeForce").checked});
   $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음");
+  scDraft.clear();   // 장면이 갈렸으니 같은 id 의 옛 초안을 새 장면에 되붙이지 않는다
   await refresh()}catch(e){$("composeMsg").textContent="실패: "+e.message+" — 아래 [수동 모드]로 진행하세요(크레딧 불필요)"}};
 
 // ---- 수동 모드: 장면 구성 (grok.com 복붙) ----
@@ -669,12 +753,12 @@ $("btnComposeInput").onclick=async()=>{try{
   const d=await api("/api/compose-input",{count:+$("composeCount").value});
   $("composeInput").value=d.instruction;$("btnComposeInputCopy").hidden=false;
   $("btnComposeInputCopy").textContent="복사"}catch(e){$("composeInput").value="실패: "+e.message}};
-$("btnComposeInputCopy").onclick=async()=>{await navigator.clipboard.writeText($("composeInput").value);
- $("btnComposeInputCopy").textContent="복사됨"};
+$("btnComposeInputCopy").onclick=()=>copyTo($("btnComposeInputCopy"),$("composeInput").value,"복사");
 $("btnComposeManual").onclick=async()=>{$("composeManualMsg").textContent="생성 중…";
  const force=$("composeManualForce").checked||$("composeForce").checked;
  try{const d=await api("/api/compose-manual",{text:$("composeJson").value,force:force,count:+$("composeCount").value});
   $("composeManualMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고")+(d.warning?" · "+d.warning:"");
+  scDraft.clear();   // 장면이 갈렸으니 같은 id 의 옛 초안을 새 장면에 되붙이지 않는다
   await refresh()}catch(e){
   const m=/이미 장면이 있습니다/.test(e.message)
    ? "이미 장면이 있습니다 → 위 '기존 장면 백업 후 재구성'을 체크하고 다시 누르세요(기존 장면은 백업됩니다)"
@@ -686,7 +770,8 @@ $("btnExport").onclick=async()=>{$("exportMsg").textContent="굽는 중… (수�
  try{const d=await api("/api/export",{size:$("exportSize").value,bleed:+$("exportBleed").value,
    all:$("exportAll").checked,skip_upscale:$("exportSkipUp").checked});
   $("exportMsg").textContent=d.count+"장 → "+(d.dir||"(없음)")
-   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+(d.skipped?" · 제외 "+d.skipped:"");
+   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+(d.skipped?" · 제외 "+d.skipped:"")
+   +" · 폰으로 받기: [뷰어] 탭 → [📥 내보낸 파일 받기]";
  }catch(e){$("exportMsg").textContent="실패: "+e.message}};
 $("btnContact").onclick=async()=>{$("exportMsg").textContent="컨택트시트 생성 중…";
  try{const d=await api("/api/export",{contact_only:true,all:$("exportAll").checked});
@@ -717,201 +802,283 @@ async function pollGenUntilDone(sid,msg){
   if(s.running===false)return s.error?{error:String(s.error)}:{done:true}}
  return {timeout:true}}
 
-function sceneCard(sc){
- const card=el("div","card");
- const head=el("div","row");
+// ================= 장면 카드 =================
+// 원래는 193줄짜리 단일 함수였다. 의미 단위(머리/프롬프트/그록수동/행동/후보/인화)로 쪼개
+// 각 조각이 자기 DOM 만 만들고 돌려주게 했다. sceneCard 는 조립만 한다.
+
+// 카드가 다시 그려져도 사용자가 입력하던 것은 살아남아야 한다(그록 응답 붙여넣기, 펼침 상태).
+const scDraft=new Map();   // scene_id → {gen, set, open}
+function draftOf(sid){let d=scDraft.get(sid);
+ if(!d){d={gen:"",set:"",open:null};scDraft.set(sid,d)}
+ return d}
+
+function scHeader(sc){const head=el("div","row");
  head.appendChild(el("b",null,sc.scene_order+". "+sc.scene_id));
  head.appendChild(el("span","badge "+sc.status,sc.status));
- card.appendChild(head);
- if(sc.status==="APPROVED")card.appendChild(el("div","stamp","승인"));
- const purpose=el("p","small",sc.purpose||"");purpose.style.margin="6px 0";
- card.appendChild(purpose);
+ return head}
 
+function scPromptBlock(sc){
  const det=el("details");
  det.appendChild(el("summary","small","대사 "+sc.dialogue.length+"줄 · 이미지 프롬프트"));
  det.appendChild(el("pre",null,(sc.dialogue||[]).map(d=>charName(d.speaker_id)+": "+d.text).join("\n")));
  const ta=el("textarea");ta.rows=4;ta.readOnly=true;ta.value=sc.prompt||"";
+ ta.setAttribute("aria-label",sc.scene_id+" 이미지 프롬프트");
  det.appendChild(ta);
  const detRow=el("div","row");detRow.style.marginTop="6px";
  const btnCopy=el("button","btn ghost","프롬프트 복사");
- btnCopy.onclick=async()=>{await navigator.clipboard.writeText(sc.prompt||"");btnCopy.textContent="복사됨"};
+ btnCopy.onclick=()=>copyTo(btnCopy,sc.prompt||"","프롬프트 복사");
  detRow.appendChild(btnCopy);
  detRow.appendChild(el("span","small","폴더: images/raw/"+sc.scene_id+"/"));
  det.appendChild(detRow);
- card.appendChild(det);
+ return det}
 
- // 그록 수동 경로: 로컬 LLM 이 느릴 때 grok.com 복붙으로 이번 장면 프롬프트 만들기 (승인 전 장면만)
- if(sc.status!=="APPROVED"){
-  const mp=el("details");mp.style.marginTop="6px";
-  if(!sc.prompt)mp.open=true;   // 프롬프트 없는 장면은 바로 보이게
-  mp.appendChild(el("summary","small","⚡ 그록 수동 · 지시문 복사 → grok.com → 결과 붙여넣기 (로컬 LLM 느릴 때)"));
-  const genRow=el("div","row");genRow.style.marginTop="6px";
-  const btnGen=el("button","btn ghost","① 지시문 생성");
-  const btnGenCopy=el("button","btn ghost","복사");btnGenCopy.hidden=true;
-  const genOut=el("textarea");genOut.rows=5;genOut.readOnly=true;genOut.style.marginTop="6px";
-  genOut.placeholder="[지시문 생성] → 복사해서 grok.com(폰 앱도 OK)에 붙여넣기";
-  btnGen.onclick=async()=>{try{const d=await api("/api/grok-input",{scene_id:sc.scene_id});
-    genOut.value=d.text;btnGenCopy.hidden=false}catch(e){genOut.value="실패: "+e.message}};
-  btnGenCopy.onclick=async()=>{await navigator.clipboard.writeText(genOut.value);btnGenCopy.textContent="복사됨"};
-  genRow.appendChild(btnGen);genRow.appendChild(btnGenCopy);
-  mp.appendChild(genRow);mp.appendChild(genOut);
-  const setIn=el("textarea");setIn.rows=5;setIn.style.marginTop="8px";
-  setIn.placeholder="② grok 의 SCENE_PROMPT 응답 전체를 여기에 붙여넣기 → [프롬프트 저장] → [🎨 이미지 생성]";
-  const setRow=el("div","row");setRow.style.marginTop="6px";
-  const btnSet=el("button","btn","프롬프트 저장");
-  const fixLab=el("label","small");const fixCk=el("input");fixCk.type="checkbox";fixCk.checked=true;
-  fixLab.appendChild(fixCk);fixLab.appendChild(document.createTextNode(" 앵커 자동 보정(검사 통과 보장)"));
-  const setMsg=el("span","small");
-  btnSet.onclick=async()=>{try{const d=await api("/api/set-prompt",
-    {scene_id:sc.scene_id,text:setIn.value,fix_anchors:fixCk.checked});
-    setMsg.textContent=d.checker_pass?"저장됨 · 검사 통과":"저장됨 · 경고: "+d.fails;await refresh()}
-   catch(e){setMsg.textContent="실패: "+e.message}};
-  mp.appendChild(setIn);setRow.appendChild(btnSet);setRow.appendChild(fixLab);
-  setRow.appendChild(setMsg);mp.appendChild(setRow);
-  card.appendChild(mp)}
+// 그록 수동 경로: 로컬 LLM 이 느릴 때 grok.com 복붙으로 이번 장면 프롬프트 만들기 (승인 전 장면만)
+function scManualGrok(sc){
+ const dr=draftOf(sc.scene_id);
+ const mp=el("details");mp.style.marginTop="6px";
+ mp.open=(dr.open==null)?!sc.prompt:dr.open;   // 프롬프트 없는 장면은 처음부터 펼쳐 둔다
+ mp.addEventListener("toggle",()=>{dr.open=mp.open});
+ mp.appendChild(el("summary","small","⚡ 그록 수동 · 지시문 복사 → grok.com → 결과 붙여넣기 (로컬 LLM 느릴 때)"));
+ const genRow=el("div","row");genRow.style.marginTop="6px";
+ const btnGen=el("button","btn ghost","① 지시문 생성");
+ const btnGenCopy=el("button","btn ghost","복사");btnGenCopy.hidden=!dr.gen;
+ const genOut=el("textarea");genOut.rows=5;genOut.readOnly=true;genOut.style.marginTop="6px";
+ genOut.placeholder="[지시문 생성] → 복사해서 grok.com(폰 앱도 OK)에 붙여넣기";
+ genOut.setAttribute("aria-label",sc.scene_id+" 그록 지시문");
+ genOut.value=dr.gen;
+ btnGen.onclick=async()=>{btnGen.disabled=true;
+  try{const d=await api("/api/grok-input",{scene_id:sc.scene_id});
+   genOut.value=d.text;btnGenCopy.hidden=false}
+  catch(e){genOut.value="실패: "+e.message}
+  dr.gen=genOut.value;btnGen.disabled=false};
+ btnGenCopy.onclick=()=>copyTo(btnGenCopy,genOut.value,"복사");
+ genRow.appendChild(btnGen);genRow.appendChild(btnGenCopy);
+ mp.appendChild(genRow);mp.appendChild(genOut);
+ const setIn=el("textarea");setIn.rows=5;setIn.style.marginTop="8px";
+ setIn.placeholder="② grok 의 SCENE_PROMPT 응답 전체를 여기에 붙여넣기 → [프롬프트 저장] → [🎨 이미지 생성]";
+ setIn.setAttribute("aria-label",sc.scene_id+" 그록 응답 붙여넣기");
+ setIn.value=dr.set;
+ setIn.oninput=()=>{dr.set=setIn.value};
+ const setRow=el("div","row");setRow.style.marginTop="6px";
+ const btnSet=el("button","btn","프롬프트 저장");
+ const fixLab=el("label","small");const fixCk=el("input");fixCk.type="checkbox";fixCk.checked=true;
+ fixLab.appendChild(fixCk);fixLab.appendChild(document.createTextNode(" 앵커 자동 보정(검사 통과 보장)"));
+ const setMsg=el("span","small");setMsg.setAttribute("role","status");
+ btnSet.onclick=async()=>{btnSet.disabled=true;setMsg.textContent="저장 중…";
+  try{const d=await api("/api/set-prompt",
+   {scene_id:sc.scene_id,text:setIn.value,fix_anchors:fixCk.checked});
+   dr.set="";                                   // 저장에 성공한 초안만 비운다
+   setMsg.textContent=d.checker_pass?"저장됨 · 검사 통과":"저장됨 · 경고: "+d.fails;
+   await refresh({scene:sc.scene_id})}
+  catch(e){setMsg.textContent="실패: "+e.message;btnSet.disabled=false}};
+ mp.appendChild(setIn);setRow.appendChild(btnSet);setRow.appendChild(fixLab);
+ setRow.appendChild(setMsg);mp.appendChild(setRow);
+ return mp}
 
+function scBtnGenPrompt(sc,msg){
+ const b=el("button","btn","🤖 프롬프트 생성");
+ b.title="로컬 LLM 이 이 장면의 이미지 프롬프트를 만듭니다";
+ b.onclick=async()=>{b.disabled=true;msg.textContent="로컬 LLM 프롬프트 생성 중…";
+  try{const d=await api("/api/gen-prompt",{scene_id:sc.scene_id});
+   msg.textContent=d.checker_pass?"프롬프트 생성 · 검사 통과":"생성됨 · 경고: "+d.fails;
+   await refresh({scene:sc.scene_id})}
+  catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
+ return b}
+
+function scBtnGenImage(sc,msg){
+ const b=el("button","btn","🎨 이미지 생성");
+ b.title="MakeFun AI 로 이미지를 생성해 자동 등록합니다 (1~3분)";
+ b.onclick=async()=>{b.disabled=true;msg.textContent="MakeFun 생성 중… (1~3분)";
+  const stop=pollGen(sc.scene_id,msg);   // 서버가 진행 조회를 지원하면 상황을 보여준다
+  try{const d=await api("/api/gen-image",{scene_id:sc.scene_id,n:1});
+   if(d&&d.running){const r=await pollGenUntilDone(sc.scene_id,msg);stop();
+    // 실패·시간초과면 사유를 화면에 남긴다(카드가 새로 그려지면 메시지가 지워지므로 여기서 끝낸다)
+    if(r&&r.error){msg.textContent="실패: "+r.error;b.disabled=false;return}
+    if(r&&r.timeout){msg.textContent="시간 초과 — 아직 생성 중일 수 있습니다. 잠시 뒤 [폴더 스캔]으로 확인하세요.";
+     b.disabled=false;return}
+    msg.textContent="생성 완료 — 후보를 확인하세요";await refresh({scene:sc.scene_id});return}
+   stop();msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;
+   await refresh({scene:sc.scene_id})}
+  catch(e){stop();msg.textContent="실패: "+e.message;b.disabled=false}};
+ return b}
+
+function scBtnScan(sc,msg){
+ const b=el("button","btn ghost","폴더 스캔");
+ b.onclick=async()=>{b.disabled=true;msg.textContent="폴더 확인 중…";
+  try{const d=await api("/api/register-images",{scene_id:sc.scene_id});
+   msg.textContent="후보 "+d.count+"장 · 자동검사 "+d.auto;await refresh({scene:sc.scene_id})}
+  catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
+ return b}
+
+// 폰/PC 공용: 이미지 직접 업로드(폴더 접근 없이 만들기 완성)
+function scAddUpload(act,sc,msg){
+ const up=el("input");up.type="file";up.accept="image/*";up.style.display="none";
+ up.setAttribute("aria-hidden","true");up.tabIndex=-1;
+ const b=el("button","btn ghost","📤 이미지 업로드");
+ b.onclick=()=>up.click();
+ up.onchange=()=>{const f=up.files&&up.files[0];if(!f)return;
+  msg.textContent="업로드 중…";const rd=new FileReader();
+  rd.onerror=()=>{msg.textContent="실패: 파일을 읽을 수 없습니다"};
+  rd.onload=async()=>{try{const d=await api("/api/upload-image",
+    {scene_id:sc.scene_id,filename:f.name,data_b64:String(rd.result)});
+    msg.textContent="업로드+검사 "+d.auto+" (후보 "+d.count+"장)";
+    await refresh({scene:sc.scene_id})}
+   catch(e){msg.textContent="실패: "+e.message}};
+  rd.readAsDataURL(f)};
+ act.appendChild(b);act.appendChild(up)}
+
+function scBtnApprove(sc,msg){
+ const b=el("button","btn seal","승인 도장 찍기");
+ b.onclick=async()=>{b.disabled=true;msg.textContent="승인 중…";
+  try{await api("/api/approve",{scene_id:sc.scene_id});
+   msg.textContent="승인됨 — 갤러리에 모입니다";await refresh({scene:sc.scene_id})}
+  catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
+ return b}
+
+function scActions(sc){
  const act=el("div","row");act.style.marginTop="8px";
- const msg=el("span","small");
- if(sc.status!=="APPROVED"&&!sc.prompt){
-  const bgp=el("button","btn","🤖 프롬프트 생성");
-  bgp.title="로컬 LLM 이 이 장면의 이미지 프롬프트를 만듭니다";
-  bgp.onclick=async()=>{bgp.disabled=true;msg.textContent="로컬 LLM 프롬프트 생성 중…";
-   try{const d=await api("/api/gen-prompt",{scene_id:sc.scene_id});
-    msg.textContent=d.checker_pass?"프롬프트 생성 · 검사 통과":"생성됨 · 경고: "+d.fails;await refresh()}
-   catch(e){msg.textContent="실패: "+e.message;bgp.disabled=false}};
-  act.appendChild(bgp)}
- if(sc.status!=="APPROVED"&&sc.prompt){
-  const bgi=el("button","btn","🎨 이미지 생성");
-  bgi.title="MakeFun AI 로 이미지를 생성해 자동 등록합니다 (1~3분)";
-  bgi.onclick=async()=>{bgi.disabled=true;msg.textContent="MakeFun 생성 중… (1~3분)";
-   const stop=pollGen(sc.scene_id,msg);   // 서버가 진행 조회를 지원하면 상황을 보여준다
-   try{const d=await api("/api/gen-image",{scene_id:sc.scene_id,n:1});
-    if(d&&d.running){const r=await pollGenUntilDone(sc.scene_id,msg);stop();
-     // 실패·시간초과면 사유를 화면에 남긴다(refresh 는 카드를 통째로 새로 그려 메시지를 지운다)
-     if(r&&r.error){msg.textContent="실패: "+r.error;bgi.disabled=false;return}
-     if(r&&r.timeout){msg.textContent="시간 초과 — 아직 생성 중일 수 있습니다. 잠시 뒤 [폴더 스캔]으로 확인하세요.";
-      bgi.disabled=false;return}
-     msg.textContent="생성 완료 — 후보를 확인하세요";await refresh();return}
-    stop();msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;await refresh()}
-   catch(e){stop();msg.textContent="실패: "+e.message;bgi.disabled=false}};
-  act.appendChild(bgi)}
+ const msg=el("span","small");msg.setAttribute("role","status");
+ if(sc.status!=="APPROVED"&&!sc.prompt)act.appendChild(scBtnGenPrompt(sc,msg));
+ if(sc.status!=="APPROVED"&&sc.prompt)act.appendChild(scBtnGenImage(sc,msg));
  if(sc.prompt){const bcp=el("button","btn ghost","🖼 프롬프트 복사");
   bcp.title="이 프롬프트를 외부 이미지 AI 에 붙여넣을 수도 있습니다";
-  bcp.onclick=async()=>{try{await navigator.clipboard.writeText(sc.prompt);
-    bcp.textContent="복사됨 ✓";setTimeout(()=>{bcp.textContent="🖼 프롬프트 복사"},1300)}
-   catch(e){bcp.textContent="복사 실패"}};
+  bcp.onclick=()=>copyTo(bcp,sc.prompt,"🖼 프롬프트 복사");
   act.appendChild(bcp)}
- const btnScan=el("button","btn ghost","폴더 스캔");
- btnScan.onclick=async()=>{try{const d=await api("/api/register-images",{scene_id:sc.scene_id});
-   msg.textContent="후보 "+d.count+"장 · 자동검사 "+d.auto;await refresh()}catch(e){alert(e.message)}};
- act.appendChild(btnScan);
- // 폰/PC 공용: 이미지 직접 업로드(폴더 접근 없이 만들기 완성)
- if(sc.status!=="APPROVED"){
-  const up=el("input");up.type="file";up.accept="image/*";up.style.display="none";
-  const bup=el("button","btn ghost","📤 이미지 업로드");
-  bup.onclick=()=>up.click();
-  up.onchange=()=>{const f=up.files&&up.files[0];if(!f)return;
-   msg.textContent="업로드 중…";const rd=new FileReader();
-   rd.onload=async()=>{try{const d=await api("/api/upload-image",
-     {scene_id:sc.scene_id,filename:f.name,data_b64:String(rd.result)});
-     msg.textContent="업로드+검사 "+d.auto+" (후보 "+d.count+"장)";await refresh()}
-    catch(e){msg.textContent="실패: "+e.message}};
-   rd.readAsDataURL(f)};
-  act.appendChild(bup);act.appendChild(up)}
- if(sc.selected_image){
-  const btnSeal=el("button","btn seal","승인 도장 찍기");
-  btnSeal.onclick=async()=>{try{await api("/api/approve",{scene_id:sc.scene_id});await refresh()}
-   catch(e){alert(e.message)}};
-  act.appendChild(btnSeal)}
+ act.appendChild(scBtnScan(sc,msg));
+ if(sc.status!=="APPROVED")scAddUpload(act,sc,msg);
+ if(sc.selected_image)act.appendChild(scBtnApprove(sc,msg));
  act.appendChild(msg);
- card.appendChild(act);
+ return {act,msg}}
 
+// 후보 썸네일: img+onclick 이 아니라 button — 키보드로 고를 수 있고 선택 상태를 읽어 준다.
+// 표시 폭 96px 이므로 원본이 아니라 서버 축소본(?w=)을 받는다(고해상도 화면 대비 2배).
+function scThumbs(sc,msg){
  const th=el("div","thumbs");
- for(const r of (sc.raw_images||[])){
-  const img=el("img",r===sc.selected_image?"sel":null);
-  img.src="/img/"+r.replace(/^images\//,"");
-  img.title=r.split("/").pop();
-  img.onclick=async()=>{try{const d=await api("/api/select",{scene_id:sc.scene_id,image:r});
+ const raws=sc.raw_images||[];
+ raws.forEach((r,i)=>{
+  const sel=r===sc.selected_image;
+  const b=el("button");
+  b.title=r.split("/").pop();
+  b.setAttribute("aria-pressed",sel?"true":"false");
+  b.setAttribute("aria-label","후보 "+(i+1)+"/"+raws.length+" 고르기 — "+(sc.purpose||sc.scene_id));
+  const img=el("img",sel?"sel":null);
+  img.src="/img/"+r.replace(/^images\//,"")+"?w=224";
+  img.alt="";img.loading="lazy";img.decoding="async";
+  b.appendChild(img);
+  b.onclick=async()=>{msg.textContent="선택 중…";
+   try{const d=await api("/api/select",{scene_id:sc.scene_id,image:r});
     msg.textContent=d.auto_pass?"선택됨 — 도장 찍을 수 있음":"선택됨 · 경고: "+d.fails;
-    await refresh()}catch(e){alert(e.message)}};
-  th.appendChild(img)}
- card.appendChild(th);
+    await refresh({scene:sc.scene_id})}
+   catch(e){msg.textContent="실패: "+e.message}};
+  th.appendChild(b)});
+ return th}
 
- // 인화 프리플라이트 배지 (선택 이미지가 실물 인화에 적합한지)
- if(sc.print){
-  const p=sc.print,pr=el("div","row");pr.style.marginTop="8px";
-  let txt,cls;
-  if(!p.px){txt="인화: 크기 판독 불가";cls="bad"}
-  else if(p.printable){txt="인화 @300DPI 최대 "+p.max+" · 긴 변 "+p.long_in+"인치";cls="ok"}
-  else{txt="인화 @300DPI 부적합 (긴 변 "+p.long_in+"인치, 엽서 미만) — 업스케일 권장";cls="bad"}
-  pr.appendChild(el("span","chip "+cls,txt));
-  const btn=el("button","btn ghost","인화 규격 상세");
-  const out=el("pre");out.hidden=true;out.style.marginTop="6px";
-  btn.onclick=async()=>{try{const d=await api("/api/preflight",{scene_id:sc.scene_id});
-   if(!d.rows||!d.rows.length){out.textContent="크기 판독 불가"}
-   else{out.textContent=d.px[0]+"×"+d.px[1]+"px  →  300DPI 최대: "+(d.max_size_at_target||"엽서 미만")+"\n"+
-    d.rows.map(r=>{const m=r.grade==="좋음"?"OK  ":(r.grade==="보통"?"~   ":"✗   ");
-     return m+r.size+"  "+r.dpi+"DPI  "+r.grade+(r.crop_pct>1?" · 크롭 "+r.crop_pct+"%":"")}).join("\n")}
-   out.hidden=false}catch(e){out.textContent="실패: "+e.message;out.hidden=false}};
-  pr.appendChild(btn);
-  // 75 · 크롭 미리보기 — 규격을 고르면 어디가 잘리는지 이미지 위에 직접 보여주고 앵커를 정한다
-  if(sc.image_url&&p.px){
-   const bc=el("button","btn ghost","✂ 크롭 미리보기");
-   const wrap=el("div");wrap.hidden=true;wrap.style.marginTop="8px";
-   const ctl=el("div","row");
-   const selSize=el("select");
-   for(const s of ["4x6","5x7","8x10","A5","A4","photocard"])selSize.appendChild(el("option",null,s));
-   selSize.value="5x7";
-   const selAnc=el("select");
-   for(const a of [["center","가운데"],["top","위"],["bottom","아래"],["left","왼쪽"],["right","오른쪽"]]){
-    const o=el("option",null,a[1]);o.value=a[0];selAnc.appendChild(o)}
-   const savedAnc=(sc.print&&sc.print.crop_anchor)||"center";selAnc.value=savedAnc;
-   const note=el("span","small");
-   ctl.appendChild(el("span","small","규격"));ctl.appendChild(selSize);
-   ctl.appendChild(el("span","small","기준"));ctl.appendChild(selAnc);ctl.appendChild(note);
-   const stage=el("div");stage.style.cssText=
-    "position:relative;display:inline-block;margin-top:8px;max-width:100%;line-height:0";
-   const im=el("img");im.src=sc.image_url+"?w=420";im.alt=sc.scene_id;
-   im.style.cssText="max-width:100%;border-radius:8px;display:block";
-   const shadeTop=el("div"),shadeBot=el("div"),frame=el("div");
-   const shadeCss="position:absolute;left:0;right:0;background:rgba(8,6,14,.66);pointer-events:none";
-   shadeTop.style.cssText=shadeCss;shadeBot.style.cssText=shadeCss;
-   frame.style.cssText="position:absolute;border:2px solid var(--jade);pointer-events:none;"+
-    "box-shadow:0 0 0 1px rgba(0,0,0,.5)";
-   stage.appendChild(im);stage.appendChild(shadeTop);stage.appendChild(shadeBot);stage.appendChild(frame);
-   const RATIO={"4x6":4/6,"5x7":5/7,"8x10":8/10,"A5":148/210,"A4":210/297,"photocard":55/85};
-   function draw(){
-    const iw=sc.print.px[0],ih=sc.print.px[1];
-    const want=RATIO[selSize.value]||(5/7);            // 세로(긴 변 아래) 기준 종횡비
-    const src=iw/ih;
-    let cw,ch;                                          // 잘라낼 영역(원본 px)
-    if(src>want){ch=ih;cw=Math.round(ih*want)}else{cw=iw;ch=Math.round(iw/want)}
-    const keep=Math.round((cw*ch)/(iw*ih)*100);
-    note.textContent="원본의 "+keep+"% 사용 · "+(100-keep)+"% 잘림";
-    note.className="small "+(keep>=88?"":"");
-    const pw=im.clientWidth||1,ph=im.clientHeight||1;   // 화면 표시 크기로 환산
-    const fw=pw*(cw/iw),fh=ph*(ch/ih);
-    let left=(pw-fw)/2,top=(ph-fh)/2;
-    const a=selAnc.value;
-    if(a==="top")top=0; else if(a==="bottom")top=ph-fh;
-    else if(a==="left")left=0; else if(a==="right")left=pw-fw;
-    frame.style.left=left+"px";frame.style.top=top+"px";
-    frame.style.width=Math.max(0,fw-4)+"px";frame.style.height=Math.max(0,fh-4)+"px";
-    shadeTop.style.top="0px";shadeTop.style.height=Math.max(0,top)+"px";
-    shadeBot.style.top=(top+fh)+"px";shadeBot.style.height=Math.max(0,ph-top-fh)+"px";
-   }
-   selSize.onchange=draw;selAnc.onchange=async()=>{draw();
-    try{await api("/api/set-crop",{scene_id:sc.scene_id,anchor:selAnc.value});
-     note.textContent+=" · 기준 저장됨"}catch(e){note.textContent+=" · 저장 실패(미지원 서버)"}};
-   im.onload=draw;
-   bc.onclick=()=>{wrap.hidden=!wrap.hidden;if(!wrap.hidden)draw()};
-   wrap.appendChild(ctl);wrap.appendChild(stage);
-   pr.appendChild(bc);card.appendChild(pr);card.appendChild(wrap);card.appendChild(out);
-   return card}
-  card.appendChild(pr);card.appendChild(out)}
+// 75 · 크롭 미리보기 — 규격을 고르면 어디가 잘리는지 이미지 위에 직접 보여주고 앵커를 정한다
+const CROP_RATIO={"4x6":4/6,"5x7":5/7,"8x10":8/10,"A5":148/210,"A4":210/297,"photocard":55/85};
+function scCrop(sc){
+ const bc=el("button","btn ghost","✂ 크롭 미리보기");
+ const wrap=el("div");wrap.hidden=true;wrap.style.marginTop="8px";
+ const ctl=el("div","row");
+ const selSize=el("select");selSize.setAttribute("aria-label","크롭 규격");
+ for(const s of ["4x6","5x7","8x10","A5","A4","photocard"])selSize.appendChild(el("option",null,s));
+ selSize.value="5x7";
+ const selAnc=el("select");selAnc.setAttribute("aria-label","크롭 기준 위치");
+ for(const a of [["center","가운데"],["top","위"],["bottom","아래"],["left","왼쪽"],["right","오른쪽"]]){
+  const o=el("option",null,a[1]);o.value=a[0];selAnc.appendChild(o)}
+ selAnc.value=(sc.print&&sc.print.crop_anchor)||"center";
+ const note=el("span","small");note.setAttribute("role","status");
+ ctl.appendChild(el("span","small","규격"));ctl.appendChild(selSize);
+ ctl.appendChild(el("span","small","기준"));ctl.appendChild(selAnc);ctl.appendChild(note);
+ const stage=el("div");stage.style.cssText=
+  "position:relative;display:inline-block;margin-top:8px;max-width:100%;line-height:0";
+ const im=el("img");im.src=sc.image_url+"?w=420";im.alt=sc.purpose||sc.scene_id;
+ im.style.cssText="max-width:100%;border-radius:8px;display:block";
+ const shadeTop=el("div"),shadeBot=el("div"),frame=el("div");
+ const shadeCss="position:absolute;left:0;right:0;background:rgba(8,6,14,.66);pointer-events:none";
+ shadeTop.style.cssText=shadeCss;shadeBot.style.cssText=shadeCss;
+ frame.style.cssText="position:absolute;border:2px solid var(--jade);pointer-events:none;"+
+  "box-shadow:0 0 0 1px rgba(0,0,0,.5)";
+ stage.appendChild(im);stage.appendChild(shadeTop);stage.appendChild(shadeBot);stage.appendChild(frame);
+ function draw(){
+  const iw=sc.print.px[0],ih=sc.print.px[1];
+  const want=CROP_RATIO[selSize.value]||(5/7);        // 세로(긴 변 아래) 기준 종횡비
+  const src=iw/ih;
+  let cw,ch;                                          // 잘라낼 영역(원본 px)
+  if(src>want){ch=ih;cw=Math.round(ih*want)}else{cw=iw;ch=Math.round(iw/want)}
+  const keep=Math.round((cw*ch)/(iw*ih)*100);
+  note.textContent="원본의 "+keep+"% 사용 · "+(100-keep)+"% 잘림";
+  const pw=im.clientWidth||1,ph=im.clientHeight||1;   // 화면 표시 크기로 환산
+  const fw=pw*(cw/iw),fh=ph*(ch/ih);
+  let left=(pw-fw)/2,top=(ph-fh)/2;
+  const a=selAnc.value;
+  if(a==="top")top=0; else if(a==="bottom")top=ph-fh;
+  else if(a==="left")left=0; else if(a==="right")left=pw-fw;
+  frame.style.left=left+"px";frame.style.top=top+"px";
+  frame.style.width=Math.max(0,fw-4)+"px";frame.style.height=Math.max(0,fh-4)+"px";
+  shadeTop.style.top="0px";shadeTop.style.height=Math.max(0,top)+"px";
+  shadeBot.style.top=(top+fh)+"px";shadeBot.style.height=Math.max(0,ph-top-fh)+"px"}
+ selSize.onchange=draw;
+ selAnc.onchange=async()=>{draw();
+  try{await api("/api/set-crop",{scene_id:sc.scene_id,anchor:selAnc.value});
+   note.textContent+=" · 기준 저장됨"}catch(e){note.textContent+=" · 저장 실패(미지원 서버)"}};
+ im.onload=draw;
+ bc.onclick=()=>{wrap.hidden=!wrap.hidden;bc.setAttribute("aria-expanded",String(!wrap.hidden));
+  if(!wrap.hidden)draw()};
+ bc.setAttribute("aria-expanded","false");
+ wrap.appendChild(ctl);wrap.appendChild(stage);
+ return {btn:bc,wrap}}
+
+// 인화 프리플라이트 배지 (선택 이미지가 실물 인화에 적합한지) — 카드에 붙일 노드 배열
+function scPrint(sc){
+ if(!sc.print)return [];
+ const p=sc.print,pr=el("div","row");pr.style.marginTop="8px";
+ let txt,cls;
+ if(!p.px){txt="인화: 크기 판독 불가";cls="bad"}
+ else if(p.printable){txt="인화 @300DPI 최대 "+p.max+" · 긴 변 "+p.long_in+"인치";cls="ok"}
+ else{txt="인화 @300DPI 부적합 (긴 변 "+p.long_in+"인치, 엽서 미만) — 업스케일 권장";cls="bad"}
+ pr.appendChild(el("span","chip "+cls,txt));
+ const out=el("pre");out.hidden=true;out.style.marginTop="6px";out.setAttribute("role","status");
+ const btn=el("button","btn ghost","인화 규격 상세");
+ btn.onclick=async()=>{try{const d=await api("/api/preflight",{scene_id:sc.scene_id});
+  if(!d.rows||!d.rows.length){out.textContent="크기 판독 불가"}
+  else{out.textContent=d.px[0]+"×"+d.px[1]+"px  →  300DPI 최대: "+(d.max_size_at_target||"엽서 미만")+"\n"+
+   d.rows.map(r=>{const m=r.grade==="좋음"?"OK  ":(r.grade==="보통"?"~   ":"✗   ");
+    return m+r.size+"  "+r.dpi+"DPI  "+r.grade+(r.crop_pct>1?" · 크롭 "+r.crop_pct+"%":"")}).join("\n")}
+  out.hidden=false}catch(e){out.textContent="실패: "+e.message;out.hidden=false}};
+ pr.appendChild(btn);
+ const nodes=[pr];
+ if(sc.image_url&&p.px){const c=scCrop(sc);pr.appendChild(c.btn);nodes.push(c.wrap)}
+ nodes.push(out);
+ return nodes}
+
+function sceneCard(sc){
+ const card=el("div","card");
+ card.appendChild(scHeader(sc));
+ if(sc.status==="APPROVED")card.appendChild(el("div","stamp","승인"));
+ const purpose=el("p","small",sc.purpose||"");purpose.style.margin="6px 0";
+ card.appendChild(purpose);
+ card.appendChild(scPromptBlock(sc));
+ if(sc.status!=="APPROVED")card.appendChild(scManualGrok(sc));
+ const a=scActions(sc);
+ card.appendChild(a.act);
+ card.appendChild(scThumbs(sc,a.msg));
+ for(const n of scPrint(sc))card.appendChild(n);
  return card}
-function renderScenes(){const box=$("sceneList");box.replaceChildren();
- for(const sc of S.scenes)box.appendChild(sceneCard(sc))}
+
+// 카드를 scene_id 로 기억해 둔다 — 한 장면을 조작해도 나머지 카드는 건드리지 않는다.
+const sceneCards=new Map();
+function renderScenes(){const box=$("sceneList");box.replaceChildren();sceneCards.clear();
+ for(const sc of S.scenes){const c=sceneCard(sc);sceneCards.set(sc.scene_id,c);box.appendChild(c)}}
+// 한 장면만 교체. 목록 자체가 달라졌으면 false 를 돌려 호출부가 전면 재구성하게 한다.
+function renderScene(sid){
+ const old=sceneCards.get(sid);
+ if(!old||!old.isConnected)return false;
+ if(S.scenes.length!==sceneCards.size)return false;
+ const sc=S.scenes.find(s=>s.scene_id===sid);
+ if(!sc)return false;
+ const fresh=sceneCard(sc);
+ sceneCards.set(sid,fresh);old.replaceWith(fresh);
+ return true}
 // ---- 회상 갤러리 + 즐겨찾기(71) + 라이트박스(72) ----
 // 즐겨찾기는 서버(project/favorites.json)가 정본이고, 서버가 없거나 실패하면 localStorage 로 폴백한다.
 let favSet=new Set(),favRemote=false,favPushed=false;
@@ -929,37 +1096,61 @@ async function pushFavUp(ids){
   catch(e){favRemote=false;break}}   // 실패해도 로컬 목록은 그대로 살아 있다
  $("galMsg").textContent=favNote();renderGallery()}
 function favNote(){return "즐겨찾기 "+favSet.size+"개 (인화 후보)"+(favRemote?"":" · 이 브라우저에만 저장됨")}
+// ★ 토글은 별 하나만 칠한다 — 갤러리를 통째로 다시 만들면 스크롤 위치와 로딩된 이미지가 날아간다.
+const galStars=new Map();   // scene_id → 별 버튼
+function paintFav(id){
+ $("galMsg").textContent=favNote();
+ if($("galFavOnly").checked){renderGallery();return}   // 필터 중엔 목록 구성 자체가 바뀐다
+ const b=galStars.get(id);
+ if(!b||!b.isConnected){renderGallery();return}
+ const on=favSet.has(id);
+ b.classList.toggle("on",on);b.setAttribute("aria-pressed",on?"true":"false")}
 async function toggleFav(id){
  if(favSet.has(id))favSet.delete(id);else favSet.add(id);
  const on=favSet.has(id);
- saveFavLocal(favSet);$("galMsg").textContent=favNote();renderGallery();
+ saveFavLocal(favSet);paintFav(id);
  try{const d=await api("/api/favorite",{scene_id:id,on:on});
   if(d&&Array.isArray(d.scene_ids)){
    // 결함 17: 서버 응답으로 통째로 갈아끼우면 아직 서버에 없는 로컬 항목이 사라진다 → 합집합.
    const srv=new Set(d.scene_ids);if(on)srv.add(id);else srv.delete(id);
    for(const x of favSet)if(x!==id)srv.add(x);
    favSet=srv;favRemote=true;
-   saveFavLocal(favSet);$("galMsg").textContent=favNote();renderGallery()}}
+   saveFavLocal(favSet);paintFav(id)}}
  catch(e){favRemote=false;$("galMsg").textContent=favNote()}}
 function galList(){const favOnly=$("galFavOnly").checked;
  return S.scenes.filter(s=>s.status==="APPROVED"&&(!favOnly||favSet.has(s.scene_id)))}
-function renderGallery(){const grid=$("galGrid");if(!grid)return;grid.replaceChildren();
+function galCard(sc,i){
+ const card=el("div","galcard");
+ // 카드 본체를 button 으로 — 중첩 button 이 되지 않도록 ★/▶ 는 형제로 띄운다
+ const main=el("button","galmain");main.title="크게 보기";
+ if(sc.image_url){const im=el("img");
+  im.src=sc.image_url+"?w=380";        // 표시 폭 150~190px · 축소본으로 충분
+  im.alt=sc.purpose||sc.scene_id;im.loading="lazy";im.decoding="async";main.appendChild(im)}
+ else main.appendChild(el("div","empty",sc.purpose||sc.scene_id));
+ const cap=el("div","cap",(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id));
+ cap.setAttribute("aria-hidden","true");   // 이미지 alt 와 같은 내용이라 두 번 읽히지 않게
+ main.appendChild(cap);
+ main.onclick=()=>openLightbox(i);            // 72: 클릭 = 크게 보기
+ main.ondblclick=()=>playFrom(sc.scene_id);   // 기존 동작(그 장면부터 감상) 유지
+ card.appendChild(main);
+ const play=el("button","play","▶");
+ play.title="이 장면부터 감상";
+ play.setAttribute("aria-label","이 장면부터 감상 — "+(sc.purpose||sc.scene_id));
+ play.onclick=e=>{e.stopPropagation();playFrom(sc.scene_id)};
+ card.appendChild(play);
+ const on=favSet.has(sc.scene_id);
+ const star=el("button","fav"+(on?" on":""),"★");
+ star.setAttribute("aria-label","즐겨찾기(인화 후보) — "+(sc.purpose||sc.scene_id));
+ star.setAttribute("aria-pressed",on?"true":"false");star.title="즐겨찾기(인화 후보)";
+ star.onclick=e=>{e.stopPropagation();toggleFav(sc.scene_id)};
+ galStars.set(sc.scene_id,star);
+ card.appendChild(star);
+ return card}
+function renderGallery(){const grid=$("galGrid");if(!grid)return;
+ grid.replaceChildren();galStars.clear();
  const favOnly=$("galFavOnly").checked,list=galList();
  if(!list.length){grid.appendChild(el("p","small",favOnly?"즐겨찾기한 장면이 없습니다.":"승인된 장면이 아직 없습니다 — 장면을 승인하면 여기 모입니다."));return}
- list.forEach((sc,i)=>{const card=el("div","galcard");
-  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;im.loading="lazy";card.appendChild(im)}
-  else card.appendChild(el("div","empty",sc.purpose||sc.scene_id));
-  card.appendChild(el("div","cap",(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id)));
-  card.onclick=()=>openLightbox(i);            // 72: 클릭 = 크게 보기
-  card.ondblclick=()=>playFrom(sc.scene_id);   // 기존 동작(그 장면부터 감상) 유지
-  const play=el("button","play","▶");
-  play.title="이 장면부터 감상";play.setAttribute("aria-label","이 장면부터 감상");
-  play.onclick=e=>{e.stopPropagation();playFrom(sc.scene_id)};
-  card.appendChild(play);
-  const star=el("button","fav"+(favSet.has(sc.scene_id)?" on":""),"★");
-  star.setAttribute("aria-label","즐겨찾기(인화 후보)");star.title="즐겨찾기(인화 후보)";
-  star.onclick=e=>{e.stopPropagation();toggleFav(sc.scene_id)};
-  card.appendChild(star);grid.appendChild(card)})}
+ list.forEach((sc,i)=>grid.appendChild(galCard(sc,i)))}
 async function playFrom(sceneId){closeLightbox();await refresh();
  const idx=S.scenes.findIndex(s=>s.scene_id===sceneId);   // refresh 후 재검색 — stale 인덱스 방지
  if(idx<0){alert("장면을 찾을 수 없습니다.");return}
@@ -993,6 +1184,7 @@ $("lbNext").onclick=e=>{e.stopPropagation();lbMove(1)};
 $("lbPlay").onclick=e=>{e.stopPropagation();const sc=lbList[lbIdx];if(sc)playFrom(sc.scene_id)};
 $("lightbox").onclick=e=>{if(e.target===$("lightbox")||e.target===$("lbImg"))closeLightbox()};
 document.addEventListener("keydown",e=>{if($("lightbox").hidden)return;
+ if(isTypingTarget(e)&&e.key!=="Escape")return;
  if(e.key==="Escape"){e.preventDefault();closeLightbox()}
  else if(e.key==="ArrowLeft")lbMove(-1);
  else if(e.key==="ArrowRight")lbMove(1)});
@@ -1031,6 +1223,7 @@ function renderTalk(){
  const log=$("talkLog");log.replaceChildren();
  for(const m of talkChat){const b=el("div","msg "+m.role,(m.role==="user"?"나: ":vnHeroine()+": ")+m.content);
   for(const p of (m.photos||[])){const im=el("img");im.src=p.url;im.alt=p.caption||"";
+   im.loading="lazy";im.decoding="async";
    im.style.cssText="max-width:60%;border-radius:10px;margin-top:8px;display:block";b.appendChild(im)}
   log.appendChild(b)}
  log.scrollTop=log.scrollHeight}
@@ -1134,7 +1327,8 @@ function openScrollView(){const c=$("svCuts");c.replaceChildren();
  if(!list.length){alert("표시할 장면이 없습니다.");return}
  for(const sc of list){
   const blk=el("div","cut");blk.dataset.sid=sc.scene_id;   // 82: 위치 복원의 기준점
-  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.scene_id;im.loading="lazy";blk.appendChild(im)}
+  if(sc.image_url){const im=el("img");im.src=sc.image_url;im.alt=sc.purpose||sc.scene_id;
+   im.loading="lazy";im.decoding="async";blk.appendChild(im)}
   for(const d of (sc.dialogue||[])){const say=el("div","say");
    if(d.speaker_id){const b=el("b",null,charName(d.speaker_id)+"  ");
     b.style.color=charColor(d.speaker_id)||"var(--jade)";
@@ -1166,21 +1360,62 @@ function closeScrollView(){svSave();$("scrollView").hidden=true}
 $("btnScrollView").onclick=async()=>{await refresh();openScrollView()};
 $("btnSvClose").onclick=closeScrollView;
 $("btnSvTop").onclick=()=>{$("scrollView").scrollTop=0;svSave()};
-document.addEventListener("keydown",e=>{if(!$("scrollView").hidden&&e.key==="Escape")closeScrollView()});
+document.addEventListener("keydown",e=>{
+ if(!$("scrollView").hidden&&e.key==="Escape"&&!isTypingTarget(e))closeScrollView()});
 // 63 · 내보내기 옵션(범위·최대 변·화질)을 UI 에서 그대로 서버로 전달
 function exportOpts(){return {all:$("evAll").checked,
  max_edge:Math.max(480,Math.min(4096,+$("evMaxEdge").value||1600)),
  quality:Math.max(40,Math.min(100,+$("evQuality").value||85))}}
-$("btnExportViewer").onclick=async()=>{$("exportViewerMsg").textContent="내보내는 중… (이미지 내장)";
+// ---- 내보낸 파일 받기 (GET /dl/) — 폰으로 접속했을 때 파일을 곧장 저장하게 ----
+// 서버는 ROOT 기준 상대경로(output/…)를 주고, /dl/ 은 output/ 아래를 기준으로 받는다.
+function dlUrl(rel){const s=String(rel||"").replace(/\\/g,"/");
+ const i=s.indexOf("output/");if(i<0)return "";
+ const parts=s.slice(i+"output/".length).split("/").filter(Boolean);
+ if(!parts.length)return "";
+ return "/dl/"+parts.map(encodeURIComponent).join("/")}
+function dlLink(rel,label,inline){const u=dlUrl(rel);if(!u)return null;
+ const a=el("a","dllink",label);
+ a.href=inline?(u+"?inline=1"):u;
+ if(inline){a.target="_blank";a.rel="noopener"}else a.setAttribute("download","");
+ return a}
+function setMsgWithLinks(node,text,links){node.replaceChildren();
+ node.appendChild(el("span",null,text));
+ for(const a of links)if(a)node.appendChild(a)}
+async function renderDl(){const box=$("dlList");if(!box)return;
+ const m=$("dlMsg");if(m)m.textContent="목록 불러오는 중…";
+ let files=[];
+ try{const d=await api("/dl/");files=(d&&Array.isArray(d.files))?d.files:[]}
+ catch(e){if(m)m.textContent="목록을 불러오지 못했습니다: "+e.message;return}
+ box.replaceChildren();
+ if(m)m.textContent=files.length?files.length+"개":"";
+ if(!files.length){box.appendChild(el("p","small",
+  "아직 내보낸 파일이 없습니다 — [감상본 내보내기]·[PWA 내보내기]·[마스터 굽기]를 먼저 실행하세요."));return}
+ for(const f of files.slice(0,200)){
+  const row=el("div","dlrow");
+  const a=el("a",null,f.path);a.href=f.url;a.setAttribute("download","");
+  a.title="내려받기";
+  row.appendChild(a);row.appendChild(el("span","small",(f.mb||0)+"MB"));
+  box.appendChild(row)}}
+$("btnDlRefresh").onclick=renderDl;
+$("dlBox").addEventListener("toggle",()=>{if($("dlBox").open)renderDl()});
+$("btnExportViewer").onclick=async()=>{const m=$("exportViewerMsg");
+ m.replaceChildren();m.textContent="내보내는 중… (이미지 내장)";
  try{const d=await api("/api/export-viewer",exportOpts());
-  $("exportViewerMsg").textContent=d.file+" ("+d.mb+"MB) — 이 파일 하나로 폰에서도 재생됩니다"}
- catch(e){$("exportViewerMsg").textContent="실패: "+e.message}};
+  setMsgWithLinks(m,d.file+" ("+d.mb+"MB) — 이 파일 하나로 폰에서도 재생됩니다 ",
+   [dlLink(d.file,"⬇ 내려받기"),dlLink(d.file,"▶ 지금 열기",true)]);
+  if($("dlBox").open)renderDl()}
+ catch(e){m.replaceChildren();m.textContent="실패: "+e.message}};
 // 86 · PWA 내보내기 — 서버가 아직 지원하지 않으면 CLI 안내만
-$("btnExportPwa").onclick=async()=>{$("exportViewerMsg").textContent="PWA 내보내는 중…";
+$("btnExportPwa").onclick=async()=>{const m=$("exportViewerMsg");
+ m.replaceChildren();m.textContent="PWA 내보내는 중…";
  try{const d=await api("/api/export-pwa",exportOpts());
-  $("exportViewerMsg").textContent=(d.dir||d.file||"완료")
-   +" — 폰 브라우저로 열고 [홈 화면에 추가] 하면 앱처럼 씁니다"+(d.mb?" ("+d.mb+"MB)":"")}
- catch(e){$("exportViewerMsg").textContent=/not found/i.test(e.message)
+  const base=d.dir||d.file||"";
+  setMsgWithLinks(m,(base||"완료")+" — 폰 브라우저로 열고 [홈 화면에 추가] 하면 앱처럼 씁니다"
+   +(d.mb?" ("+d.mb+"MB) ":" "),
+   [d.dir?dlLink(d.dir+"/index.html","▶ 폰에서 열기",true):null]);
+  if($("dlBox").open)renderDl()}
+ catch(e){m.replaceChildren();
+  m.textContent=/not found/i.test(e.message)
    ?"이 서버는 아직 PWA 내보내기를 지원하지 않습니다 — 터미널에서: python tools/export_pwa.py"
    :"실패: "+e.message}};
 
@@ -1230,25 +1465,32 @@ $("btnLanCopy").onclick=async()=>{const b=$("btnLanCopy");
  catch(e){b.textContent="복사 실패 — 직접 입력하세요"}};
 
 function selectTab(name){const sec=$("tab-"+name);if(!sec)return;
- document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.tab===name));
+ document.querySelectorAll("nav button").forEach(x=>{const on=x.dataset.tab===name;
+  x.classList.toggle("on",on);
+  if(on)x.setAttribute("aria-current","page");else x.removeAttribute("aria-current")});
  document.querySelectorAll("section").forEach(x=>x.classList.remove("on"));
  sec.classList.add("on");
  if(name==="gallery")renderGallery();
  if(name==="talk")talkStatus();
- if(name==="viewer"){syncResume();renderLan()}}
+ if(name==="story")loadChatHistory();
+ if(name==="viewer"){syncResume();renderLan();if($("dlBox").open)renderDl()}}
+$("authReload").onclick=()=>{location.reload()};
+$("authDismiss").onclick=()=>{$("authGate").hidden=true};
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab));
 $("btnCheck").onclick=async()=>{const d=await api("/api/check",{});
  $("checkOut").textContent=d.output};
 $("btnLint").onclick=async()=>{const o=$("lintOut");o.hidden=false;o.textContent="점검 중…";
  try{const d=await api("/api/lint",{});
-  o.textContent=d.findings.length?d.summary+"\n\n"+d.findings.map(f=>(f.level==="warn"?"⚠ ":"· ")+"["+f.scene_id+"] "+f.message).join("\n"):"연출 리듬 양호 — 특이사항 없음"}
+  o.textContent=d.findings.length?d.summary+"\n\n"+d.findings.map(f=>(f.level==="warn"?"⚠ ":"· ")+"["+f.scene_id+"] "+f.message).join("\n"):"연출·분기 양호 — 특이사항 없음"}
  catch(e){o.textContent="실패: "+e.message}};
 // ---- 비주얼 노벨 뷰어 (VN 런타임) ----
 let vi=0,di=0,ended=false;
 let affection=30,awaitingChoice=false;   // 분기 엔진(연애 시뮬 등)
 let revealing=false,revealTimer=null,fullText="",autoTimer=null;
 let autoOn=false,skipOn=false;
-let history=[],historyKeys=new Set();
+// backlog: 지나온 대사 기록. 예전 이름 history 는 전역 window.history 를 가려
+// 위험했다(뷰어 안에서 history.back() 등이 배열을 가리킴). 이름을 바꿔 가림을 없앤다.
+let backlog=[],backlogKeys=new Set();
 let navStack=[];        // 66: 방문 히스토리 스택(분기 경로 역추적)
 let wakeLock=null;      // 89: 자동 재생 중 화면 꺼짐 방지
 const VN={textSpeed:26,autoDelay:1500,fs:17,skipAll:false,cinema:false};
@@ -1299,8 +1541,12 @@ function goToIndex(idx){const before=vi;
  if(vi!==before)renderImage();showLine()}
 function showChoices(sc){awaitingChoice=true;clearTimeout(autoTimer);
  const box=$("choices");box.replaceChildren();
- sc.choices.forEach(c=>{const b=el("button",null,c.text);b.onclick=()=>pickChoice(c);box.appendChild(b)});
- box.hidden=false;$("dlg").style.opacity=".3"}
+ sc.choices.forEach(c=>{const b=el("button",null,c.text);b.type="button";
+  b.onclick=()=>pickChoice(c);box.appendChild(b)});
+ box.hidden=false;$("dlg").style.opacity=".3";
+ $("srLine").textContent="선택지 "+sc.choices.length+"개 — Tab 으로 옮기고 Enter 로 고르세요";
+ const first=box.firstElementChild;                 // 키보드·스크린리더가 곧바로 고를 수 있게
+ if(first&&first.focus)first.focus()}
 function pickChoice(c){awaitingChoice=false;
  $("choices").hidden=true;$("choices").replaceChildren();$("dlg").style.opacity="";
  const before=affection;
@@ -1323,31 +1569,45 @@ function affFeedback(delta){const f=$("affFloat");if(!f||!delta)return;
 function loadPos(){try{return JSON.parse(localStorage.getItem(posKey())||"null")}catch(e){return null}}
 function clearPos(){try{localStorage.removeItem(posKey())}catch(e){}syncResume()}
 const histKey=()=>"vn:hist:"+(S.title||"_");
-function saveHistory(){try{localStorage.setItem(histKey(),JSON.stringify(history.slice(-500)))}catch(e){}}
+function saveHistory(){try{localStorage.setItem(histKey(),JSON.stringify(backlog.slice(-500)))}catch(e){}}
 function loadHistory(){try{const h=JSON.parse(localStorage.getItem(histKey())||"[]");return Array.isArray(h)?h:[]}catch(e){return []}}
 const favKey=()=>"vn:fav:"+(S.title||"_");
 function loadFavLocal(){try{return new Set(JSON.parse(localStorage.getItem(favKey())||"[]"))}catch(e){return new Set()}}
 function saveFavLocal(set){try{localStorage.setItem(favKey(),JSON.stringify([...set]))}catch(e){}}
 function applyCinema(){const fx=$("cinemaFx");if(fx)fx.hidden=!VN.cinema}
 
-// 이미지: 크로스페이드 + 다음 장면 프리로드
+// 프리로드는 현재 위치 ±2컷 슬라이딩 윈도로만.
+// 예전에는 감상 시작 시 전 장면을 한꺼번에 받아 100컷짜리 작품이면 수백 MB 를 즉시 요청했다.
+const PRELOAD_SPAN=2;
+let preloaded=new Set();
+function preloadAround(center){
+ const lo=Math.max(0,center-PRELOAD_SPAN),hi=Math.min(S.scenes.length-1,center+PRELOAD_SPAN);
+ if(preloaded.size>60)preloaded=new Set();   // 오래 감상해도 Set 이 무한정 자라지 않게
+ for(let i=lo;i<=hi;i++){
+  const u=S.scenes[i]&&S.scenes[i].image_url;
+  if(!u||preloaded.has(u))continue;
+  preloaded.add(u);
+  const p=new Image();p.decoding="async";p.src=u}}
+
+// 이미지: 크로스페이드 + 주변 컷 프리로드
 function renderImage(){const sc=S.scenes[vi],box=$("stageImg"),url=sc&&sc.image_url;
  const emp=box.querySelector(".empty");if(emp)emp.remove();
  if(!url){[...box.querySelectorAll("img")].forEach(n=>n.remove());
-  box.appendChild(el("div","empty","(이미지 없음) "+((sc&&(sc.purpose||sc.scene_id))||"")));return}
+  box.appendChild(el("div","empty","(이미지 없음) "+((sc&&(sc.purpose||sc.scene_id))||"")));
+  preloadAround(vi);return}
  const cur=box.querySelector("img.show");
- if(cur&&cur.getAttribute("src")===url)return;
- const img=el("img");img.src=url;
+ if(cur&&cur.getAttribute("src")===url){preloadAround(vi);return}
+ const img=el("img");img.src=url;img.alt=sc.purpose||sc.scene_id||"";img.decoding="async";
  const show=()=>{img.classList.add("show");
   setTimeout(()=>{[...box.querySelectorAll("img")].forEach(n=>{if(n!==img)n.remove()})},REDUCE?0:540)};
  img.onerror=()=>{[...box.querySelectorAll("img")].forEach(n=>n.remove());  // 깨진 URL → 잔상 대신 나레이션
   if(!box.querySelector(".empty"))box.appendChild(el("div","empty","(이미지를 불러올 수 없음) "+((sc&&(sc.purpose||sc.scene_id))||"")))};
  box.appendChild(img);
  if(REDUCE||img.complete)requestAnimationFrame(show);else img.onload=show;
- const nx=S.scenes[vi+1];if(nx&&nx.image_url){const p=new Image();p.src=nx.image_url}}
+ preloadAround(vi)}
 
-function recordHistory(name,text,color){const k=vi+":"+di;if(historyKeys.has(k))return;
- historyKeys.add(k);history.push({name,text,color,vi,di});saveHistory()}
+function recordHistory(name,text,color){const k=vi+":"+di;if(backlogKeys.has(k))return;
+ backlogKeys.add(k);backlog.push({name,text,color,vi,di});saveHistory()}
 
 function typeText(text){clearInterval(revealTimer);fullText=text;const t=$("dlgText");
  if(REDUCE||skipOn||VN.textSpeed<=0){t.textContent=text;t.scrollTop=t.scrollHeight;revealing=false;onShown();return}
@@ -1453,8 +1713,8 @@ function jumpTo(v,d){ended=false;hideEndCard();const before=vi;
  $("vnLog").hidden=true;$("vnScenes").hidden=true;syncExpanded();
  if(vi!==before)renderImage();showLine()}
 function renderLog(){const box=$("vnLogInner");box.replaceChildren();
- if(!history.length)box.appendChild(el("div","logline","아직 지나온 대사가 없습니다."));
- for(const h of history){const row=el("div","logline");
+ if(!backlog.length)box.appendChild(el("div","logline","아직 지나온 대사가 없습니다."));
+ for(const h of backlog){const row=el("div","logline");
   if(h.name){const b=el("b",null,h.name+"  ");if(h.color)b.style.color=h.color;row.appendChild(b)}
   row.appendChild(el("span",null,h.text));
   row.onclick=()=>jumpTo(h.vi,h.di);   // 백로그 클릭 → 그 지점으로 이동
@@ -1472,7 +1732,9 @@ function renderSceneJump(){const box=$("vnScenesInner");box.replaceChildren();
  let here=null;
  S.scenes.forEach((sc,i)=>{const it=el("button","sceneItem"+(i===vi?" here":""));
   it.appendChild(el("span","n",String(sc.scene_order||i+1)));
-  if(sc.image_url){const im=el("img","th");im.src=sc.image_url;im.alt="";im.loading="lazy";it.appendChild(im)}
+  if(sc.image_url){const im=el("img","th");
+   im.src=sc.image_url+"?w=140";               // 표시 56px — 원본을 받을 이유가 없다
+   im.alt="";im.loading="lazy";im.decoding="async";it.appendChild(im)}
   else it.appendChild(el("span","thx"));
   const first=(sc.dialogue||[])[0];
   it.appendChild(el("span","tx",sc.purpose||(first&&first.text)||sc.scene_id));
@@ -1528,13 +1790,15 @@ $("setCinema").onchange=e=>{VN.cinema=e.target.checked;saveVN();applyCinema()};
 
 // 시작/재개
 let _returnFocus=null;
-const bgNodes=()=>[...document.querySelectorAll("body > *")].filter(n=>n.id!=="stage");
+// 감상 중 배경을 inert 로 잠글 때, 재인증 안내(#authGate)까지 잠그면 복구 버튼을 누를 수 없다
+const bgNodes=()=>[...document.querySelectorAll("body > *")]
+ .filter(n=>n.id!=="stage"&&n.id!=="authGate");
 function setUiHidden(h){$("stage").classList.toggle("uihidden",h);$("stageBar").inert=h}
 function startPlayback(resume,at){if(!S.scenes.length){alert("장면이 없습니다. 먼저 장면을 구성하세요.");return}
  loadSeen();ended=false;applyCinema();hideEndCard();closeLightbox();
  const pos=resume?loadPos():null;
- if(pos){history=loadHistory();historyKeys=new Set(history.map(h=>h.vi+":"+h.di))}
- else{history=[];historyKeys=new Set();saveHistory()}
+ if(pos){backlog=loadHistory();backlogKeys=new Set(backlog.map(h=>h.vi+":"+h.di))}
+ else{backlog=[];backlogKeys=new Set();saveHistory()}
  navStack=(pos&&Array.isArray(pos.stack))   // 66: 이어보기면 지나온 분기 경로도 복원
   ?pos.stack.filter(n=>Number.isInteger(n)&&n>=0&&n<S.scenes.length):[];
  if(typeof at==="number"&&at>=0&&at<S.scenes.length){vi=at;di=0;navStack=[]}   // 갤러리: 그 장면부터
@@ -1546,7 +1810,7 @@ function startPlayback(resume,at){if(!S.scenes.length){alert("장면이 없습�
  _returnFocus=document.activeElement;
  bgNodes().forEach(n=>{n.inert=true});   // 배경 비활성 — 포커스/스크린리더 트랩
  $("stage").classList.add("on");$("stage").setAttribute("aria-hidden","false");$("stage").focus();
- for(const s of S.scenes){if(s.image_url){const p=new Image();p.src=s.image_url}}  // 전체 프리로드(깜빡임 제거)
+ preloaded=new Set();          // 프리로드는 renderImage 가 ±2컷씩만 채운다
  renderImage();showLine()}
 
 function toggleHide(){setUiHidden(!$("stage").classList.contains("uihidden"))}   // 화면 보기(대사창·바 숨김)
@@ -1580,7 +1844,18 @@ $("stageClick").addEventListener("touchend",e=>{const t=e.changedTouches[0],dx=t
 document.addEventListener("keydown",e=>{if(!$("stage").classList.contains("on"))return;
  // 엔딩 카드가 떠 있으면 버튼으로만 진행 — Space/Enter 가 카드를 지나쳐 닫아버리지 않게
  if(!$("endCard").hidden){if(e.key==="Escape"){hideEndCard();exitStage()}return}
- if(e.key==="Escape"){if(panelOpen())closePanels();else if($("stage").classList.contains("uihidden"))setUiHidden(false);else exitStage();return}
+ // 설정 패널의 슬라이더·체크박스에 포커스가 있으면 단축키를 삼키지 않는다.
+ // Escape 만은 예외 — 패널을 닫는 유일한 탈출구여야 한다.
+ if(isTypingTarget(e)&&e.key!=="Escape")return;
+ if(e.key==="Escape"){
+  if(panelOpen()){closePanels();return}
+  if(awaitingChoice){                                   // 선택 대기 중에 뷰어가 통째로 닫히지 않게
+   const f=$("choices").firstElementChild;if(f&&f.focus)f.focus();
+   $("srLine").textContent="선택지를 먼저 고르세요. 그만 보려면 [닫기] 버튼을 누르세요.";return}
+  if($("stage").classList.contains("uihidden")){setUiHidden(false);return}
+  exitStage();return}
+ // 선택지·툴바 버튼 위에서의 Space/Enter 는 버튼 활성화에 양보한다(preventDefault 로 삼키면 못 누른다)
+ if((e.key===" "||e.key==="Enter")&&e.target&&e.target.tagName==="BUTTON")return;
  if(e.key==="ArrowLeft"){advance(-1);return}
  if(e.key===" "||e.key==="ArrowRight"||e.key==="Enter"){e.preventDefault();advance(1);return}
  if(e.key==="a"||e.key==="A")setAuto(!autoOn);
@@ -1686,5 +1961,6 @@ function qrEncode(text){
  return best}
 
 loadVN();syncResume();renderLan();
-refresh().catch(e=>{$("chipTitle").textContent="상태 불러오기 실패";$("chipTitle").className="chip bad"});
+refresh().then(loadChatHistory)   // 스토리 탭이 첫 화면이므로 지난 대화를 바로 채운다
+ .catch(e=>{$("chipTitle").textContent="상태 불러오기 실패";$("chipTitle").className="chip bad"});
 </script></body></html>

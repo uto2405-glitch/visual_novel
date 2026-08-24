@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """환경 종합 점검 — "왜 안 되지?" 를 30초 안에 좁혀준다.
 
-파이썬·의존성·환경변수·로컬 LLM·디스크·프로젝트 구조를 한 번에 훑고, 항목마다
+파이썬·의존성·환경변수·로컬 LLM·디스크·프로젝트 구조·백업·비밀값을 한 번에 훑고, 항목마다
 무엇을 하면 되는지 한국어로 알려준다. **읽기 전용** — 어떤 파일도 만들거나 고치지 않고,
 과금되는 이미지 생성 API 는 호출하지 않는다(토큰이 있는지 여부만 본다).
+
+판정은 다른 도구에 위임한다(중복 구현 금지): 연출 리듬·분기는 scene_lint, 비밀값은 secret_scan,
+프로토콜 준수는 check_protocol. doctor 는 그 결과를 한 화면에 모아 보여준다.
 
 사용법:
   python tools/doctor.py            # 전체 점검
@@ -21,26 +24,19 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS = ROOT / "tools"
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:          # 도구 모듈(vn_core·secret_scan·scene_lint)을 직접 부르기 위해
+    sys.path.insert(0, str(_HERE))
+
+from vn_core import load_json_safe   # noqa: E402  (import 만으로 콘솔 인코딩 방어가 걸린다)
+
+ROOT = _HERE.parent                  # vn_core 규약과 같은 값 — 복제본에서도 자기 트리를 본다
+TOOLS = _HERE
 MANIFEST = ROOT / "project" / "manifest.json"
 SCENES = ROOT / "project" / "scenes"
 
 OK, WARN, ERR = "OK", "경고", "문제"
 _results: list = []
-
-
-def _console_guard() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
-_console_guard()
 
 
 def add(section: str, name: str, level: str, detail: str, fix: str = "") -> None:
@@ -73,17 +69,30 @@ def check_pillow() -> None:
             "python -m pip install Pillow")
 
 
+# 없으면 파이프라인이 멈추는 파일. vn_core(공용 기반)·scene_ops(상태 전이)는 다른 도구가 의존한다.
+NEED_TOOLS = ["webapp.py", "studio.html", "vn_core.py", "scene_ops.py", "advance_scene.py",
+              "check_protocol.py", "scene_lint.py", "vn_compose.py", "make_grok_input.py",
+              "local_llm.py", "makefun_client.py", "print_preflight.py", "print_export.py",
+              "export_viewer.py", "export_pwa.py", "backup_project.py", "secret_scan.py",
+              "selftest.py"]
+# 없어도 되는 파일 — 있으면 그 경로가 쓸 수 있다는 뜻이라 상태만 알린다.
+OPTIONAL_TOOLS = {"talk_store.py": "대화 저장 계층(없으면 webapp 내장 구현을 씁니다)",
+                  "grok_api.py": "그록 API 모드", "xai_client.py": "그록 API 클라이언트"}
+
+
 def check_tools() -> None:
-    need = ["webapp.py", "studio.html", "advance_scene.py", "check_protocol.py",
-            "vn_compose.py", "local_llm.py", "makefun_client.py", "print_preflight.py",
-            "print_export.py", "export_viewer.py", "export_pwa.py", "backup_project.py",
-            "secret_scan.py", "selftest.py"]
-    missing = [n for n in need if not (TOOLS / n).exists()]
+    missing = [n for n in NEED_TOOLS if not (TOOLS / n).exists()]
     if missing:
         add("실행 환경", "도구 파일", ERR, "누락: " + ", ".join(missing),
             "패키지를 다시 받거나 백업에서 복원하세요 (docs/RECOVERY_RUNBOOK.md).")
     else:
-        add("실행 환경", "도구 파일", OK, f"{len(need)}개 모두 있음")
+        add("실행 환경", "도구 파일", OK, f"{len(NEED_TOOLS)}개 모두 있음 (vn_core·scene_ops 포함)")
+
+    have = [n for n in OPTIONAL_TOOLS if (TOOLS / n).exists()]
+    lack = [n for n in OPTIONAL_TOOLS if n not in have]
+    add("실행 환경", "선택 모듈", OK,
+        (("있음: " + ", ".join(have)) if have else "없음") +
+        ((" · 미설치: " + ", ".join(f"{n}({OPTIONAL_TOOLS[n]})" for n in lack)) if lack else ""))
 
 
 def check_disk() -> None:
@@ -136,7 +145,6 @@ def check_env() -> None:
 
 # ------------------------------------------------------------------ 3. 로컬 LLM
 def check_local_llm() -> None:
-    sys.path.insert(0, str(TOOLS))
     try:
         import local_llm
     except Exception as exc:
@@ -155,6 +163,7 @@ def check_local_llm() -> None:
 
 # ------------------------------------------------------------------ 4. 프로젝트 구조
 def _load(path: Path):
+    """(데이터, 오류문구) — 손상 파일을 '왜 못 읽었는지' 함께 알려야 해서 예외를 문자열로 받는다."""
     try:
         return json.loads(path.read_text(encoding="utf-8")), ""
     except (ValueError, OSError) as exc:
@@ -197,10 +206,10 @@ def check_project() -> None:
     add("프로젝트", "화풍(output.visual_style)", OK if style else WARN,
         style[:60] if style else "미지정 — 코드 기본 화풍이 쓰입니다")
 
-    check_scenes()
+    check_scenes(mf)
 
 
-def check_scenes() -> None:
+def check_scenes(mf: dict | None = None) -> None:
     if not SCENES.exists():
         add("프로젝트", "장면 폴더", ERR, "project/scenes/ 가 없습니다",
             "폴더를 만들고 templates/scene.json 으로 첫 장면을 작성하세요.")
@@ -211,6 +220,8 @@ def check_scenes() -> None:
         return
 
     broken, mismatch, orders, status_count, missing_img = [], [], [], {}, []
+    episodes: dict = {}          # 장면이 실제로 쓰는 화 번호 → 장면 수
+    no_episode = []
     for f in files:
         sc, err = _load(f)
         if not isinstance(sc, dict):
@@ -221,6 +232,11 @@ def check_scenes() -> None:
         order = sc.get("scene_order")
         if isinstance(order, int):
             orders.append(order)
+        ep = sc.get("episode")
+        if isinstance(ep, int):
+            episodes[ep] = episodes.get(ep, 0) + 1
+        else:
+            no_episode.append(f.stem)
         st = str(sc.get("status", "?"))
         status_count[st] = status_count.get(st, 0) + 1
         sel = str(sc.get("assets", {}).get("selected_image", "") or "").strip()
@@ -257,6 +273,56 @@ def check_scenes() -> None:
     else:
         add("프로젝트", "선택 이미지 존재", OK, "선택된 이미지 원본이 모두 있습니다")
 
+    check_episodes(mf or {}, episodes, no_episode, len(files) - len(broken))
+    check_lint()
+
+
+def check_episodes(mf: dict, used: dict, no_episode: list, total: int) -> None:
+    """화(episode) 드리프트 — 장면의 화 번호와 매니페스트 episodes 목록이 어긋났는지.
+
+    뷰어의 '화 단위 감상'은 두 곳이 맞물려야 동작한다. 어긋나면 제목 없는 화가 생기거나
+    (선언은 있는데 장면이 없어) 빈 화가 목록에 뜬다. 검사기 항목이 아니라 여기서 잡는다.
+    """
+    declared = {e.get("episode") for e in mf.get("episodes", [])
+                if isinstance(e, dict) and isinstance(e.get("episode"), int)}
+    if not declared and not used:
+        add("프로젝트", "화(episode) 구성", OK, "화 구분을 쓰지 않는 작품입니다")
+        return
+
+    undeclared = sorted(e for e in used if e not in declared)
+    empty = sorted(e for e in declared if e not in used)
+    problems = []
+    if undeclared:
+        problems.append("매니페스트에 없는 화 " + ", ".join(str(e) for e in undeclared))
+    if empty:
+        problems.append("장면이 없는 화 " + ", ".join(str(e) for e in empty))
+    if no_episode and used:
+        head = ", ".join(no_episode[:5]) + (f" 외 {len(no_episode) - 5}개" if len(no_episode) > 5 else "")
+        problems.append(f"episode 가 없는 장면 {len(no_episode)}/{total}개 ({head})")
+
+    spread = " · ".join(f"{k}화 {v}컷" for k, v in sorted(used.items()))
+    if problems:
+        add("프로젝트", "화(episode) 정합", WARN, " / ".join(problems) + (f" [{spread}]" if spread else ""),
+            "manifest.episodes 와 각 장면의 episode 번호를 맞추세요 (감상본 화 선택이 어긋납니다).")
+    else:
+        add("프로젝트", "화(episode) 정합", OK, f"{len(declared)}개 화 · {spread}")
+
+
+def check_lint() -> None:
+    """연출 리듬·분기 무결성은 scene_lint 가 판단한다 — doctor 는 요약만 전달(중복 구현 금지)."""
+    try:
+        import scene_lint
+        r = scene_lint.lint_scenes()
+    except Exception as exc:
+        add("프로젝트", "연출 린트", WARN, f"scene_lint 를 실행할 수 없습니다: {exc}",
+            "python tools/scene_lint.py 로 직접 확인하세요.")
+        return
+    findings = r.get("findings", []) if isinstance(r, dict) else []
+    warns = sum(1 for f in findings if isinstance(f, dict) and f.get("level") == "warn")
+    add("프로젝트", "연출 리듬(scene_lint 위임)", WARN if warns else OK,
+        str(r.get("summary", ""))[:100],
+        "자세한 내용과 대상 장면: python tools/scene_lint.py" if warns else "")
+
 
 def check_backups() -> None:
     b = ROOT / "backups"
@@ -266,6 +332,55 @@ def check_backups() -> None:
             "python tools/backup_project.py snapshot 을 한 번 실행해 두세요.")
     else:
         add("백업", "스냅샷", OK, f"{len(snaps)}개 · 최신 {snaps[-1].stem.replace('manifest_', '')}")
+
+    # 이미지가 zip 에 없으면 체크섬은 '무엇이 사라졌는지'만 알려줄 뿐 되돌리지 못한다.
+    # 승인 이미지는 유료 생성물이자 유일본이라 이 경고가 실제 복구 가능 여부를 가른다.
+    imgs = sorted((ROOT / "images").rglob("*")) if (ROOT / "images").exists() else []
+    n_img = sum(1 for p in imgs if p.is_file())
+    if snaps and n_img:
+        with_img = any(load_json_safe(m, {}).get("images_included") for m in snaps[-3:])
+        add("백업", "이미지 원본 포함", OK if with_img else WARN,
+            "최근 스냅샷에 이미지 원본 포함됨" if with_img else
+            f"최근 3개 스냅샷에 이미지가 빠져 있습니다 — images/ 의 {n_img}개 파일은 "
+            "체크섬만 있고 zip 으로 복구할 수 없습니다",
+            "" if with_img else
+            "python tools/backup_project.py snapshot --with-images  (외장 사본: --dest D:/backup)")
+
+    legacy = sorted(p for p in (ROOT / "project").glob("scenes_backup_*") if p.is_dir()) \
+        if (ROOT / "project").exists() else []
+    if legacy:
+        add("백업", "옛 사본 위치", WARN,
+            f"project/scenes_backup_* 사본 {len(legacy)}개가 작업 폴더 안에 있습니다 "
+            "(백업 zip 이 매번 부풀고 장면 폴더와 섞입니다)",
+            "python tools/backup_project.py migrate --dry-run  → 확인 후 --yes 로 backups/legacy/ 이관")
+
+
+# ------------------------------------------------------------------ 5. 비밀값
+def check_secrets() -> None:
+    """secret_scan 을 실제로 실행한다 — '따로 실행하세요' 안내는 아무도 실행하지 않는다.
+
+    출력은 위치와 종류까지만. 마스킹된 값조차 콘솔·캡처로 2차 유출될 수 있어 doctor 는 싣지 않는다.
+    """
+    try:
+        import secret_scan
+    except Exception as exc:
+        add("비밀값", "스캔", WARN, f"secret_scan 을 불러올 수 없습니다: {exc}",
+            "python tools/secret_scan.py 로 직접 실행하세요.")
+        return
+    try:
+        findings = secret_scan.scan(ROOT)
+    except OSError as exc:
+        add("비밀값", "스캔", WARN, f"스캔 중 파일 읽기 실패: {exc}")
+        return
+    if not findings:
+        add("비밀값", "스캔", OK, "저장소에 키·토큰·개인키 파일 없음 (값은 환경변수에만)")
+        return
+    where = ", ".join(f"{f['file']}:{f['line']}[{f['kind']}]" if f["line"] else f"{f['file']}[{f['kind']}]"
+                      for f in findings[:3])
+    more = f" 외 {len(findings) - 3}건" if len(findings) > 3 else ""
+    add("비밀값", "스캔", ERR, f"{len(findings)}건 발견 — {where}{more} (값은 표시하지 않습니다)",
+        "python tools/secret_scan.py 로 전체 목록 확인 → 해당 키를 즉시 폐기·재발급하고 "
+        "환경변수 참조로 바꾸세요 (docs/ENV_SETUP.md).")
 
 
 # ------------------------------------------------------------------ 출력
@@ -278,6 +393,7 @@ def run_all() -> None:
     check_local_llm()
     check_project()
     check_backups()
+    check_secrets()
 
 
 def main() -> int:
@@ -313,7 +429,6 @@ def main() -> int:
         print(f"치명 문제 없음 · 경고 {warns}건 (기능은 동작합니다).")
     else:
         print("모두 정상입니다.")
-    print("비밀값 점검은 별도: python tools/secret_scan.py")
     return 1 if errors else 0
 
 

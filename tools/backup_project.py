@@ -6,6 +6,7 @@ verify  : 매니페스트와 현재 파일을 대조해 변경/손상/누락을 
 list    : 백업 목록.
 restore : 스냅샷 zip 을 되돌린다(파괴적 — 미리보기·확인·되돌림 백업 필수).
 prune   : 오래된 스냅샷 정리(보존 개수 상한).
+migrate : project/ 에 남은 옛 scenes_backup_* 사본을 backups/legacy/ 로 이관.
 schedule: 주기 자동 스냅샷+verify 용 스크립트/등록 명령 안내(등록은 사용자가 직접 실행).
 
 사용법:
@@ -17,6 +18,7 @@ schedule: 주기 자동 스냅샷+verify 용 스크립트/등록 명령 안내(�
   python tools/backup_project.py restore --dry-run         # 복원 차이만 미리보기
   python tools/backup_project.py restore --snapshot 20260824_224601
   python tools/backup_project.py prune --keep 10
+  python tools/backup_project.py migrate --dry-run          # project/scenes_backup_* → backups/legacy/
   python tools/backup_project.py schedule --time 21:00
 
 쓰기: backups/ 와 --dest 로 지정한 폴더만. 예외로 restore 만 project/·images/ 를 되돌린다.
@@ -26,33 +28,28 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import shutil
 import sys
 import zipfile
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
+    sys.path.insert(0, str(_HERE))
+
+from vn_core import VNError, atomic_write_json, load_json_safe, safe_path   # noqa: E402
+
+# 경로 이름은 vn_core 규약을 따르되 값은 이 파일 위치에서 계산한다.
+# (자가진단이 저장소를 복제해 이 모듈만 적재하므로 — 그때도 복제본 안에서만 백업·복원한다.)
+ROOT = _HERE.parent
 BACKUPS = ROOT / "backups"
 TARGETS = ["project", "images"]          # 체크섬 대상
 SKIP_PARTS = {"__pycache__", ".git"}
 RESTORE_TOPS = ("project", "images")     # 복원이 건드릴 수 있는 최상위 폴더(그 밖은 거부)
 KEEP_DEFAULT = 12                        # prune 기본 보존 개수
 TASK_NAME_DEFAULT = "VN-AutoBackup"
-
-
-def _console_guard() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
-_console_guard()
+LEGACY_SCENE_DIRS = "scenes_backup_*"    # 옛 도구가 project/ 안에 남긴 사본(백업 폴더로 이관 대상)
 
 
 def _sha256_fh(fh) -> str:
@@ -95,11 +92,7 @@ def _human(n: int) -> str:
 
 
 def _load_json(p: Path) -> dict:
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+    return load_json_safe(p, {})
 
 
 def _base_dir(base: Path | None) -> Path:
@@ -189,6 +182,45 @@ def _zip_payload(with_images: bool, images_scope: str) -> list[Path]:
     return files
 
 
+def _legacy_scene_dirs() -> list[Path]:
+    """옛 도구가 project/ 안에 만들어 둔 scenes_backup_* 사본.
+
+    project/ 안에 있으면 매번 zip 에 통째로 들어가 백업이 부풀고, 장면 폴더를 훑는 도구들이
+    사본을 실제 장면으로 착각할 여지도 생긴다. backups/ 로 옮기는 것이 맞다(migrate).
+    """
+    proj = ROOT / "project"
+    if not proj.exists():
+        return []
+    return sorted(p for p in proj.glob(LEGACY_SCENE_DIRS) if p.is_dir())
+
+
+def _warn_no_images(prefix: str = "  ") -> None:
+    """이미지가 zip 에 안 들어갔다는 사실을 '숫자로' 알린다.
+
+    체크섬만 기록된 이미지는 사고가 났을 때 '무엇이 사라졌는지'만 알려줄 뿐 되돌리지 못한다.
+    승인 이미지는 유료 생성물이자 유일본이라, 이 한 줄이 실제 복구 가능 여부를 가른다.
+    """
+    imgs = _approved_images()
+    if imgs:
+        size = _human(sum(p.stat().st_size for p in imgs if p.exists()))
+        print(f"{prefix}※ 이미지는 체크섬만 기록됨 — 승인 이미지 {len(imgs)}개({size})는 "
+              "이 zip 으로 복구할 수 없습니다.")
+        print(f"{prefix}   원본까지 지키려면: snapshot --with-images "
+              "(외장드라이브 사본은 --dest D:/backup)")
+    else:
+        print(f"{prefix}※ 이미지는 체크섬만 기록됨 — 원본 사본이 필요하면 --with-images")
+
+
+def _warn_legacy(prefix: str = "  ") -> None:
+    old = _legacy_scene_dirs()
+    if not old:
+        return
+    n = sum(1 for d in old for p in d.rglob("*") if p.is_file())
+    print(f"{prefix}※ project/{LEGACY_SCENE_DIRS} 사본 {len(old)}개({n}개 파일)가 남아 있어 "
+          "백업에 매번 함께 담깁니다.")
+    print(f"{prefix}   정리: python tools/backup_project.py migrate --dry-run  → 확인 후 --yes")
+
+
 def _write_zip(zpath: Path, files: list[Path]) -> int:
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for p in files:
@@ -209,11 +241,12 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
         if with_images:
             print(f"  이미지 포함: {images_scope}")
         else:
-            print("  이미지 미포함(체크섬만 기록) — 포함하려면 --with-images")
+            _warn_no_images("  ")
         if dest:
             print(f"  외부 사본: {dest}")
         if keep:
             print(f"  정리: 최신 {keep}개만 보존")
+        _warn_legacy()
         return 0
 
     BACKUPS.mkdir(parents=True, exist_ok=True)
@@ -238,7 +271,7 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
         print("  project/ 없음 — zip 생략(체크섬만 기록)")
 
     manifest = BACKUPS / f"manifest_{stamp}.json"
-    manifest.write_text(json.dumps({
+    atomic_write_json(manifest, {          # 원자적 — 쓰다 끊겨도 반쪽 매니페스트가 남지 않는다
         "created": stamp,
         "root": str(ROOT),
         "zip": zpath.name if zpath else "",
@@ -246,11 +279,12 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
         "images_included": bool(with_images and zpath),
         "images_scope": images_scope if with_images else "",
         "files": sums,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    })
     print(f"  체크섬 매니페스트: {manifest.relative_to(ROOT).as_posix()} ({len(sums)}개 파일)")
 
     if not with_images:
-        print("  ※ 이미지는 체크섬만 기록됨 — 원본 사본이 필요하면 --with-images")
+        _warn_no_images("  ")
+    _warn_legacy()
 
     if dest:
         rc = _copy_out(Path(dest), [p for p in (manifest, zpath) if p])
@@ -361,15 +395,22 @@ def list_backups(base: Path | None = None) -> int:
 # ---------------------------------------------------------------- restore
 
 def _safe_member(name: str) -> Path | None:
-    """zip slip 방지 — 절대경로·상위탈출·허용 밖 폴더는 복원하지 않는다."""
-    if not name or name.endswith("/") or "\\" in name or ":" in name:
+    """zip slip 방지 — 절대경로·상위탈출·허용 밖 폴더는 복원하지 않는다.
+
+    경로 성분 검증과 심볼릭 링크 재확인은 vn_core.safe_path 한 곳에서 하고(저장소 공통 규약),
+    여기서는 '복원해도 되는 최상위 폴더인가'만 덧붙인다.
+    """
+    if not name or name.endswith("/"):
         return None
-    q = PurePosixPath(name)
-    if q.is_absolute() or ".." in q.parts or not q.parts:
+    try:
+        target = safe_path(ROOT, name, allow_hidden=True)   # 백업본에는 .gitkeep 같은 숨김 파일도 있다
+    except VNError:
         return None
-    if q.parts[0] not in RESTORE_TOPS:
+    try:
+        top = target.relative_to(ROOT).parts[0]
+    except (ValueError, IndexError):
         return None
-    return ROOT.joinpath(*q.parts)
+    return target if top in RESTORE_TOPS else None
 
 
 def _pick_zip(stamp: str | None, base: Path | None = None) -> Path | None:
@@ -542,6 +583,53 @@ def prune(keep: int, *, base: Path | None = None, dry_run: bool = False,
     return 0
 
 
+# ---------------------------------------------------------------- migrate
+
+def migrate(*, dry_run: bool = False, assume_yes: bool = False, base: Path | None = None) -> int:
+    """project/scenes_backup_* 를 backups/legacy/ 로 옮긴다.
+
+    지우지 않고 '옮기기만' 한다 — 사본이 사라지는 것보다 자리를 옮기는 편이 안전하다.
+    옮긴 뒤에는 project/ zip 이 가벼워지고 장면 폴더에 사본이 섞이지 않는다.
+    """
+    old = _legacy_scene_dirs()
+    if not old:
+        print("이관할 사본이 없습니다 — project/scenes_backup_* 가 깨끗합니다.")
+        return 0
+    dest_root = _base_dir(base) / "legacy"
+    total = 0
+    print(f"이관 대상 {len(old)}개 → {dest_root}")
+    for d in old:
+        n = sum(1 for p in d.rglob("*") if p.is_file())
+        size = sum(p.stat().st_size for p in d.rglob("*") if p.is_file())
+        total += size
+        print(f"    - project/{d.name}  ({n}개 파일, {_human(size)})")
+    print(f"  합계 {_human(total)}")
+    if dry_run:
+        print("[미리보기] 아무것도 옮기지 않았습니다. 실행하려면 --dry-run 없이 다시 실행하세요.")
+        return 0
+    if not _confirm("위 폴더를 backups/legacy/ 로 옮깁니다(삭제는 하지 않습니다).", "이관", assume_yes):
+        return 1
+
+    dest_root.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for d in old:
+        target = dest_root / d.name
+        n = 2
+        while target.exists():                     # 이름이 겹치면 덮지 않고 새 이름을 쓴다
+            target = dest_root / f"{d.name}_{n}"
+            n += 1
+        try:
+            shutil.move(str(d), str(target))
+            moved += 1
+            print(f"  옮김: project/{d.name} → {target.relative_to(ROOT).as_posix()}")
+        except OSError as e:
+            print(f"  ✗ 이관 실패: {d.name} ({e}) — 원본은 그대로 있습니다.")
+    print(f"이관 완료 — {moved}/{len(old)}개.")
+    if moved:
+        print("  다음 스냅샷부터 project/ zip 이 가벼워집니다.")
+    return 0 if moved == len(old) else 1
+
+
 # ---------------------------------------------------------------- schedule (95)
 
 PS_TEMPLATE = """# 자동 스냅샷 + 무결성 검증 — 작업 스케줄러가 주기 실행한다.
@@ -704,6 +792,11 @@ def main() -> int:
     rp.add_argument("--yes", action="store_true", help="확인 절차 생략")
     rp.add_argument("--no-backup", action="store_true", help="복원 전 현재 상태 보관 생략")
 
+    mg = sub.add_parser("migrate", help="project/scenes_backup_* 를 backups/legacy/ 로 이관")
+    mg.add_argument("--from", dest="src", help="백업 폴더(기본: backups/)")
+    mg.add_argument("--dry-run", action="store_true", help="옮기지 않고 대상만 표시")
+    mg.add_argument("--yes", action="store_true", help="확인 절차 생략")
+
     pp = sub.add_parser("prune", help="오래된 스냅샷 정리")
     pp.add_argument("--keep", type=int, default=KEEP_DEFAULT, help=f"보존 개수(기본 {KEEP_DEFAULT})")
     pp.add_argument("--from", dest="src", help="백업 폴더(기본: backups/)")
@@ -735,6 +828,8 @@ def main() -> int:
     if args.cmd == "restore":
         return restore(stamp=args.snapshot, base=src, dry_run=args.dry_run,
                        assume_yes=args.yes, skip_backup=args.no_backup)
+    if args.cmd == "migrate":
+        return migrate(dry_run=args.dry_run, assume_yes=args.yes, base=src)
     if args.cmd == "prune":
         return prune(args.keep, base=src, dry_run=args.dry_run, assume_yes=args.yes)
     return schedule(time_of_day=args.time, freq=args.freq, day=args.day, keep=args.keep,

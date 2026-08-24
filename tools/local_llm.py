@@ -5,25 +5,41 @@ C:\\Users\\USER\\claude\\local_llm 의 llama.cpp 서버(OpenAI 호환, 기본 ht
 xai_client 와 별개(그록은 연출/프롬프트용, 로컬 LLM 은 인물 대화용). 키 불필요(로컬).
 
 설정 우선순위: 환경변수 LOCAL_LLM_URL > manifest.talk.base_url > 기본값.
+
+주소 규칙(중요): 인물 대화 전문이 나가는 통로이므로 **루프백·사설망만** 허용한다.
+scheme 이 https 라고 통과시키지 않는다 — 그 한 줄이 오타 하나로 대화 전체를 외부
+호스트에 넘길 수 있는 유일한 구멍이었다.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
-import os
 import re
+import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "project" / "manifest.json"
-STORY_DIR = ROOT / "project" / "story"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import vn_core  # noqa: E402
+from vn_core import VNError  # noqa: E402
+
+try:                       # 대화 로그 경로·입출력의 단일 출처(웹 스튜디오와 공유)
+    import talk_store      # noqa: E402
+except ImportError:        # 아직 없으면 같은 규칙(safe_slug)으로 직접 읽는다
+    talk_store = None      # type: ignore[assignment]
+
+ROOT = vn_core.ROOT
+MANIFEST = vn_core.MANIFEST
+STORY_DIR = vn_core.STORY
 DEFAULT_URL = "http://127.0.0.1:8080/v1"
 TIMEOUT = 120
 TALK_WINDOW = 16   # 서버가 모델에 넘기는 최근 대화 수 — 그 밖의 맥락은 기억 요약으로 유지한다
-_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+# 이름으로 허용하는 것은 루프백 별칭뿐. 그 외 호스트명은 DNS 가 어디로든 향할 수 있어 거부한다.
+_LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
 _WEEKDAYS = "월화수목금토일"
 
 
@@ -39,25 +55,49 @@ def base_url() -> str:
     env = os.environ.get("LOCAL_LLM_URL", "").strip()
     if env:
         return env.rstrip("/")
-    try:
-        mf = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        u = (mf.get("talk", {}) or {}).get("base_url", "")
-        if isinstance(u, str) and u.strip():
-            return u.strip().rstrip("/")
-    except Exception:
-        pass
+    talk = vn_core.load_manifest().get("talk")
+    u = talk.get("base_url", "") if isinstance(talk, dict) else ""
+    if isinstance(u, str) and u.strip():
+        return u.strip().rstrip("/")
     return DEFAULT_URL
 
 
+_warned: set[str] = set()
+
+
+def _warn_once(msg: str) -> None:
+    """같은 경고를 매 요청마다 찍지 않는다(대화 중 화면이 경고로 덮이지 않게)."""
+    if msg in _warned:
+        return
+    _warned.add(msg)
+    print(f"경고: {msg}", file=sys.stderr)
+
+
 def _validate(url: str) -> None:
-    u = urllib.parse.urlparse(url)
-    host = (u.hostname or "").lower()
-    if u.scheme == "https":
+    """대화가 나갈 수 있는 주소를 좁힌다 — 루프백 IP·localhost 는 통과, 사설망은 경고 후 통과.
+
+    공인 IP 와 임의 호스트명은 거부한다. 인물 대화는 사용자의 사적 자산이라
+    '이 PC 안'을 벗어나는 순간을 최소한 눈에 보이게 만든다.
+    """
+    u = urllib.parse.urlparse(str(url or ""))
+    host = (u.hostname or "").strip().lower()
+    if u.scheme not in ("http", "https") or not host:
+        raise VNError(f"로컬 LLM base_url 형식이 올바르지 않습니다({url}). "
+                      "예: http://127.0.0.1:8080/v1")
+    if host in _LOOPBACK_NAMES:
         return
-    if u.scheme == "http" and (host in _LOOPBACK or host.startswith("192.168.") or host.startswith("10.")
-                               or host.startswith("172.")):
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        raise VNError(f"로컬 LLM base_url 의 호스트 '{host}' 는 허용되지 않습니다 — "
+                      "127.0.0.1 같은 루프백 주소나 사설망 IP 만 쓸 수 있습니다.")
+    if ip.is_loopback:
         return
-    raise RuntimeError(f"로컬 LLM base_url 이 안전하지 않습니다({url}). 로컬/사설망만 허용합니다.")
+    if ip.is_private:
+        _warn_once(f"로컬 LLM 주소 {host} 는 루프백이 아닙니다(사설망) — "
+                   "인물 대화가 이 PC 밖의 기기로 전송됩니다.")
+        return
+    raise VNError(f"로컬 LLM base_url 이 안전하지 않습니다({url}). 로컬/사설망만 허용합니다.")
 
 
 def status() -> dict:
@@ -86,29 +126,21 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320) 
         with _OPENER.open(req, timeout=TIMEOUT) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"로컬 LLM HTTP {e.code} — 서버/모델 상태를 확인하세요.")
+        raise VNError(f"로컬 LLM HTTP {e.code} — 서버/모델 상태를 확인하세요.")
     except urllib.error.URLError as e:
-        raise RuntimeError(f"로컬 LLM 에 연결할 수 없습니다({e.reason}). "
-                           "local_llm/runtime/serve.ps1 로 서버를 켜세요.")
+        raise VNError(f"로컬 LLM 에 연결할 수 없습니다({e.reason}). "
+                      "local_llm/runtime/serve.ps1 로 서버를 켜세요.")
     try:
         data = json.loads(raw.decode("utf-8"))
         content = data["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError, UnicodeDecodeError):
-        raise RuntimeError("로컬 LLM 응답 형식이 예상과 다릅니다.")
+        raise VNError("로컬 LLM 응답 형식이 예상과 다릅니다.")
     if not isinstance(content, str):
-        raise RuntimeError("로컬 LLM 응답에 텍스트가 없습니다.")
+        raise VNError("로컬 LLM 응답에 텍스트가 없습니다.")
     return content.strip()
 
 
 # ------------------------------------------------------------- 인물 페르소나
-def _load_manifest() -> dict:
-    try:
-        d = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
-
-
 def _strip_meta_sections(md: str) -> str:
     """'제작 노트'·'표기 규약' 같은 메타 절을 걷어낸다 — 인물은 제작 지시를 알면 안 된다."""
     out, skip_level = [], 0
@@ -133,11 +165,16 @@ def _clip(text: str, limit: int) -> str:
     return (cut[:cut.rfind("\n")] if "\n" in cut else cut).rstrip()
 
 
-def _storyline() -> str:
+def _read_story(name: str) -> str:
+    """project/story/<name> 을 읽는다 — 없거나 못 읽으면 빈 문자열(대화는 계속돼야 한다)."""
     try:
-        return _strip_meta_sections((STORY_DIR / "storyline.md").read_text(encoding="utf-8"))
-    except OSError:
+        return (STORY_DIR / name).read_text(encoding="utf-8")
+    except (OSError, ValueError):
         return ""
+
+
+def _storyline() -> str:
+    return _strip_meta_sections(_read_story("storyline.md"))
 
 
 def _section(md: str, key: str) -> str:
@@ -162,9 +199,8 @@ def _character_bible(cid: str, name: str = "") -> str:
 
     id 로 먼저 찾는다 — 이름('나' 같은 한 글자)이 다른 제목에 우연히 걸리는 것을 막는다.
     """
-    try:
-        md = _strip_meta_sections((STORY_DIR / "character_bible.md").read_text(encoding="utf-8"))
-    except OSError:
+    md = _strip_meta_sections(_read_story("character_bible.md"))
+    if not md:
         return ""
     for key in (cid, name):
         if key and (found := _section(md, key)):
@@ -195,39 +231,49 @@ def _now_block(now: datetime | None = None) -> str:
 
 # ------------------------------------------------------------- 장기 기억(요약)
 def _talk_path(cid: str) -> Path:
-    return STORY_DIR / f"talk_{cid}.json"
+    """대화 로그 파일 — talk_store 가 있으면 그 규칙을 그대로 따른다.
+
+    예전에는 이 함수만 cid 를 그대로 파일명에 썼고 웹은 영숫자만 남겼다. 그래서
+    특수문자가 섞인 character_id 에서는 서로 다른 파일을 보게 되어 '장기 기억'이
+    조용히 비었다. 규칙은 한 곳(talk_store, 없으면 safe_slug)에서만 정한다.
+    """
+    if talk_store is not None:
+        try:
+            return Path(talk_store.talk_path(cid))
+        except Exception:
+            pass       # 폴백 규칙으로 계속 — 기억이 비어도 대화 자체는 막지 않는다
+    return STORY_DIR / f"talk_{vn_core.safe_slug(cid, 'CHAR')}.json"
 
 
 def _memory_path(cid: str) -> Path:
-    return STORY_DIR / f"memory_{cid}.json"
+    return STORY_DIR / f"memory_{vn_core.safe_slug(cid, 'CHAR')}.json"
 
 
 def _talk_messages(cid: str) -> list:
-    try:
-        data = json.loads(_talk_path(cid).read_text(encoding="utf-8"))
-        msgs = data.get("messages", []) if isinstance(data, dict) else []
-    except (OSError, ValueError):
+    """저장된 대화에서 user/assistant 발화만. 파일이 없거나 깨져도 빈 목록."""
+    if talk_store is not None:
+        try:
+            msgs = talk_store.load_messages(cid)
+        except Exception:
+            msgs = []
+    else:
+        msgs = vn_core.load_json_safe(_talk_path(cid), {}).get("messages", [])
+    if not isinstance(msgs, list):
         return []
     return [m for m in msgs if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
 
 
 def _load_memory(cid: str) -> dict:
-    try:
-        d = json.loads(_memory_path(cid).read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return vn_core.load_json_safe(_memory_path(cid), {})
 
 
 def save_memory_summary(cid: str, summary: str, covered: int = 0) -> bool:
     """기억 요약 저장. 실패해도 대화는 계속되어야 하므로 조용히 False."""
     try:
-        STORY_DIR.mkdir(parents=True, exist_ok=True)
-        _memory_path(cid).write_text(
-            json.dumps({"summary": summary.strip(), "covered": int(covered)},
-                       ensure_ascii=False, indent=2), encoding="utf-8")
+        vn_core.atomic_write_json(_memory_path(cid),
+                                  {"summary": str(summary).strip(), "covered": int(covered)})
         return True
-    except OSError:
+    except (OSError, VNError, TypeError, ValueError):
         return False
 
 
@@ -261,8 +307,8 @@ def refresh_memory(cid: str | None = None, window: int = TALK_WINDOW) -> bool:
     """창 밖 대화를 로컬 LLM 으로 요약해 저장한다. 서버가 꺼져 있으면 조용히 False."""
     try:
         if not cid:
-            mf = _load_manifest()
-            talk = mf.get("talk", {}) if isinstance(mf.get("talk"), dict) else {}
+            mf = vn_core.load_manifest()
+            talk = mf.get("talk") if isinstance(mf.get("talk"), dict) else {}
             chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
             cid = talk.get("character_id") or (chars[0].get("character_id") if chars else "")
         if not cid:
@@ -283,14 +329,11 @@ def refresh_memory(cid: str | None = None, window: int = TALK_WINDOW) -> bool:
 
 
 def _load_scenes() -> list:
-    d = ROOT / "project" / "scenes"
     out = []
+    d = vn_core.SCENES
     for f in sorted(d.glob("SCENE-*.json")) if d.exists() else []:
-        try:
-            sc = json.loads(f.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
-            continue
-        if isinstance(sc, dict):
+        sc = vn_core.load_json_safe(f, {})
+        if sc:
             out.append(sc)
     return out
 
@@ -301,7 +344,8 @@ def album_list() -> list:
     for sc in _load_scenes():
         if sc.get("status") != "APPROVED":
             continue
-        rel = (sc.get("assets", {}).get("selected_image") or "").strip()
+        assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
+        rel = str(assets.get("selected_image", "") or "").strip()
         if not rel:
             continue
         label = str(sc.get("purpose") or sc.get("action_beat") or sc.get("scene_id") or "")
@@ -356,14 +400,14 @@ def resolve_photos(reply: str, album: dict, last_user: str = ""):
 
 def persona_prompt(character_id: str | None = None) -> tuple[str, dict]:
     """매니페스트의 캐릭터 기준정보 + 스토리로 인물 대화용 시스템 프롬프트를 만든다."""
-    mf = _load_manifest()
+    mf = vn_core.load_manifest()
     chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
     if not chars:
-        raise RuntimeError("매니페스트에 캐릭터가 없습니다. 먼저 작품을 세팅하세요.")
-    talk = mf.get("talk", {}) if isinstance(mf.get("talk"), dict) else {}
+        raise VNError("매니페스트에 캐릭터가 없습니다. 먼저 작품을 세팅하세요.")
+    talk = mf.get("talk") if isinstance(mf.get("talk"), dict) else {}
     cid = character_id or talk.get("character_id") or chars[0].get("character_id")
     ch = next((c for c in chars if c.get("character_id") == cid), chars[0])
-    prof = ch.get("profile", {}) if isinstance(ch.get("profile"), dict) else {}
+    prof = ch.get("profile") if isinstance(ch.get("profile"), dict) else {}
     name = ch.get("name") or cid
     relationship = talk.get("relationship", "다정한 여자친구")
 
@@ -391,7 +435,7 @@ def persona_prompt(character_id: str | None = None) -> tuple[str, dict]:
         album_block = ("\n[사진] 지금은 보여줄 수 있는 사진이 없어. 사진을 찾으면 "
                        "'아직 사진이 없네~' 처럼 자연스럽게 말하고, 사진 태그는 쓰지 마.\n")
 
-    sys = (
+    sys_msg = (
         f"너는 '{name}'라는 인물이야. 지금부터 끝까지 '{name}' 본인으로서 1인칭으로 자연스럽게 대화해.\n"
         f"[너의 모습] {traits}" + (f" / 아끼는 것: {props}" if props else "") + "\n"
         + (f"[너의 성격] {personality}\n" if personality else "")
@@ -405,26 +449,29 @@ def persona_prompt(character_id: str | None = None) -> tuple[str, dict]:
         + _now_block() + bible_line + story_line + memory_digest(cid) + album_block
     )
     meta_album = {a["scene_id"]: {"rel": a["rel"], "label": a["label"]} for a in album}
-    return sys, {"character_id": cid, "name": name, "album": meta_album}
+    return sys_msg, {"character_id": cid, "name": name, "album": meta_album}
 
 
 def main() -> int:
-    import sys
     st = status()
     print(f"로컬 LLM: {'ON' if st['up'] else 'OFF'} ({st['url']})")
     if not st["up"]:
         print(f"  {st.get('error', '')}")
         print("  → C:\\Users\\USER\\claude\\local_llm\\runtime\\serve.ps1 로 서버를 켜세요.")
         return 1
-    print(f"  모델: {', '.join(st['models']) or '(미표시)'}")
+    print(f"  모델: {', '.join(m for m in st['models'] if m) or '(미표시)'}")
     if len(sys.argv) > 1 and sys.argv[1] == "--memory":   # 지난 대화 요약 갱신(장기 기억)
         ok = refresh_memory(sys.argv[2] if len(sys.argv) > 2 else None)
         print("기억 요약을 갱신했습니다." if ok else "요약할 지난 대화가 없거나 요약에 실패했습니다.")
         return 0
     if len(sys.argv) > 1:
-        sysmsg, meta = persona_prompt()
-        reply = chat([{"role": "system", "content": sysmsg},
-                      {"role": "user", "content": " ".join(sys.argv[1:])}])
+        try:
+            sysmsg, meta = persona_prompt()
+            reply = chat([{"role": "system", "content": sysmsg},
+                          {"role": "user", "content": " ".join(sys.argv[1:])}])
+        except VNError as exc:
+            print(f"오류: {exc}")
+            return 1
         print(f"\n{meta['name']}: {reply}")
     return 0
 

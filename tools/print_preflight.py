@@ -17,15 +17,24 @@
 from __future__ import annotations
 
 import argparse
-import json
 import struct
 import sys
 import unicodedata
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
+    sys.path.insert(0, str(_HERE))
+
+from vn_core import VNError, load_json, load_json_safe   # noqa: E402  (console_guard 는 import 만으로 적용)
+
+# 경로 이름은 vn_core 규약을 따르되 값은 이 파일 위치에서 계산한다.
+# (자가진단은 저장소를 임시폴더에 복제해 이 모듈만 따로 적재한다 — 그때도 자기 트리 안만 봐야 한다.)
+ROOT = _HERE.parent
 MANIFEST = ROOT / "project" / "manifest.json"
 SCENES = ROOT / "project" / "scenes"
+
+load = load_json          # 하위호환: 기존 print_preflight.load(path) 호출부 유지
 
 MM_PER_IN = 25.4
 
@@ -47,19 +56,6 @@ SMALL_SIZES = [
 ]
 DPI_GOOD = 300   # 사진 인화 권장
 DPI_OK = 240     # 근거리 감상 허용 하한
-
-
-def _console_guard() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
-_console_guard()
 
 
 # ------------------------------------------------------------- 이미지 크기 판독
@@ -94,8 +90,32 @@ def _tiff_size(f, head):
     return (int(w), int(h)) if w and h else None
 
 
+# 판독 결과 메모이즈 — 웹 스튜디오는 화면을 새로 그릴 때마다 모든 장면의 선택본을 물어본다.
+# 키에 (수정시각·크기)를 넣어 파일이 바뀌면 자동으로 무효화된다(오래된 값이 남지 않는다).
+_SIZE_CACHE: dict[str, tuple] = {}
+_SIZE_CACHE_MAX = 512
+
+
 def image_size(path: Path):
     """(width, height) 또는 None. PNG/JPEG/WEBP/TIFF 헤더만 읽는다(전체 로드 없음)."""
+    p = Path(path)
+    try:
+        st = p.stat()
+    except OSError:
+        return None                      # 없는 파일은 캐시하지 않는다(생기면 바로 반영)
+    key = (st.st_mtime_ns, st.st_size)
+    name = str(p)
+    hit = _SIZE_CACHE.get(name)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    size = _read_image_size(p)
+    if len(_SIZE_CACHE) >= _SIZE_CACHE_MAX:
+        _SIZE_CACHE.clear()              # 단일 사용자 도구 — LRU 대신 통째로 비운다
+    _SIZE_CACHE[name] = (key, size)
+    return size
+
+
+def _read_image_size(path: Path):
     try:
         with open(path, "rb") as f:
             head = f.read(32)
@@ -218,17 +238,13 @@ def needed_px(name: str, target: int = DPI_GOOD):
 
 
 # ------------------------------------------------------------- 장면 수집
-def load(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def collect(scene_filter: str | None, include_all: bool):
     if not MANIFEST.exists():
-        raise RuntimeError("project/manifest.json 이 없습니다.")
+        raise VNError("project/manifest.json 이 없습니다.")
     out = []
     for f in sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []:
-        sc = load(f)
-        if not isinstance(sc, dict):
+        sc = load_json_safe(f, {})       # 손상된 장면 하나가 보고서 전체를 죽이지 않게 한다
+        if not sc:
             continue
         if scene_filter and sc.get("scene_id") != scene_filter:
             continue
@@ -257,8 +273,10 @@ def _row_line(r: dict) -> str:
 
 
 def report(target: int, scene_filter: str | None, include_all: bool) -> int:
-    mf = load(MANIFEST)
-    min_edge = mf.get("output", {}).get("min_long_edge_px", 1024)
+    if not MANIFEST.exists():
+        raise VNError("project/manifest.json 이 없습니다.")
+    mf = load_json_safe(MANIFEST, {})
+    min_edge = (mf.get("output") or {}).get("min_long_edge_px", 1024)
     try:
         cur_in = round(int(min_edge) / target, 2)
     except (TypeError, ValueError):
@@ -320,7 +338,7 @@ def main() -> int:
     args = ap.parse_args()
     try:
         return report(args.dpi, args.scene, args.all)
-    except RuntimeError as exc:
+    except VNError as exc:          # VNError 는 RuntimeError 파생 — 기존 처리 경로와 동일하다
         print(f"오류: {exc}")
         return 1
 

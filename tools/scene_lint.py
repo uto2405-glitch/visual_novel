@@ -1,27 +1,38 @@
 #!/usr/bin/env python3
-"""연출 리듬 린터 — 검사기(A1~A8)와 별개의 '연출 자문' 도구.
+"""연출 리듬 + 분기 무결성 린터 — 검사기(A1~A8)와 별개의 '자문' 도구.
 
-컷 연속성·감정 단조로움·대사 길이·시간대/등장인물/카메라 표기의 흔들림처럼
-'틀렸다'가 아니라 '단조롭다/어색하다/표기가 섞였다'를 경고한다.
-품질 판정이 아니라 리듬 신호이며 PASS/FAIL 을 만들지 않는다(SCORECARD·검사기 불침범).
+두 가지를 본다.
+  1) 연출 리듬: 컷 연속성·감정 단조로움·대사 길이·시간대/등장인물/카메라 표기의 흔들림.
+     '틀렸다'가 아니라 '단조롭다/어색하다/표기가 섞였다'를 경고한다.
+  2) 분기 무결성: 감상본(export_viewer)의 분기 엔진이 실제로 어떻게 도는지를 그대로
+     모사해, 절대 도달할 수 없는 길과 끝이 닫히지 않은 길을 찾는다.
+     dangling-goto / branch-order / unreachable-scene / open-branch / affection-unreachable.
+
+검사기(check_protocol)는 분기 필드를 보지 않는다 — 분기는 '규격 위반'이 아니라 '설계
+오류'라서 자문 계층이 올바른 위치다. 그래서 여기서는 어떤 경우에도 PASS/FAIL 을 만들지
+않고 종료 코드는 항상 0 이다(SCORECARD·검사기 불침범).
 
 사용법:
-  python tools/scene_lint.py            # 전체 장면 연출 리듬 점검
+  python tools/scene_lint.py            # 전체 장면 연출 리듬 + 분기 점검
 읽기 전용. 표준 라이브러리만.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-SCENES = ROOT / "project" / "scenes"
-MANIFEST = ROOT / "project" / "manifest.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import vn_core  # noqa: E402
+
+ROOT = vn_core.ROOT
+SCENES = vn_core.SCENES
+MANIFEST = vn_core.MANIFEST
 
 RUN_LIMIT = 3          # 같은 값 연속 허용 한도
 LONG_LINE = 60         # 대사 한 줄 권장 상한(글자)
+DEFAULT_START_AFFECTION = 30   # manifest.dating.start_affection 이 없을 때(감상본 뷰어와 동일)
+DEFAULT_MAX_AFFECTION = 100
 
 # 카메라 표준 어휘 — 표기가 흔들리면 같은 샷 연속 감지(_runs)도, 프롬프트 문구도 함께 흔들린다.
 STD_SHOTS = ("extreme-wide", "wide", "full", "medium-wide", "medium",
@@ -62,43 +73,26 @@ for _spec in TIME_BUCKETS.values():
                              re.IGNORECASE)
 
 
-def _console_guard() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
-_console_guard()
-
-
 def _s(v):  # 어떤 타입이 와도 문자열로 (손편집 JSON 방탄)
     return v if isinstance(v, str) else ("" if v is None else str(v))
+
+
+def _i(v, default: int = 0) -> int:
+    """정수로 (손편집 JSON 의 "3" 이나 null 이 정렬·비교를 크래시시키지 않게)."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def _load_scenes():
     out = []
     for f in sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []:
-        try:
-            sc = json.loads(f.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
-            continue
-        if isinstance(sc, dict):
+        sc = vn_core.load_json_safe(f, {})
+        if sc:
             out.append(sc)
-    out.sort(key=lambda s: s.get("scene_order") or 0)
+    out.sort(key=lambda s: _i(s.get("scene_order")))
     return out
-
-
-def _load_manifest() -> dict:
-    """기준정보 — 없거나 깨져도 린터는 계속 돈다(자문 도구는 멈추지 않는다)."""
-    try:
-        mf = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return {}
-    return mf if isinstance(mf, dict) else {}
 
 
 def _prompt_of(sc: dict) -> str:
@@ -231,10 +225,203 @@ def _check_camera_vocab(scenes, add) -> None:
                     f"camera.{field} 표기 '{val}' → 표준 '{canon}' 으로 통일 권장 ({where})", sids[0])
 
 
+# ------------------------------------------------------------------ 분기 무결성
+# 감상본(export_viewer)의 진행 규칙을 그대로 모사한다:
+#   장면 끝 → choices 가 있으면 선택지 / 없고 ending 이면 종료 /
+#            branch 가 있으면 조건(aff >= min) 만족하는 **첫** 항목 / 그 외 다음 순서.
+def _choices(sc) -> list:
+    v = sc.get("choices")
+    return [c for c in v if isinstance(c, dict)] if isinstance(v, list) else []
+
+
+def _branch(sc) -> list:
+    v = sc.get("branch")
+    return [b for b in v if isinstance(b, dict)] if isinstance(v, list) else []
+
+
+def _has_flow(scenes) -> bool:
+    """분기 작품인지 — 선형 작품에 '엔딩이 없다'고 잔소리하지 않기 위한 관문."""
+    return any(_choices(sc) or _branch(sc) or sc.get("ending") for sc in scenes)
+
+
+def _edges(scenes, idx: dict, i: int) -> list:
+    """장면 i 에서 나가는 (다음 index, 호감도 증감) 목록. 빈 목록이면 그 자리에서 이야기가 끝난다."""
+    sc = scenes[i]
+    nxt = i + 1 if i + 1 < len(scenes) else None
+    out = []
+    ch = _choices(sc)
+    if ch:
+        for c in ch:
+            goto = _s(c.get("goto")).strip()
+            j = idx.get(goto) if goto else nxt
+            if j is not None:
+                out.append((j, _i(c.get("affection"))))
+        return out
+    if sc.get("ending"):
+        return []
+    br = _branch(sc)
+    if br:
+        for b in br:
+            j = idx.get(_s(b.get("goto")).strip())
+            if j is not None:
+                out.append((j, 0))
+        return out
+    return [(nxt, 0)] if nxt is not None else []
+
+
+def _reach(scenes, idx: dict, start_aff: int, aff_max: int):
+    """도달 가능성 + 각 장면에 **도달할 수 있는 최고/최저 호감도**.
+
+    선택지의 증감을 따라 앞으로 전파한다(감상본과 같은 0~max 클램프). 값이 유한하고
+    단조로워서 장면 수만큼 완화하면 수렴한다 — 순환 분기가 있어도 멈춘다.
+    반환: (best, worst) — 도달 불가 장면은 None.
+    """
+    n = len(scenes)
+    best: list = [None] * n
+    worst: list = [None] * n
+    if not n:
+        return best, worst
+    best[0] = worst[0] = max(0, min(aff_max, start_aff))
+    for _ in range(n + 1):
+        changed = False
+        for i in range(n):
+            if best[i] is None:
+                continue
+            for j, d in _edges(scenes, idx, i):
+                hi = max(0, min(aff_max, best[i] + d))
+                lo = max(0, min(aff_max, worst[i] + d))
+                if best[j] is None or hi > best[j]:
+                    best[j], changed = hi, True
+                if worst[j] is None or lo < worst[j]:
+                    worst[j], changed = lo, True
+        if not changed:
+            break
+    return best, worst
+
+
+def _walk_to_other_target(scenes, idx: dict, start: int, targets: set) -> int | None:
+    """start 에서 선형으로 흘러가다 같은 분기의 **다른** 목적지에 닿으면 그 index.
+
+    분기로 갈라놓고 한쪽 경로에 ending 을 안 달면, 그 경로가 다른 쪽 엔딩 장면으로
+    그대로 흘러 들어가 두 결말이 하나로 붙어버린다. 그 사고만 정확히 잡는다.
+    """
+    cur, seen = start, {start}
+    for _ in range(len(scenes) + 1):
+        sc = scenes[cur]
+        if sc.get("ending") or _choices(sc) or _branch(sc):
+            return None                     # 제 갈 길로 닫히거나 다시 갈라진다
+        nxt = _edges(scenes, idx, cur)
+        if len(nxt) != 1:
+            return None
+        cur = nxt[0][0]
+        if cur in seen:
+            return None
+        seen.add(cur)
+        if cur in targets:
+            return cur
+    return None
+
+
+def _check_branching(scenes, mf, add) -> None:
+    """분기 무결성 — 감상본에서 '갈 수 없는 길'과 '닫히지 않은 끝'을 미리 찾는다."""
+    idx = {}
+    for i, sc in enumerate(scenes):
+        sid = _s(sc.get("scene_id")).strip()
+        if sid and sid not in idx:
+            idx[sid] = i
+
+    # 1) dangling-goto — 존재하지 않는 장면을 가리키는 goto (감상본에서는 그 자리에서 끝난다)
+    for i, sc in enumerate(scenes):
+        sid = _s(sc.get("scene_id", "?"))
+        for k, c in enumerate(_choices(sc), 1):
+            goto = _s(c.get("goto")).strip()
+            if goto and goto not in idx:
+                add("warn", "dangling-goto",
+                    f"선택지 {k}('{_s(c.get('text'))[:20]}')의 goto '{goto}' 인 장면이 없음 — "
+                    "감상본에서 그 선택은 이야기를 그 자리에서 끝낸다", sid)
+        for k, b in enumerate(_branch(sc), 1):
+            goto = _s(b.get("goto")).strip()
+            if not goto or goto not in idx:
+                add("warn", "dangling-goto",
+                    f"branch {k}(min {_i(b.get('min'))})의 goto '{goto}' 인 장면이 없음 — "
+                    "그 조건에 걸리면 이야기가 끊긴다", sid)
+
+    if not _has_flow(scenes):
+        return          # 선형 작품 — 아래 규칙(엔딩·호감도)은 분기 작품에만 의미가 있다
+
+    dating = mf.get("dating") if isinstance(mf.get("dating"), dict) else {}
+    start_aff = _i(dating.get("start_affection"), DEFAULT_START_AFFECTION)
+    aff_max = _i(dating.get("max"), DEFAULT_MAX_AFFECTION) or DEFAULT_MAX_AFFECTION
+    best, worst = _reach(scenes, idx, start_aff, aff_max)
+
+    for i, sc in enumerate(scenes):
+        sid = _s(sc.get("scene_id", "?"))
+        br = _branch(sc)
+
+        # 2) branch-order — min 이 내림차순이 아니면 앞 조건이 뒤를 가려 버린다
+        if br:
+            mins = [_i(b.get("min")) for b in br]
+            disordered = False
+            for k in range(len(mins) - 1):
+                if mins[k] < mins[k + 1]:
+                    disordered = True
+                    add("warn", "branch-order",
+                        f"branch min 이 내림차순이 아님({mins}) — 감상본은 위에서부터 첫 조건으로 "
+                        f"이동하므로 {k + 1}번째(min {mins[k]})가 {k + 2}번째(min {mins[k + 1]})를 "
+                        "영영 가린다. 큰 min 을 먼저 쓸 것", sid)
+                    break
+            # 언제나 성립하는 조건이 마지막이 아니면 그 뒤는 죽은 길이다
+            # (순서가 이미 뒤집혔다면 위 경고로 충분하므로 겹쳐 말하지 않는다)
+            w = worst[i]
+            if w is not None and not disordered:
+                for k, m in enumerate(mins[:-1]):
+                    if m <= w:
+                        add("warn", "branch-order",
+                            f"{k + 1}번째 branch(min {m})는 최저 호감도 {w} 에서도 항상 성립 — "
+                            f"뒤의 {len(mins) - k - 1}개 분기는 실행되지 않는다", sid)
+                        break
+
+            # 5) affection-unreachable — 도달 가능한 최고 호감도로도 넘길 수 없는 문턱
+            hi = best[i]
+            if hi is not None:
+                for k, b in enumerate(br, 1):
+                    m = _i(b.get("min"))
+                    if m > hi:
+                        add("warn", "affection-unreachable",
+                            f"branch {k}(min {m} → {_s(b.get('goto'))})에 절대 도달할 수 없음 — "
+                            f"시작 호감도 {start_aff} 에서 여기까지 올 수 있는 최대치가 {hi}. "
+                            "선택지 affection 을 키우거나 min 을 낮출 것", sid)
+
+        # 4) open-branch — 여기서 이야기가 멈추는데 ending 표시가 없다
+        if not _edges(scenes, idx, i) and not sc.get("ending") and best[i] is not None:
+            add("warn", "open-branch",
+                "이 장면에서 이야기가 끝나지만 ending 표시가 없음 — "
+                '"ending": true 를 넣어야 감상본이 엔딩으로 닫힌다', sid)
+
+        # 4b) 갈라놓은 경로가 다른 분기의 엔딩으로 흘러 들어가 두 결말이 붙는 경우
+        targets = {j for j, _ in _edges(scenes, idx, i)}
+        if len(targets) >= 2:
+            for t in sorted(targets):
+                other = _walk_to_other_target(scenes, idx, t, targets - {t})
+                if other is not None:
+                    add("warn", "open-branch",
+                        f"{sid} 에서 갈라진 경로 {_s(scenes[t].get('scene_id'))} 가 "
+                        f"다른 갈래 {_s(scenes[other].get('scene_id'))} 로 그대로 이어짐 — "
+                        "경로 끝에 ending 을 두지 않으면 두 결말이 하나로 붙는다",
+                        _s(scenes[t].get("scene_id", "?")))
+
+    # 3) unreachable-scene — 어느 경로로도 닿지 않는 장면(작업해도 감상본에 안 나온다)
+    for i, sc in enumerate(scenes):
+        if best[i] is None:
+            add("warn", "unreachable-scene",
+                "choices/branch/선형 어느 경로로도 닿지 않는 장면 — "
+                "goto 로 연결하거나 순서를 조정할 것", _s(sc.get("scene_id", "?")))
+
+
 def lint_scenes() -> dict:
-    """장면 연출 리듬 점검 → {findings:[{scene_id,level,rule,message}], summary}."""
+    """장면 연출 리듬 + 분기 무결성 점검 → {findings:[{scene_id,level,rule,message}], summary}."""
     scenes = _load_scenes()
-    mf = _load_manifest()
+    mf = vn_core.load_json_safe(MANIFEST, {})   # 기준정보가 깨져도 린터는 계속 돈다
     findings = []
 
     def add(level, rule, msg, sid="-"):
@@ -286,6 +473,7 @@ def lint_scenes() -> dict:
     _check_offcast(scenes, mf, add)
     _check_time(scenes, add)
     _check_camera_vocab(scenes, add)
+    _check_branching(scenes, mf, add)
 
     warn = sum(1 for f in findings if f["level"] == "warn")
     info = sum(1 for f in findings if f["level"] == "info")
@@ -295,13 +483,17 @@ def lint_scenes() -> dict:
     return {"findings": findings, "summary": summary, "scene_count": len(scenes)}
 
 
+BRANCH_RULES = ("dangling-goto", "branch-order", "unreachable-scene",
+                "open-branch", "affection-unreachable")
+
+
 def main() -> int:
     r = lint_scenes()
     print("=" * 56)
-    print(f"연출 리듬 린터 — 장면 {r['scene_count']}개  (연출 자문 · 검사기와 별개)")
+    print(f"연출 리듬·분기 린터 — 장면 {r['scene_count']}개  (자문 · 검사기와 별개)")
     print("=" * 56)
     if not r["findings"]:
-        print("특이사항 없음. 연출 리듬 양호.")
+        print("특이사항 없음. 연출 리듬·분기 구조 양호.")
         return 0
     mark = {"warn": "⚠", "info": "·"}
     for f in r["findings"]:
@@ -312,8 +504,12 @@ def main() -> int:
         print("  shot : " + " / ".join(STD_SHOTS))
         print("  angle: " + " / ".join(STD_ANGLES))
         print("-" * 56)
+    if any(f["rule"] in BRANCH_RULES for f in r["findings"]):
+        print("분기 점검 기준: choices→선택지 / ending→종료 / branch→조건 만족 첫 항목 / 그 외 다음 순서")
+        print("  (감상본 export_viewer 의 진행 규칙과 동일)")
+        print("-" * 56)
     print(r["summary"])
-    print("주의: 이는 리듬 자문일 뿐 PASS/FAIL 이 아닙니다(최종 판단은 사람).")
+    print("주의: 이는 자문일 뿐 PASS/FAIL 이 아닙니다(최종 판단은 사람).")
     return 0
 
 

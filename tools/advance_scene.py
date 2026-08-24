@@ -11,69 +11,63 @@
   select SID <번호|파일명>          후보 1장을 selected_image 로 지정
   approve SID                     검사 PASS 확인 후 APPROVED 잠금 (FAIL 시 롤백)
   revise SID <단계> [--note 사유]   SCENE_PLAN/PROMPT/IMAGE 로 되돌림 (자료 보존)
+
+이 파일의 자리(계층)
+  * **저장소 계층**이다: 장면 파일 읽기/쓰기(load·save·scene_path)와 검사기 실행(run_checker).
+  * **상태 전이 규칙은 여기 없다** — scene_ops 하나에만 있다. 아래 cmd_* 는 그 함수를
+    부르고 결과를 사람이 읽을 문장으로 옮기는 얇은 어댑터다. 웹 스튜디오도 같은 함수를
+    부르므로 CLI 와 웹이 서로 다른 규칙으로 움직일 수 없다(예: 승인 잠금은 양쪽 모두 적용).
+  * 경로·JSON·원자적 쓰기·오류 타입은 vn_core 가 단일 출처다.
+
+오류 규약: 라이브러리 함수는 VNError 를 던지고, 종료 코드 변환은 main() 에서만 한다.
 """
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
-import shutil
 import subprocess
 import sys
-import threading
-from datetime import date
 from pathlib import Path
 from typing import NoReturn
 
-ROOT = Path(__file__).resolve().parents[1]
-SCENES = ROOT / "project" / "scenes"
-TEMPLATE = ROOT / "templates" / "scene.json"
-MANIFEST = ROOT / "project" / "manifest.json"
-RAW_DIR = ROOT / "images" / "raw"
-CHECKER = ROOT / "tools" / "check_protocol.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import vn_core  # noqa: E402
+from vn_core import VNError  # noqa: E402
+
+# 경로·잠금은 vn_core 가 정본이다. 아래 이름들은 기존 호출부(webapp·scene_ops)를 위한 별칭.
+ROOT = vn_core.ROOT
+SCENES = vn_core.SCENES
+MANIFEST = vn_core.MANIFEST
+RAW_DIR = vn_core.IMAGES_RAW
+CHECKER = vn_core.CHECKER
+TEMPLATE = vn_core.TEMPLATES / "scene.json"
 
 BACK_STATES = ("SCENE_PLAN", "PROMPT", "IMAGE")
-WRITE_LOCK = threading.RLock()  # 웹 스튜디오의 동시 요청에서 read-modify-write 를 직렬화
+WRITE_LOCK = vn_core.WRITE_LOCK   # 저장소 전역 단일 쓰기 잠금(웹의 동시 요청 직렬화)
 
-
-def _console_guard() -> None:
-    """비 UTF-8 콘솔(cp437 등)에서 한글 출력이 크래시하지 않게 한다."""
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
-_console_guard()
+_console_guard = vn_core.console_guard   # 예전 이름 유지(호출부 호환). import 시 이미 적용됨.
 
 
 def die(msg: str) -> NoReturn:
-    print(f"오류: {msg}")
-    sys.exit(2)
+    """사용자에게 보여줄 오류 — 예전에는 sys.exit(2) 였다.
+
+    라이브러리 코드에서 프로세스를 죽이면 웹 스튜디오의 요청 스레드가 응답 없이 끊긴다.
+    이제는 VNError 를 던지고, 종료 코드 2 로의 변환은 main() 한 곳에서만 한다.
+    """
+    raise VNError(msg)
 
 
 def load(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        die(f"파일 없음: {path.relative_to(ROOT)}")
-    except Exception as exc:
-        die(f"{path.name} 파싱 실패: {exc}")
+    """장면·매니페스트 읽기 — 실패는 VNError(사용자에게 보여줄 문장)."""
+    data = vn_core.load_json(path)
     if not isinstance(data, dict):
-        die(f"{path.name}: JSON 최상위가 객체({{...}})가 아닙니다. 파일을 확인하세요.")
+        raise VNError(f"{Path(path).name}: JSON 최상위가 객체({{...}})가 아닙니다. 파일을 확인하세요.")
     return data
 
 
 def save(path: Path, data: dict) -> None:
     """원자적 저장: 임시 파일에 쓴 뒤 교체 — 저장 중 강제 종료돼도 원본이 깨지지 않는다."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, path)
+    vn_core.atomic_write_json(path, data)
 
 
 def scene_path(sid: str) -> Path:
@@ -97,26 +91,32 @@ def all_scenes() -> list[dict]:
     return out
 
 
+def _ops():
+    """scene_ops 지연 import — 모듈 수준에서 서로를 부르지 않아 순환 import 가 없다.
+
+    (의존 방향은 vn_core ← advance_scene ← scene_ops 하나뿐이고, CLI 어댑터만
+     실행 시점에 위층을 부른다.)
+    """
+    import scene_ops
+    return scene_ops
+
+
+def _print_fails(fails: str) -> None:
+    if fails.strip():
+        print(fails)
+
+
 def apply_prompt(sid: str, text: str) -> None:
     """Grok 출력을 장면에 반영하고 상태를 PROMPT 로 올린다. (수동/API 모드 공용)"""
-    text = text.strip()
-    if not text:
-        die("입력이 비어 있습니다.")
-    path = scene_path(sid)
-    sc = load(path)
-    sc["prompt"]["grok_output"] = text
-    sc["status"] = "PROMPT"
-    save(path, sc)
+    res = _ops().set_prompt(sid, text)
     print("상태 → PROMPT")
-    code, out = run_checker(sid)
-    fails = [l for l in out.splitlines() if "FAIL" in l]
-    if fails:
-        print("자동 검사 경고:")
-        print("\n".join(fails))
-    else:
+    if res["checker_pass"]:
         print("앵커 검사 포함 자동 검사 통과. 다음: 외부 이미지 AI에서 후보 생성")
         print("  (레퍼런스 이미지 첨부를 잊지 마세요 → manifest 의 reference_images)")
         print(f"  python tools/advance_scene.py add-images {sid} <파일...>")
+    else:
+        print("자동 검사 경고:")
+        _print_fails(res["fails"])
 
 
 # ---------------------------------------------------------------- 명령들
@@ -144,8 +144,11 @@ def cmd_new(args: argparse.Namespace) -> None:
                 line["speaker_id"] = chars[0]
         if locs:
             sc["location_id"] = locs[0]
-    SCENES.mkdir(parents=True, exist_ok=True)
-    save(path, sc)
+    with WRITE_LOCK:
+        if path.exists():          # 잠금 안에서 다시 확인(동시 new 로 덮어쓰지 않게)
+            die(f"{sid} 는 이미 존재합니다.")
+        SCENES.mkdir(parents=True, exist_ok=True)
+        save(path, sc)
     print(f"생성: project/scenes/{sid}.json (scene_order={sc['scene_order']})")
     print("다음: 장면 계획(purpose/action_beat/emotion/camera/dialogue)을 채운 뒤")
     print(f"      python tools/make_grok_input.py {sid}")
@@ -153,7 +156,10 @@ def cmd_new(args: argparse.Namespace) -> None:
 
 def cmd_set_prompt(args: argparse.Namespace) -> None:
     if args.file:
-        text = Path(args.file).read_text(encoding="utf-8")
+        try:
+            text = Path(args.file).read_text(encoding="utf-8")
+        except OSError as exc:
+            die(f"파일을 읽을 수 없습니다: {args.file} ({exc})")
     else:
         print("Grok 출력 전체를 붙여넣으세요. (종료: Windows Ctrl+Z+Enter / mac·Linux Ctrl+D)")
         text = sys.stdin.read()
@@ -163,109 +169,40 @@ def cmd_set_prompt(args: argparse.Namespace) -> None:
 
 def cmd_add_images(args: argparse.Namespace) -> None:
     sid = args.scene_id
-    path = scene_path(sid)
-    sc = load(path)
-    dest = RAW_DIR / sid
-    # 부분 복사 방지: 하나라도 없으면 아무것도 복사하지 않고 종료(고아 파일 방지)
-    srcs = [Path(f).expanduser() for f in args.files]
-    missing = [str(s) for s in srcs if not s.exists()]
-    if missing:
-        die("파일 없음: " + ", ".join(missing))
-    dest.mkdir(parents=True, exist_ok=True)
-    for src in srcs:
-        target = dest / src.name
-        n = 2
-        while target.exists():
-            target = dest / f"{src.stem}-{n}{src.suffix}"
-            n += 1
-        shutil.copy2(src, target)
-        sc["assets"]["raw_images"].append(target.relative_to(ROOT).as_posix())
-    sc["status"] = "IMAGE"
-    save(path, sc)
-    print(f"후보 {len(args.files)}장 등록:")
-    for i, r in enumerate(sc["assets"]["raw_images"], 1):
+    res = _ops().import_image_files(sid, args.files)
+    print(f"후보 {len(res.get('imported', []))}장 등록 (폴더 전체 {res['count']}장):")
+    for i, r in enumerate(res.get("imported", []), 1):
         print(f"  [{i}] {r}")
-    code, out = run_checker(sid)
-    sc = load(path)
-    if code == 0:
-        sc["review"]["auto"] = "PASS"
-        sc["status"] = "REVIEW_HUMAN"
-        save(path, sc)
+    if res["auto"] == "PASS":
         print("자동 검사 PASS → 상태 REVIEW_HUMAN")
         print(f"다음: 시사 후  python tools/advance_scene.py select {sid} <번호>")
     else:
-        sc["review"]["auto"] = "FAIL"
-        save(path, sc)
         print("자동 검사 FAIL — 아래 원인을 해결하세요:")
-        print("\n".join(l for l in out.splitlines() if "FAIL" in l))
+        _print_fails(res["fails"])
 
 
 def cmd_select(args: argparse.Namespace) -> None:
+    ops = _ops()
     sid = args.scene_id
-    path = scene_path(sid)
-    sc = load(path)
-    if sc.get("status") == "APPROVED":
-        # 승인 잠금 장면의 선택본 교체 금지 — 사람 승인(SCORECARD C)을 거치지 않은 이미지가
-        # 완성본 자리를 차지하는 것을 막는다. 웹 스튜디오(select_image)와 같은 규칙.
-        die(f"{sid} 는 APPROVED 입니다. 선택본을 바꾸려면 먼저 되돌리세요:\n"
-            f"  python tools/advance_scene.py revise {sid} IMAGE --note \"교체 사유\"")
-    raws = sc["assets"].get("raw_images", [])
-    if not raws:
-        die("등록된 후보 이미지가 없습니다. add-images 를 먼저 실행하세요.")
-    key = args.candidate
-    idx = None
-    if key.isdecimal():
-        try:
-            idx = int(key)  # isdecimal 이라도 int() 실패 가능(위첨자 등) → 방어
-        except ValueError:
-            idx = None
-    if idx is not None:
-        if not 1 <= idx <= len(raws):
-            die(f"번호 범위는 1~{len(raws)} 입니다.")
-        chosen = raws[idx - 1]
-    else:
-        matches = [r for r in raws if Path(r).name == key or r == key]
-        if len(matches) != 1:
-            die(f"'{key}' 와 일치하는 후보가 {len(matches)}개입니다.")
-        chosen = matches[0]
-    sc["assets"]["selected_image"] = chosen
-    save(path, sc)
-    print(f"선택: {chosen}")
-    code, out = run_checker(sid)
-    if code == 0:
+    chosen = ops.resolve_candidate(sid, args.candidate)
+    res = ops.select_image(sid, chosen)
+    print(f"선택: {res['selected']}")
+    if res["auto_pass"]:
         print(f"다음: python tools/advance_scene.py approve {sid}")
     else:
-        print("\n".join(l for l in out.splitlines() if "FAIL" in l))
+        _print_fails(res["fails"])
 
 
 def do_approve(sid: str) -> None:
-    """승인 잠금 공용 로직 — 검사 FAIL 시 원상 복구 후 RuntimeError."""
-    with WRITE_LOCK:
-        path = scene_path(sid)
-        original = path.read_text(encoding="utf-8")
-        sc = json.loads(original)
-        if sc.get("status") != "REVIEW_HUMAN":
-            raise RuntimeError(
-                f"REVIEW_HUMAN 단계에서만 승인할 수 있습니다(현재: {sc.get('status')}). "
-                "add-images → select 를 먼저 완료하세요.")
-        if not (sc["assets"].get("selected_image") or "").strip():
-            raise RuntimeError("selected_image 가 없습니다. 이미지를 먼저 선택하세요.")
-        sc["review"]["auto"] = "PASS"
-        sc["review"]["human"] = "PASS"
-        sc["status"] = "APPROVED"
-        save(path, sc)
-        code, out = run_checker(sid)
-        if code != 0:
-            path.write_text(original, encoding="utf-8")  # 롤백
-            raise RuntimeError("자동 검사 FAIL — 승인을 되돌렸습니다.\n"
-                               + "\n".join(l for l in out.splitlines() if "FAIL" in l))
+    """승인 잠금 — 검사 FAIL 시 원상 복구 후 VNError. (웹 스튜디오도 이 경로를 쓴다)"""
+    _ops().approve(sid)
 
 
 def cmd_approve(args: argparse.Namespace) -> None:
     sid = args.scene_id
     try:
         do_approve(sid)
-    except RuntimeError as exc:
+    except RuntimeError as exc:     # VNError 포함
         print(f"승인 불가 — {exc}")
         sys.exit(1)
     print(f"{sid} APPROVED — 장면 잠금 완료.")
@@ -275,19 +212,9 @@ def cmd_approve(args: argparse.Namespace) -> None:
 
 
 def cmd_revise(args: argparse.Namespace) -> None:
-    sid = args.scene_id
-    path = scene_path(sid)
-    sc = load(path)
-    sc["status"] = args.target
-    sc["review"]["auto"] = "PENDING"
-    sc["review"]["human"] = "PENDING"
-    # 되돌리면 선택을 무효화한다 — 오래된 이미지가 재선택 없이 다시 승인되는 것을 막는다.
-    sc["assets"]["selected_image"] = ""
-    sc["review"]["notes"].append(
-        f"[{date.today()}] REVISE → {args.target}" + (f": {args.note}" if args.note else ""))
-    sc["version"] = int(sc.get("version", 1)) + 1
-    save(path, sc)
-    print(f"{sid} → {args.target} (version {sc['version']}). 기존 이미지·프롬프트는 보존됨.")
+    res = _ops().revise(args.scene_id, args.target, args.note)
+    print(f"{args.scene_id} → {res['status']} (version {res['version']}). "
+          "기존 이미지·프롬프트는 보존됨.")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -298,10 +225,12 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"{'순서':<4} {'scene_id':<12} {'상태':<14} {'auto':<8} {'human':<8} 선택본")
     print("-" * 64)
     for s in scenes:
-        sel = Path(s["assets"].get("selected_image", "")).name or "-"
+        assets = s.get("assets") if isinstance(s.get("assets"), dict) else {}
+        review = s.get("review") if isinstance(s.get("review"), dict) else {}
+        sel = Path(str(assets.get("selected_image", ""))).name or "-"
         print(f"{s.get('scene_order','?'):<4} {s.get('scene_id','?'):<12} "
-              f"{s.get('status','?'):<14} {s['review'].get('auto','?'):<8} "
-              f"{s['review'].get('human','?'):<8} {sel}")
+              f"{s.get('status','?'):<14} {review.get('auto','?'):<8} "
+              f"{review.get('human','?'):<8} {sel}")
     nxt = {"SCENE_PLAN": "계획 작성 후 make_grok_input.py 실행",
            "PROMPT": "외부 AI 생성 → add-images",
            "IMAGE": "자동 검사 원인 해결 또는 add-images 재실행",
@@ -357,10 +286,19 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def main() -> None:
+def main() -> int:
+    """종료 코드 변환은 여기 한 곳에서만 한다: 정상 0 · 사용자 오류 2 · 승인 거부 1."""
     args = build_parser().parse_args()
-    args.fn(args)
+    try:
+        args.fn(args)
+    except VNError as exc:
+        print(f"오류: {exc}")
+        return 2
+    except KeyboardInterrupt:
+        print("\n중단했습니다.")
+        return 130
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -24,14 +24,33 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
+    sys.path.insert(0, str(_HERE))
+
+from vn_core import console_guard   # noqa: E402
+
+ROOT = _HERE.parent          # vn_core 규약과 같은 값 — 복제본에서도 자기 트리를 본다
 SELF = Path(__file__).resolve()
 
 TEXT_EXTS = {".json", ".md", ".py", ".txt", ".cfg", ".ini", ".yaml", ".yml",
-             ".ps1", ".sh", ".bat", ".cmd", ".html", ".js", ".css", ".toml", ".env"}
+             ".ps1", ".sh", ".bat", ".cmd", ".html", ".js", ".css", ".toml", ".env",
+             # 커버리지 확장: 실제로 키가 새는 자리들
+             ".jsonl",           # 사용량 대장(logs/makefun_usage.jsonl)
+             ".log",             # 서버 로그 — 헤더가 통째로 찍히는 사고가 가장 흔하다
+             ".csv", ".tsv",     # 내보낸 표에 토큰이 섞이는 경우
+             ".xml", ".conf", ".properties", ".config",
+             ".crt", ".cer",     # 공개 인증서지만 개인키 블록이 함께 붙는 사고가 있다
+             ".pem", ".key"}     # 아래 KEY_* 로 파일 자체도 신고하지만 내용도 본다
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "images"}
 MAX_BYTES = 5_000_000        # 감상본 HTML 처럼 이미지가 내장된 대용량 파일은 건너뛴다
 MAX_LINE = 4000              # 한 줄이 base64 덩어리인 경우 정규식 폭주 방지
+
+# 파일이 '존재하는 것 자체'가 사고인 것들 — 내용을 읽지 않고 이름만으로 신고한다.
+# (개인키는 대개 바이너리(DER·PKCS#12)라 패턴 검색으로는 잡히지 않는다.)
+KEY_EXTS = {".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk"}
+KEY_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+             ".netrc", "_netrc", ".npmrc", ".pypirc", ".htpasswd", ".pgpass"}
 
 # 패턴 접두사는 런타임 조립 — 이 파일 자체가 스캐너(및 A8)에 걸리지 않게 한다.
 _X = "xa" + "i-"
@@ -106,20 +125,39 @@ def mask(value: str) -> str:
     return f"{head}… (총 {len(v)}자)"
 
 
-def iter_files(base: Path):
+def key_file_kind(path: Path) -> str:
+    """개인키·자격증명 '파일' 이면 종류 문자열, 아니면 빈 문자열."""
+    name = path.name.lower()
+    if name in KEY_NAMES or name.startswith("id_rsa") or name.startswith("id_ed25519"):
+        return "자격증명 파일(내용을 읽지 않고 이름만으로 판정)"
+    if path.suffix.lower() in KEY_EXTS:
+        return "개인키/키스토어 파일"
+    return ""
+
+
+def _candidates(base: Path):
+    """스캔 대상 파일 — 건너뛸 폴더·자기 자신만 제외하고 전부."""
     for p in sorted(base.rglob("*")):
         if not p.is_file() or set(p.parts) & SKIP_DIRS:
             continue
         if p.resolve() == SELF:                # 스캐너 자신의 패턴 소스는 제외
             continue
-        if p.suffix.lower() not in TEXT_EXTS and not p.name.startswith(".env"):
-            continue
-        try:
-            if p.stat().st_size > MAX_BYTES:
-                continue
-        except OSError:
-            continue
         yield p
+
+
+def _is_text_target(p: Path) -> bool:
+    """본문을 읽어 패턴을 볼 파일인가 — 확장자와 크기 상한으로 결정."""
+    if p.suffix.lower() not in TEXT_EXTS and not p.name.startswith(".env"):
+        return False
+    try:
+        return p.stat().st_size <= MAX_BYTES
+    except OSError:
+        return False
+
+
+def iter_files(base: Path):
+    """본문을 읽어 패턴을 볼 텍스트 파일."""
+    return (p for p in _candidates(base) if _is_text_target(p))
 
 
 def scan_text(text: str) -> list:
@@ -137,32 +175,32 @@ def scan_text(text: str) -> list:
     return hits
 
 
+def _rel(p: Path) -> str:
+    return p.relative_to(ROOT).as_posix() if p.is_relative_to(ROOT) else p.as_posix()
+
+
 def scan(base: Path) -> list:
+    """저장소 1회 순회 — 파일 이름으로 한 번, 텍스트 본문으로 한 번 판정한다."""
     findings = []
-    for p in iter_files(base):
+    for p in _candidates(base):
+        kind = key_file_kind(p)
+        if kind:                    # 파일 존재 자체가 사고 — 내용은 읽지 않는다
+            findings.append({"file": _rel(p), "line": 0, "kind": "key-file",
+                             "desc": kind, "masked": "(파일 내용 미열람)"})
+        if not _is_text_target(p):
+            continue
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for lineno, label, desc, masked in scan_text(text):
-            rel = p.relative_to(ROOT).as_posix() if p.is_relative_to(ROOT) else p.as_posix()
-            findings.append({"file": rel, "line": lineno, "kind": label,
+            findings.append({"file": _rel(p), "line": lineno, "kind": label,
                              "desc": desc, "masked": masked})
     return findings
 
 
-def _console_guard() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
 def main() -> int:
-    _console_guard()
+    console_guard()          # 비 UTF-8 콘솔에서도 한글 안내가 깨지지 않게(멱등)
     ap = argparse.ArgumentParser(description="저장소 비밀값 유출 스캐너 (읽기 전용)")
     ap.add_argument("--path", default=None, help="검사할 폴더 (기본: 저장소 전체)")
     ap.add_argument("--json", action="store_true", help="JSON 으로 출력")
@@ -191,7 +229,8 @@ def main() -> int:
         return 0
 
     for f in findings:
-        print(f"  ✗ {f['file']}:{f['line']}  [{f['kind']}] {f['desc']}")
+        where = f["file"] if f["line"] == 0 else f"{f['file']}:{f['line']}"
+        print(f"  ✗ {where}  [{f['kind']}] {f['desc']}")
         print(f"      값: {f['masked']}")
     print("-" * 60)
     print(f"{len(findings)}건 발견 — 조치 순서:")

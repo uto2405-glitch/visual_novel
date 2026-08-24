@@ -10,7 +10,7 @@
     "CHAR-002"
   ],
   "props": [],
-  "purpose": "끝내 한마디를 꺼내지 못한 채 하루가 저문다 (여운 엔딩)",
+  "purpose": "끝내 한마디를 꺼내지 못한 채 하루가 저문다",
   "action_beat": "지혜가 짧게 손을 흔들고 먼저 돌아선다",
   "emotion": "서먹함",
   "camera": {
@@ -39,6 +39,7 @@
     }
   ],
   "ending": true,
+  "ending_label": "여운 엔딩",
   "assets": {
     "raw_images": [],
     "selected_image": ""

@@ -10,70 +10,88 @@
   대사 배치 요구를 하나의 텍스트로 조립해
   project/grok_inputs/<scene_id>.txt 로 저장하고 화면에도 출력한다.
   이 내용을 그대로 Grok 에 붙여넣으면 된다.
+
+경로·JSON·화풍 문구는 vn_core 하나에서 온다(같은 문구를 여러 도구가 복제하면
+컷 사이 화풍이 갈린다). 오류 타입은 기존 호출부(grok_api·webapp)와의 호환을 위해
+FileNotFoundError 를 유지한다.
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "project" / "manifest.json"
-SCENES = ROOT / "project" / "scenes"
-BRIEF = ROOT / "templates" / "grok-prompt-brief.md"
-OUT_DIR = ROOT / "project" / "grok_inputs"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import vn_core  # noqa: E402
 
-# 작품 화풍의 단일 출처는 manifest.output.visual_style 이다(webapp.visual_style·vn_compose._visual_style 과 동일).
-# 매니페스트에 없을 때만 이 기본 문구를 쓴다 — 세 경로가 같은 문구여야 컷 간 화풍이 흔들리지 않는다.
-DEFAULT_VISUAL_STYLE = ("bright cel-shaded Korean romance webtoon, soft warm palette, "
-                        "clean line art")
+ROOT = vn_core.ROOT
+MANIFEST = vn_core.MANIFEST
+SCENES = vn_core.SCENES
+BRIEF = vn_core.TEMPLATES / "grok-prompt-brief.md"
+OUT_DIR = vn_core.PROJECT / "grok_inputs"
 
-def _console_guard() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
-_console_guard()
-
-
-def load(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+# 화풍 문구·JSON 로딩은 vn_core 가 유일한 출처다. (기존 이름은 호출 호환을 위해 남긴다.)
+DEFAULT_VISUAL_STYLE = vn_core.DEFAULT_VISUAL_STYLE
+load = vn_core.load_json
+visual_style = vn_core.visual_style
 
 
 def kv(label: str, value) -> str:
     return f"- {label}: {value}" if value not in ("", None, []) else ""
 
 
-def visual_style(mf: dict, sc: dict | None = None) -> str:
-    """작품 전체 화풍 — 매니페스트 우선, 없으면 장면 필드, 그것도 없으면 기본 문구."""
-    out = mf.get("output") if isinstance(mf.get("output"), dict) else {}
-    v = str(out.get("visual_style", "") or "").strip()
-    if not v and isinstance(sc, dict):
-        v = str(sc.get("visual_style", "") or "").strip()
-    return v or DEFAULT_VISUAL_STYLE
+def _prev_scene(sc: dict) -> dict | None:
+    """직전 order 의 장면 — 이름 규칙으로 먼저 찍고, 어긋날 때만 폴더를 훑는다.
+
+    장면이 늘어날수록 '전부 읽어서 하나 고르기'는 그대로 비용이 된다. 대부분의 작품은
+    SCENE-00N 과 order 가 나란하므로 한 번의 파일 읽기로 끝난다.
+    """
+    try:
+        want = int(sc.get("scene_order") or 0) - 1
+    except (TypeError, ValueError):
+        return None
+    if want < 1:
+        return None
+    guess = SCENES / f"SCENE-{want:03d}.json"
+    if guess.exists():
+        s = vn_core.load_json_safe(guess, {})
+        if s.get("scene_order") == want:
+            return s
+    for f in sorted(SCENES.glob("SCENE-*.json")):
+        s = vn_core.load_json_safe(f, {})   # 무관한 형제 장면이 손상돼도 조립은 계속된다
+        if s.get("scene_order") == want:
+            return s
+    return None
 
 
 def build_input(sid: str) -> str:
     """장면 sid 의 Grok 입력 패키지를 조립해 문자열로 돌려준다. (API 모드에서도 사용)"""
+    if not vn_core.is_scene_id(sid):
+        # 형식 검증이 파일 접근보다 먼저다 — '../x' 같은 값이 장면 폴더 밖에 닿지 못하게 한다.
+        raise FileNotFoundError(f"장면 ID 는 SCENE-001 형식이어야 합니다: {sid!r}")
     scene_file = SCENES / f"{sid}.json"
     if not MANIFEST.exists():
         raise FileNotFoundError("project/manifest.json 이 없습니다.")
     if not scene_file.exists():
-        raise FileNotFoundError(f"{scene_file.relative_to(ROOT)} 이 없습니다.")
+        raise FileNotFoundError(f"project/scenes/{sid}.json 이 없습니다.")
+    if not BRIEF.exists():
+        raise FileNotFoundError("templates/grok-prompt-brief.md 가 없습니다(지시서 원본).")
 
     mf = load(MANIFEST)
     sc = load(scene_file)
-    chars = {c.get("character_id"): c for c in mf.get("characters", [])}
-    locs = {l.get("location_id"): l for l in mf.get("locations", [])}
-    props = {p.get("prop_id"): p for p in mf.get("props", [])}
+    if not isinstance(mf, dict) or not isinstance(sc, dict):
+        raise FileNotFoundError("manifest 또는 장면 파일의 최상위가 객체({...})가 아닙니다.")
+    chars = {c.get("character_id"): c for c in mf.get("characters", []) if isinstance(c, dict)}
+    locs = {l.get("location_id"): l for l in mf.get("locations", []) if isinstance(l, dict)}
+    props = {p.get("prop_id"): p for p in mf.get("props", []) if isinstance(p, dict)}
 
     lines: list[str] = []
     add = lines.append
+
+    def add_kv(label: str, value) -> None:
+        """값이 있을 때만 한 줄 추가 — 빈 항목이 빈 줄로 남아 절 사이 여백을 흐리지 않게."""
+        line = kv(label, value)
+        if line:
+            add(line)
 
     # 1) 역할 지시서
     add(BRIEF.read_text(encoding="utf-8").strip())
@@ -81,25 +99,24 @@ def build_input(sid: str) -> str:
 
     # 2) 프로젝트
     add("==== 프로젝트 ====")
-    add(kv("제목", mf.get("title")))
-    add(kv("출력 비율", mf.get("output", {}).get("aspect_ratio")))
-    add(kv("작품 전체 화풍", visual_style(mf, sc)))
+    add_kv("제목", mf.get("title"))
+    out = mf.get("output") if isinstance(mf.get("output"), dict) else {}
+    add_kv("출력 비율", out.get("aspect_ratio"))
+    add_kv("작품 전체 화풍", visual_style(mf, sc))
     add("")
 
     # 3) 등장 캐릭터 기준정보
     add("==== 등장 캐릭터 (기준정보 유지 필수) ====")
-    for cid in sc.get("characters", []):
-        c = chars.get(cid, {})
+    for cid in (sc.get("characters") if isinstance(sc.get("characters"), list) else []):
+        c = chars.get(cid) or {}
         add(f"[{cid}] {c.get('name', '')} (version {c.get('version', 1)})")
-        prof = c.get("profile", {})
+        prof = c.get("profile") if isinstance(c.get("profile"), dict) else {}
         for k, label in (("age", "나이"), ("gender_presentation", "성별 표현"),
                          ("hair", "머리"), ("eyes", "눈"), ("build", "체형"),
                          ("wardrobe", "복장")):
-            line = kv(label, prof.get(k))
-            if line:
-                add(line)
+            add_kv(label, prof.get(k))
         if prof.get("signature_props"):
-            add(kv("시그니처 소품", ", ".join(prof["signature_props"])))
+            add_kv("시그니처 소품", ", ".join(str(p) for p in prof["signature_props"]))
         add(f"- prompt_anchor (SCENE_PROMPT 에 원문 그대로 포함): {c.get('prompt_anchor', '')}")
         if c.get("reference_images"):
             add("- 레퍼런스 이미지 (외부 이미지 AI에 반드시 함께 첨부):")
@@ -109,13 +126,11 @@ def build_input(sid: str) -> str:
 
     # 4) 장소
     lid = sc.get("location_id")
-    l = locs.get(lid, {})
+    l = locs.get(lid) or {}
     add("==== 장소 ====")
     add(f"[{lid}] {l.get('name', '')}")
-    for line in (kv("설명", l.get("description")),
-                 f"- prompt_anchor (원문 그대로 포함): {l.get('prompt_anchor', '')}"):
-        if line:
-            add(line)
+    add_kv("설명", l.get("description"))
+    add(f"- prompt_anchor (원문 그대로 포함): {l.get('prompt_anchor', '')}")
     if l.get("reference_images"):
         add("- 레퍼런스 이미지 (외부 이미지 AI에 함께 첨부):")
         for r in l["reference_images"]:
@@ -126,7 +141,7 @@ def build_input(sid: str) -> str:
     if sc.get("props"):
         add("==== 소품 ====")
         for pid in sc["props"]:
-            p = props.get(pid, {})
+            p = props.get(pid) or {}
             add(f"[{pid}] {p.get('name', '')} — {p.get('description', '')}")
             if p.get("prompt_anchor"):
                 add(f"- prompt_anchor: {p['prompt_anchor']}")
@@ -134,37 +149,26 @@ def build_input(sid: str) -> str:
 
     # 6) 이번 장면 계획
     add(f"==== 이번 장면: {sid} (order {sc.get('scene_order')}) ====")
-    for line in (kv("목적", sc.get("purpose")),
-                 kv("행동 비트", sc.get("action_beat")),
-                 kv("감정", sc.get("emotion")),
-                 kv("시간대", sc.get("time")),
-                 kv("화풍", sc.get("visual_style"))):
-        if line:
-            add(line)
-    cam = sc.get("camera", {})
+    add_kv("목적", sc.get("purpose"))
+    add_kv("행동 비트", sc.get("action_beat"))
+    add_kv("감정", sc.get("emotion"))
+    add_kv("시간대", sc.get("time"))
+    add_kv("화풍", sc.get("visual_style"))
+    cam = sc.get("camera") if isinstance(sc.get("camera"), dict) else {}
     add(f"- 카메라: shot={cam.get('shot','')} / angle={cam.get('angle','')} / "
         f"framing={cam.get('framing','')} / focus={cam.get('focus','')}")
     add("")
 
     # 7) 직전 장면 연속성
-    prev = None
-    for f in SCENES.glob("SCENE-*.json"):
-        try:
-            s = load(f)
-        except (ValueError, OSError):
-            continue  # 무관한 형제 장면이 손상돼도 이번 장면 조립은 계속된다
-        if isinstance(s, dict) and s.get("scene_order") == sc.get("scene_order", 0) - 1:
-            prev = s
-            break
+    prev = _prev_scene(sc)
     add("==== 직전 장면 연속성 ====")
     if prev:
         add(f"직전 장면 {prev.get('scene_id')}:")
-        for line in (kv("행동", prev.get("action_beat")),
-                     kv("감정", prev.get("emotion")),
-                     kv("화풍", prev.get("visual_style"))):
-            if line:
-                add(line)
-        sel = prev.get("assets", {}).get("selected_image", "")
+        add_kv("행동", prev.get("action_beat"))
+        add_kv("감정", prev.get("emotion"))
+        add_kv("화풍", prev.get("visual_style"))
+        assets = prev.get("assets") if isinstance(prev.get("assets"), dict) else {}
+        sel = str(assets.get("selected_image", "") or "").strip()
         if sel:
             add(f"- 확정 이미지: {Path(sel).name} (이 장면과 시각적으로 이어져야 함)")
     else:
@@ -174,13 +178,14 @@ def build_input(sid: str) -> str:
     # 8) 대사 배치 (원문 금지)
     add("==== 대사 배치 요구 ====")
     add("대사 원문은 프롬프트에 절대 넣지 말 것. 아래 위치에 빈 공간만 확보:")
-    for i, d in enumerate(sc.get("dialogue", []), 1):
-        spk = chars.get(d.get("speaker_id"), {}).get("name", d.get("speaker_id"))
+    dialogue = sc.get("dialogue") if isinstance(sc.get("dialogue"), list) else []
+    for i, d in enumerate((d for d in dialogue if isinstance(d, dict)), 1):
+        spk = (chars.get(d.get("speaker_id")) or {}).get("name") or d.get("speaker_id")
         add(f"- 대사 {i}: 화자 {spk} / 위치 {d.get('placement', 'bottom')}")
     add("")
     add("위 정보로 SCENE_PROMPT / NEGATIVE_PROMPT / CONTINUITY_NOTES / DIALOGUE_PLACEMENT 를 출력하라.")
 
-    return "\n".join(line for line in lines if line is not None)
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -190,18 +195,17 @@ def main() -> int:
     sid = sys.argv[1]
     try:
         text = build_input(sid)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, vn_core.VNError) as exc:
         print(f"오류: {exc}")
         return 2
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_file = OUT_DIR / f"{sid}.txt"
-    out_file.write_text(text + "\n", encoding="utf-8")
+    vn_core.atomic_write_text(out_file, text + "\n")   # 저장 중 중단돼도 반쪽 파일이 남지 않는다
 
     try:
         print(text)
         print("-" * 56)
-        print(f"저장됨: {out_file.relative_to(ROOT)}")
-        print(f"다음: 위 내용을 Grok 에 붙여넣고, 출력을 받아서")
+        print(f"저장됨: {out_file.relative_to(ROOT).as_posix()}")
+        print("다음: 위 내용을 Grok 에 붙여넣고, 출력을 받아서")
         print(f"      python tools/advance_scene.py set-prompt {sid} --file <저장한파일>")
     except BrokenPipeError:
         pass  # head 등으로 파이프가 먼저 닫혀도 파일 저장은 완료됨

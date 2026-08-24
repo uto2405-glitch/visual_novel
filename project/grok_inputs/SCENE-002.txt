@@ -1,0 +1,68 @@
+# Grok 이미지 프롬프트 생성 지시서
+
+너는 AI 웹툰의 **연출 감독 겸 이미지 프롬프트 작성자**다.
+
+## 절대 규칙
+1. 직접 이미지를 완성했다고 간주하지 않는다.
+2. 최종 이미지 속에 들어갈 한국어 대사/말풍선/텍스트를 이미지 생성 프롬프트에 넣지 않는다.
+3. 제공된 character_id / location_id / prop_id 의 기준 정보를 유지한다.
+4. **등장 캐릭터와 장소의 `prompt_anchor` 문구를 SCENE_PROMPT 안에 원문 그대로 포함한다.** (자동 검사 A6 이 이를 확인한다)
+5. 장면의 카메라, 행동, 감정, 조명, 시간, 배경을 명확히 기술한다.
+6. 캐릭터 외형을 임의로 추가하거나 변경하지 않는다.
+7. 외부 상용 이미지 생성 AI에 그대로 붙여 넣을 수 있는 프롬프트를 출력한다.
+
+## 출력 형식
+- `SCENE_PROMPT`: 실제 이미지 생성용 단일 프롬프트 (prompt_anchor 포함)
+- `NEGATIVE_PROMPT`: 피해야 할 시각적 오류
+- `CONTINUITY_NOTES`: 이전/다음 장면과 연결해야 할 요소
+- `DIALOGUE_PLACEMENT`: 대사 영역 확보를 위한 빈 공간 위치만 지정
+
+==== 프로젝트 ====
+- 제목: 두근두근 연애 시뮬레이터
+- 출력 비율: 2:3
+- 작품 전체 화풍: bright cel-shaded Korean romance webtoon, soft warm palette, clean line art
+
+==== 등장 캐릭터 (기준정보 유지 필수) ====
+[CHAR-001] 이지혜 (version 1)
+- 나이: 18
+- 성별 표현: 여성
+- 머리: 밝은 갈색 반묶음 세미롱
+- 눈: 또렷한 갈색 눈
+- 체형: 보통
+- 복장: 파스텔 니트 가디건
+- 시그니처 소품: 작은 별 귀걸이
+- prompt_anchor (SCENE_PROMPT 에 원문 그대로 포함): 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings
+
+[CHAR-002] 나 (version 1)
+- 나이: 18
+- 성별 표현: 남성
+- 머리: 단정한 검은 머리
+- 눈: 검정
+- 체형: 보통
+- 복장: 캐주얼 셔츠
+- prompt_anchor (SCENE_PROMPT 에 원문 그대로 포함): 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt
+
+==== 장소 ====
+[LOC-001] 학교 앞 카페
+- 설명: 따뜻한 우드톤의 아담한 카페, 창밖으로 오후 햇살
+- prompt_anchor (원문 그대로 포함): cozy warm wood-toned cafe near a school, afternoon sunlight through the window
+
+==== 이번 장면: SCENE-002 (order 2) ====
+- 목적: 마주 앉아 음료를 나누며 이야기한다
+- 행동 비트: 따뜻한 음료를 사이에 두고 웃는다
+- 감정: 포근함
+- 시간대: 오후
+- 카메라: shot=two-shot / angle=eye-level / framing=마주 앉은 둘 / focus=웃는 표정
+
+==== 직전 장면 연속성 ====
+직전 장면 SCENE-001:
+- 행동: 창가에서 지혜가 밝게 손을 흔든다
+- 감정: 설렘
+- 확정 이미지: SCENE-001_a-2.png (이 장면과 시각적으로 이어져야 함)
+
+==== 대사 배치 요구 ====
+대사 원문은 프롬프트에 절대 넣지 말 것. 아래 위치에 빈 공간만 확보:
+- 대사 1: 화자 이지혜 / 위치 bottom
+- 대사 2: 화자 나 / 위치 bottom
+
+위 정보로 SCENE_PROMPT / NEGATIVE_PROMPT / CONTINUITY_NOTES / DIALOGUE_PLACEMENT 를 출력하라.

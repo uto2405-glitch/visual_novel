@@ -29,13 +29,19 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
+    sys.path.insert(0, str(_HERE))
+
+from vn_core import (VNError, atomic_write_json, load_json_safe,   # noqa: E402
+                     safe_slug)
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -45,14 +51,27 @@ except ImportError:  # 서버(webapp)가 Pillow 없이도 import 가능하도록
     PIL_OK = False
 
 
+class PrintArgError(VNError, SystemExit):
+    """규격·전제조건 오류.
+
+    VNError(=RuntimeError) 이므로 웹 스튜디오의 ``except RuntimeError`` 가 잡아 400 으로 바꾼다.
+    예전에 이 자리에서 던지던 SystemExit 는 요청 스레드를 통째로 끊어 연결이 잘렸다.
+    다만 기존 호출부·회귀 테스트가 ``except SystemExit`` 로 이 오류를 기다리므로 두 타입을 모두
+    상속해 하위호환을 유지한다 — ``except Exception`` 으로도 잡히므로 프로세스를 죽이지 않는다.
+    """
+
+
 def _require_pil():
     if not PIL_OK:
-        raise RuntimeError("인화 내보내기는 Pillow 가 필요합니다:  python -m pip install Pillow")
+        raise VNError("인화 내보내기는 Pillow 가 필요합니다:  python -m pip install Pillow")
 
-ROOT = Path(__file__).resolve().parents[1]
+
+# 경로 이름은 vn_core 규약을 따르되 값은 이 파일 위치에서 계산한다.
+# (자가진단이 저장소를 복제해 이 모듈만 적재하므로 — 그때도 자기 트리 안에만 쓴다.)
+ROOT = _HERE.parent
 MANIFEST = ROOT / "project" / "manifest.json"
 SCENES = ROOT / "project" / "scenes"
-OUT = ROOT / "output" / "print"
+OUT = ROOT / "output" / "print"          # 함수는 이 전역을 호출 시점에 읽는다(테스트가 갈아끼운다)
 
 MM_PER_IN = 25.4
 
@@ -79,23 +98,6 @@ KOR_FONTS = [r"C:\Windows\Fonts\malgun.ttf", r"C:\Windows\Fonts\malgunsl.ttf",
 UPSCALE_EXES = ("realesrgan-ncnn-vulkan", "realsr-ncnn-vulkan", "waifu2x-ncnn-vulkan")
 
 
-def _console_guard() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        enc = (getattr(stream, "encoding", "") or "").lower()
-        if enc not in ("utf-8", "utf8"):
-            try:
-                stream.reconfigure(errors="replace")
-            except Exception:
-                pass
-
-
-_console_guard()
-
-
-def load(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def parse_size(s: str):
     """규격 문자열 → (짧은 변, 긴 변) 인치. 프리셋 / 'WxH' 인치 / 'WxHmm'·'WxHcm' 지원."""
     key = str(s).lower().replace("×", "x").replace(" ", "").strip()
@@ -114,9 +116,9 @@ def parse_size(s: str):
             a = b = None
         if a is not None and a > 0 and b > 0 and max(a, b) <= 100:
             return (min(a, b), max(a, b))
-    raise SystemExit(f"오류: 규격 '{s}' 을 해석할 수 없습니다. "
-                     f"({'/'.join(list(SIZES)[:6])} 등 프리셋, '가로x세로'인치, "
-                     "'55x85mm' 형식 지원 · 0<크기≤100인치)")
+    raise PrintArgError(f"오류: 규격 '{s}' 을 해석할 수 없습니다. "
+                        f"({'/'.join(list(SIZES)[:6])} 등 프리셋, '가로x세로'인치, "
+                        "'55x85mm' 형식 지원 · 0<크기≤100인치)")
 
 
 def size_dir(short_in: float, long_in: float) -> str:
@@ -298,8 +300,8 @@ def _draw_crop_marks(img, bleed_px: int, dpi: int) -> bool:
 
 
 def _safe_stem(scene_id) -> str:
-    """파일명에 쓸 수 있는 문자만 남긴다 — 경로 탈출 차단."""
-    return "".join(c for c in str(scene_id) if c.isalnum() or c in "-_") or "SCENE"
+    """파일명에 쓸 수 있는 문자만 남긴다 — 경로 탈출 차단(vn_core 단일 구현)."""
+    return safe_slug(scene_id, "SCENE")
 
 
 def _order_prefix(order) -> str:
@@ -384,11 +386,11 @@ def export_one(scene_id: str, src_path: Path, short_in, long_in, dpi, bleed, anc
 
 def collect(scene_filter, include_all):
     if not MANIFEST.exists():
-        raise SystemExit("오류: project/manifest.json 이 없습니다.")
+        raise PrintArgError("오류: project/manifest.json 이 없습니다.")
     out = []
     for f in sorted(SCENES.glob("SCENE-*.json")) if SCENES.exists() else []:
-        sc = load(f)
-        if not isinstance(sc, dict):
+        sc = load_json_safe(f, {})       # 손상된 장면 한 개가 인화 배치를 통째로 막지 않게 한다
+        if not sc:
             continue
         if scene_filter and sc.get("scene_id") != scene_filter:
             continue
@@ -427,7 +429,7 @@ def contact_sheet(scenes, cols=3):
     draw = ImageDraw.Draw(sheet)
     title_font = _load_font(48)
     label_font = _load_font(26)
-    title = load(MANIFEST).get("title", "") or "무제"
+    title = load_json_safe(MANIFEST, {}).get("title", "") or "무제"
     draw.text((pad, pad), f"{title} — 컨택트시트 ({len(scenes)}컷)", fill=(40, 30, 20), font=title_font)
 
     for i, sc in enumerate(scenes):
@@ -520,14 +522,14 @@ def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
              "업로드 전에 정리하세요.")
     if specs:
         dest.mkdir(parents=True, exist_ok=True)
-        (dest / "spec_sheet.json").write_text(
-            json.dumps({"size_in": [short_in, long_in], "dpi": dpi, "bleed_in": bleed,
-                        "mode": "fit" if str(mode).lower() == "fit" else "cover",
-                        "marks": bool(marks and bleed > 0), "upscale": str(upscale),
-                        "icc": "sRGB" if srgb_icc_bytes() else None,
-                        "only_ids": sorted(wanted) if wanted is not None else None,
-                        "count": len(specs), "scenes": specs}, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        # 인화소에 함께 넘기는 주문서 — 굽는 도중 중단돼도 반쪽 파일이 남지 않게 원자적으로 쓴다
+        atomic_write_json(dest / "spec_sheet.json", {
+            "size_in": [short_in, long_in], "dpi": dpi, "bleed_in": bleed,
+            "mode": "fit" if str(mode).lower() == "fit" else "cover",
+            "marks": bool(marks and bleed > 0), "upscale": str(upscale),
+            "icc": "sRGB" if srgb_icc_bytes() else None,
+            "only_ids": sorted(wanted) if wanted is not None else None,
+            "count": len(specs), "scenes": specs})
     return {"count": len(specs), "dir": dest.relative_to(ROOT).as_posix() if specs else None,
             "upscaled": sum(1 for s in specs if s["upscaled"]), "skipped": skipped,
             "missing": missing, "specs": specs, "stale": stale,
@@ -571,24 +573,29 @@ def main() -> int:
         print("오류: Pillow 가 필요합니다.  python -m pip install Pillow")
         return 1
 
-    scenes = collect(args.scene, args.all)
-    if args.contact:
-        contact_sheet(scenes)
+    try:
+        scenes = collect(args.scene, args.all)
+        if args.contact:
+            contact_sheet(scenes)
+            if not args.size:
+                return 0
         if not args.size:
-            return 0
-    if not args.size:
-        print("규격을 지정하세요: --size 5x7  (또는 색인만: --contact, 목록: --list-sizes)")
-        return 2
+            print("규격을 지정하세요: --size 5x7  (또는 색인만: --contact, 목록: --list-sizes)")
+            return 2
 
-    only = [s.strip() for s in args.only.replace(" ", ",").split(",") if s.strip()] if args.only else None
-    short_in, long_in = parse_size(args.size)
-    if args.upscale == "auto" and not find_upscaler():
-        print("외부 업스케일러를 찾지 못했습니다 → 다단계(step) 확대로 진행합니다. "
-              "(설치했다면 UPSCALER_EXE 환경변수에 실행파일 경로를 지정)")
-    s = export_batch(short_in, long_in, args.dpi, args.bleed, args.anchor,
-                     args.all, args.scene, args.skip_upscale, emit=print,
-                     only_ids=only, mode=args.mode, bg=args.bg, marks=args.marks,
-                     upscale=args.upscale, order_prefix=not args.no_order_prefix)
+        only = ([s.strip() for s in args.only.replace(" ", ",").split(",") if s.strip()]
+                if args.only else None)
+        short_in, long_in = parse_size(args.size)
+        if args.upscale == "auto" and not find_upscaler():
+            print("외부 업스케일러를 찾지 못했습니다 → 다단계(step) 확대로 진행합니다. "
+                  "(설치했다면 UPSCALER_EXE 환경변수에 실행파일 경로를 지정)")
+        s = export_batch(short_in, long_in, args.dpi, args.bleed, args.anchor,
+                         args.all, args.scene, args.skip_upscale, emit=print,
+                         only_ids=only, mode=args.mode, bg=args.bg, marks=args.marks,
+                         upscale=args.upscale, order_prefix=not args.no_order_prefix)
+    except VNError as exc:          # 규격 오타·매니페스트 부재 등 — 트레이스백 대신 한 줄 안내
+        print(exc)
+        return 1
     print("-" * 56)
     if s["count"]:
         print(f"완료: {s['count']}장 → {s['dir']}/ (TIFF+JPEG), spec_sheet.json  "

@@ -25,9 +25,14 @@ python tools/doctor.py
 # 1) 로컬 LLM + 웹 스튜디오를 한 번에
 powershell -ExecutionPolicy Bypass -File start_studio.ps1
 
-#    폰에서도 쓰려면
+#    폰에서도 쓰려면 (접속 PIN 이 자동으로 켜지고 콘솔에 표시된다)
 powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 ```
+
+`-Lan` 은 `0.0.0.0` 에 바인딩하므로 같은 와이파이의 다른 기기도 보인다. 그래서 외부 기기
+접속에는 **6자리 PIN 이 기본으로 요구된다**(이 PC 의 `127.0.0.1` 접속은 면제). PIN 은 기동할
+때마다 새로 뽑혀 콘솔과 `logs/lan_pin.txt` 에 뜬다 — 자세한 건
+[docs/PHONE_TUTORIAL.md](docs/PHONE_TUTORIAL.md).
 
 스튜디오만 따로 띄우려면 `python tools/webapp.py` (기본 `http://127.0.0.1:8765/`).
 이미 떠 있는 서버는 `start_studio.ps1` 이 다시 켜지 않는다(모델 재적재 방지).
@@ -75,8 +80,11 @@ docs/                          운영 문서
 copy templates\manifest.json project\manifest.json
 # manifest 에 제목·캐릭터·장소를 채운다 (prompt_anchor 는 필수 — 컷 간 일관성의 근거)
 # output.visual_style 에 작품 화풍을 적는다
+# 분기 없는 선형 작품이면 dating 블록을 지운다 (지우면 호감도 미터가 숨는다)
 python tools/check_protocol.py
 ```
+
+필드별 규약(필수/선택·누가 쓰고 누가 읽는지·검사기가 보는지)은 **[docs/SCHEMA.md](docs/SCHEMA.md)** 가 정본이다.
 
 데모로 먼저 초록불을 보고 싶다면 `examples\manifest.json` · `examples\scenes\SCENE-001.json` 을 복사한다.
 
@@ -101,7 +109,7 @@ python tools/check_protocol.py
 | 인화 마스터 굽기 | `python tools/print_export.py --size 4x6 --contact` (Pillow 필요) |
 | 백업 · 무결성 | `python tools/backup_project.py snapshot` / `verify` |
 | 비밀값 스캔 | `python tools/secret_scan.py` |
-| 자가진단(회귀) | `python tools/selftest.py` (현재 53종 — 서버 포트를 쓰므로 스튜디오는 끄고 실행) |
+| 자가진단(회귀) | `python tools/selftest.py` — **전체 통과**를 확인한다 (서버 포트를 쓰므로 스튜디오는 끄고 실행) |
 
 ## 검사와 승인
 
@@ -138,14 +146,16 @@ MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해�
 
 | 문서 | 언제 |
 |---|---|
-| [docs/PHONE_TUTORIAL.md](docs/PHONE_TUTORIAL.md) | 폰에서 쓰고 싶을 때 (LAN 접속·업로드·홈 화면) |
+| [docs/SCHEMA.md](docs/SCHEMA.md) | 매니페스트·장면 파일의 필드를 확인할 때 (스키마 단일 출처) |
+| [docs/PHONE_TUTORIAL.md](docs/PHONE_TUTORIAL.md) | 폰에서 쓰고 싶을 때 (LAN 접속·PIN·업로드·홈 화면) |
 | [docs/ENV_SETUP.md](docs/ENV_SETUP.md) | 토큰을 영구 등록할 때, 재부팅 후 401 이 날 때 |
 | [docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md) | 실물 인화를 주문할 때 |
 | [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) | 감상본을 인터넷에 올릴까 고민될 때 |
 | [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md) | 뭔가 깨졌을 때, PC 를 새로 세팅할 때 |
 | [CLAUDE.md](CLAUDE.md) | 제작 프로토콜 원칙·금지 조항 |
 | [protocol/SCORECARD.md](protocol/SCORECARD.md) | 판정 기준 원문 (수정 금지) |
-| [BACKLOG.md](BACKLOG.md) · [NO_TOKEN_TASKS.md](NO_TOKEN_TASKS.md) | 다음에 할 일 |
+| [NO_TOKEN_TASKS.md](NO_TOKEN_TASKS.md) | **다음에 할 일 · 진행 상태** (상태의 단일 출처) |
+| [BACKLOG.md](BACKLOG.md) | 백로그 번호가 무엇이고 왜 필요한지 (항목 정의) |
 
 ## 프라이버시
 
