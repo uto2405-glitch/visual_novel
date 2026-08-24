@@ -214,8 +214,8 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <p class="small" style="margin-top:8px">이미지 프롬프트를 복사해 외부 이미지 AI(레퍼런스 이미지 첨부)로 생성한 뒤,
 결과 파일을 <b>images/raw/장면ID/</b> 폴더에 넣고 [폴더 스캔]을 누르세요.</p></div>
 
-<details class="card" id="manualCompose">
-<summary class="small">수동 모드 · API 크레딧 없이 grok.com 복붙으로 장면 구성</summary>
+<details class="card" id="manualCompose" open>
+<summary class="small">수동 모드 · API 크레딧 없이 grok.com 복붙으로 장면 구성 (기본 경로)</summary>
 <p class="small" style="margin:8px 0">SuperGrok 구독만 있고 API 크레딧이 없을 때 이 경로를 쓰세요. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
 <div class="row">
 <span class="small">① 지시문 생성 → grok.com 에 붙여넣기</span>
@@ -354,7 +354,7 @@ async function send(){const t=$("chatInput").value.trim();if(!t)return;
  $("chatInput").value="";S.chat.push({role:"user",content:t});renderChat();
  try{const d=await api("/api/chat",{messages:S.chat});
   S.chat.push({role:"assistant",content:d.reply});renderChat()}
- catch(e){alert(e.message)}}
+ catch(e){alert(e.message+"\n\nAPI 크레딧이 없으면: 아래 [그록 프롬프트 틀]을 복사해 grok.com 에서 직접 대화하고, 결과를 스토리라인 칸에 붙여넣으세요.")}}
 $("btnSend").onclick=send;
 $("chatInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}});
 $("btnPull").onclick=()=>{const last=[...S.chat].reverse().find(m=>m.role==="assistant");
@@ -492,7 +492,7 @@ $("btnFrameChat").onclick=()=>{$("chatInput").value=$("frameText").value;$("chat
 $("btnCompose").onclick=async()=>{$("composeMsg").textContent="구성 중… (수십 초 걸릴 수 있음)";
  try{const d=await api("/api/compose",{count:+$("composeCount").value,force:$("composeForce").checked});
   $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음");
-  await refresh()}catch(e){$("composeMsg").textContent="실패: "+e.message}};
+  await refresh()}catch(e){$("composeMsg").textContent="실패: "+e.message+" — 아래 [수동 모드]로 진행하세요(크레딧 불필요)"}};
 
 // ---- 수동 모드: 장면 구성 (grok.com 복붙) ----
 $("btnComposeInput").onclick=async()=>{try{
