@@ -1,0 +1,47 @@
+{
+  "scene_id": "SCENE-008",
+  "scene_order": 8,
+  "status": "PROMPT",
+  "location_id": "LOC-003",
+  "time": "밤",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "purpose": "불꽃놀이가 끝난 뒤 귀갓길, 아쉬움을 안고 나란히 걷는다",
+  "action_beat": "지혜가 걸음을 늦추며 집에 가기 싫다는 듯 내 옷자락을 만지작거린다",
+  "emotion": "아쉬움과 설렘",
+  "camera": {
+    "shot": "wide",
+    "angle": "eye-level"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "a teenage couple walking slowly along the riverside promenade after the fireworks, she tugs his sleeve wistfully, lingering warm night mood, cinematic wide shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, 18-year-old Korean boy, neat black hair, casual shirt, riverside walkway at sunset, orange and violet sky reflecting on the water",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "오늘… 진짜 안 끝났으면 좋겠다."
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "그럼 조금만 더 걷자. 멀리 돌아가자."
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1
+}

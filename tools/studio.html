@@ -225,9 +225,10 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 <p class="small" style="margin-top:8px">장면 구성은 <b>로컬 LLM</b>이, 이미지는 각 장면의 <b>[🎨 이미지 생성]</b> 버튼이
 <b>MakeFun AI</b> 로 자동 생성해 등록까지 해줍니다. 파일을 직접 넣는 [폴더 스캔]·[📤 업로드] 경로도 그대로 씁니다.</p></div>
 
-<details class="card" id="manualCompose">
-<summary class="small">수동 모드 · 다른 AI(그록 등) 복붙으로 장면 구성 (예비 경로)</summary>
-<p class="small" style="margin:8px 0">로컬 LLM 없이 외부 챗 AI 로 만들 때 이 경로를 쓰세요. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
+<details class="card" id="manualCompose" open>
+<summary class="small">⚡ 그록 수동 · 지시문 복사 → grok.com → JSON 붙여넣기 (로컬 LLM 느릴 때 추천)</summary>
+<p class="small" style="margin:8px 0">그록이 더 빠르고 똑똑합니다: [지시문 생성]을 복사해 grok.com(SuperGrok 구독, 비용 0)에 붙여넣고,
+응답 JSON 을 아래에 붙여넣으면 끝. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
 <div class="row">
 <span class="small">① 지시문 생성 → grok.com 에 붙여넣기</span>
 <button class="btn ghost" id="btnComposeInput">지시문 생성</button>
@@ -590,29 +591,34 @@ function sceneCard(sc){
  det.appendChild(detRow);
  card.appendChild(det);
 
- // 수동 모드: grok.com 복붙으로 이번 장면의 이미지 프롬프트 만들기 (승인 전 장면만)
+ // 그록 수동 경로: 로컬 LLM 이 느릴 때 grok.com 복붙으로 이번 장면 프롬프트 만들기 (승인 전 장면만)
  if(sc.status!=="APPROVED"){
   const mp=el("details");mp.style.marginTop="6px";
-  mp.appendChild(el("summary","small","수동 모드 · 이미지 프롬프트 만들기 (grok.com 복붙)"));
+  if(!sc.prompt)mp.open=true;   // 프롬프트 없는 장면은 바로 보이게
+  mp.appendChild(el("summary","small","⚡ 그록 수동 · 지시문 복사 → grok.com → 결과 붙여넣기 (로컬 LLM 느릴 때)"));
   const genRow=el("div","row");genRow.style.marginTop="6px";
   const btnGen=el("button","btn ghost","① 지시문 생성");
   const btnGenCopy=el("button","btn ghost","복사");btnGenCopy.hidden=true;
   const genOut=el("textarea");genOut.rows=5;genOut.readOnly=true;genOut.style.marginTop="6px";
-  genOut.placeholder="[지시문 생성] → grok.com 에 붙여넣기";
+  genOut.placeholder="[지시문 생성] → 복사해서 grok.com(폰 앱도 OK)에 붙여넣기";
   btnGen.onclick=async()=>{try{const d=await api("/api/grok-input",{scene_id:sc.scene_id});
     genOut.value=d.text;btnGenCopy.hidden=false}catch(e){genOut.value="실패: "+e.message}};
   btnGenCopy.onclick=async()=>{await navigator.clipboard.writeText(genOut.value);btnGenCopy.textContent="복사됨"};
   genRow.appendChild(btnGen);genRow.appendChild(btnGenCopy);
   mp.appendChild(genRow);mp.appendChild(genOut);
   const setIn=el("textarea");setIn.rows=5;setIn.style.marginTop="8px";
-  setIn.placeholder="② grok.com 이 준 SCENE_PROMPT 응답 전체를 여기에 붙여넣기";
+  setIn.placeholder="② grok 의 SCENE_PROMPT 응답 전체를 여기에 붙여넣기 → [프롬프트 저장] → [🎨 이미지 생성]";
   const setRow=el("div","row");setRow.style.marginTop="6px";
   const btnSet=el("button","btn","프롬프트 저장");
+  const fixLab=el("label","small");const fixCk=el("input");fixCk.type="checkbox";fixCk.checked=true;
+  fixLab.appendChild(fixCk);fixLab.appendChild(document.createTextNode(" 앵커 자동 보정(검사 통과 보장)"));
   const setMsg=el("span","small");
-  btnSet.onclick=async()=>{try{const d=await api("/api/set-prompt",{scene_id:sc.scene_id,text:setIn.value});
+  btnSet.onclick=async()=>{try{const d=await api("/api/set-prompt",
+    {scene_id:sc.scene_id,text:setIn.value,fix_anchors:fixCk.checked});
     setMsg.textContent=d.checker_pass?"저장됨 · 검사 통과":"저장됨 · 경고: "+d.fails;await refresh()}
    catch(e){setMsg.textContent="실패: "+e.message}};
-  mp.appendChild(setIn);setRow.appendChild(btnSet);setRow.appendChild(setMsg);mp.appendChild(setRow);
+  mp.appendChild(setIn);setRow.appendChild(btnSet);setRow.appendChild(fixLab);
+  setRow.appendChild(setMsg);mp.appendChild(setRow);
   card.appendChild(mp)}
 
  const act=el("div","row");act.style.marginTop="8px";

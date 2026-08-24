@@ -151,8 +151,31 @@ def _require_scene(sid) -> Path:
     return adv.scene_path(sid)
 
 
-def set_scene_prompt(sid: str, text: str) -> dict:
-    """이미지 프롬프트를 장면에 저장 → 상태 PROMPT + 자동 검사. (로컬 LLM 생성/수동 붙여넣기 공용)"""
+def _missing_anchors(sc: dict, text: str) -> list[str]:
+    """장면에 필요한 인물/장소 앵커 중 프롬프트에 빠진 원문 목록."""
+    try:
+        mf = json.loads((ROOT / "project" / "manifest.json").read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    chars = {c.get("character_id"): c.get("prompt_anchor", "") for c in mf.get("characters", [])}
+    for cid in sc.get("characters", []):
+        a = (chars.get(cid) or "").strip()
+        if a and a.lower() not in text.lower():
+            out.append(a)
+    for l in mf.get("locations", []):
+        if l.get("location_id") == sc.get("location_id"):
+            a = (l.get("prompt_anchor") or "").strip()
+            if a and a.lower() not in text.lower():
+                out.append(a)
+    return out
+
+
+def set_scene_prompt(sid: str, text: str, fix_anchors: bool = False) -> dict:
+    """이미지 프롬프트를 장면에 저장 → 상태 PROMPT + 자동 검사. (로컬 LLM 생성/수동 붙여넣기 공용)
+
+    fix_anchors=True 면 그록 등 외부 AI 출력에 빠진 앵커 원문을 뒤에 이어붙여 A6 를 보장한다.
+    """
     text = (text or "").strip()
     if not text:
         raise RuntimeError("이미지 프롬프트가 비어 있습니다.")
@@ -161,6 +184,10 @@ def set_scene_prompt(sid: str, text: str) -> dict:
         sc = adv.load(path)
         if sc.get("status") == "APPROVED":
             raise RuntimeError("APPROVED 장면은 프롬프트를 바꿀 수 없습니다. 먼저 revise 하세요.")
+        if fix_anchors:
+            miss = _missing_anchors(sc, text)
+            if miss:
+                text = text.rstrip(" .,") + ", " + ", ".join(miss)
         sc.setdefault("prompt", {})["grok_output"] = text
         sc["status"] = "PROMPT"
         adv.save(path, sc)
@@ -252,7 +279,7 @@ def r_grok_input(b):
 
 
 def r_set_prompt(b):
-    return set_scene_prompt(b.get("scene_id"), b.get("text", ""))
+    return set_scene_prompt(b.get("scene_id"), b.get("text", ""), bool(b.get("fix_anchors")))
 
 
 def r_preflight(b):
