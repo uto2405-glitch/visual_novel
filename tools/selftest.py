@@ -21,6 +21,10 @@
 설계 원칙
   * 사용자의 project/ · images/ 원본은 절대 건드리지 않는다 — 모든 실행은 샌드박스 사본에서.
   * 유료 API(MakeFun·xAI)는 절대 호출하지 않는다. 네트워크가 나가는 지점만 스텁으로 막는다.
+    MakeFun 은 REST(_once)·결과 다운로드(_fetch_bytes)·R2 업로드(_UP) 세 곳을 스텁으로 막고,
+    남은 opener(_API·_DL)는 **열리는 순간 그 테스트를 실패**시킨다 — 스텁을 우회하는 전송
+    경로가 새로 생기면 조용히 통과하지 못한다(mf_stub). 응답 정규화처럼 _once 안에 있는
+    동작은 한 겹 아래(mf_raw)에서 진짜 _once 를 지나가며 검사한다.
   * 웹 스튜디오는 **첫 web=True 테스트에서 한 번만** 뜨고 나머지 웹 테스트가 그 서버를 그대로
     쓴다(Box._web 재사용). 그래서 기동 비용은 실행당 한 번뿐이고, 러너는 그 시간을 테스트
     시간에서 빼서 따로 보여 준다 — 첫 웹 테스트가 느린 것처럼 보이던 착시를 없앤다.
@@ -2048,6 +2052,134 @@ def w31(b: Box):
             eq(after, before, "거부됐는데 승인 장면이 바뀜")
 
 
+def _route(b: Box, path: str, what: str):
+    """POST 라우트 하나를 꺼낸다 — 아직 없으면 GAP(있는데 틀리면 그 자리에서 FAIL)."""
+    wa = b.mod("webapp")
+    routes = getattr(wa, "POST_ROUTES", {})
+    fn = routes.get(path)
+    if fn is None:
+        raise Gap(f"{path} 라우트가 아직 없음 — {what}")
+    return wa, fn
+
+
+def _settle(wa, sid: str, secs: float = 3.0) -> str:
+    """백그라운드 작업이 끝날 때까지 기다렸다가 마지막 진행 문구를 돌려준다.
+
+    라우트가 동기든 백그라운드든 같은 검사가 통하게 하는 자리다(sync 지원 여부를 강요하지 않는다).
+    """
+    deadline = time.monotonic() + secs
+    while time.monotonic() < deadline:
+        st = wa.gen_jobs.status(sid)
+        if not st.get("running"):
+            return str(st.get("message", ""))
+        time.sleep(0.02)
+    return str(wa.gen_jobs.status(sid).get("message", ""))
+
+
+@test("webapp", "W32 /api/upscale — 유료 경로가 gen_jobs 관문을 지난다(중복 과금 차단)")
+def w32(b: Box):
+    """확대는 **유료**다. 생성과 같은 관문(gen_jobs.claim)을 지나지 않으면 폰·PC·CLI 가
+    같은 장면을 동시에 눌렀을 때 그대로 두 번 결제된다.
+
+    MakeFun 은 부르지 않는다 — makefun_client.upscale_scene 을 통째로 대역으로 갈아끼우고
+    **라우트의 관문 동작만** 본다(네트워크 0회).
+    """
+    wa, route = _route(b, "/api/upscale", "인화용 확대를 웹에서 부를 수 없다")
+    calls = func_calls(b, "webapp", route.__name__)
+    ok(any(c.startswith("gen_jobs.") for c in calls),
+       f"업스케일이 생성 잠금(gen_jobs)을 지나지 않음 — 부르는 것: {sorted(calls)}")
+    ok(any("upscale" in c for c in calls if c.startswith("makefun_client.")),
+       f"라우트가 makefun_client 의 업스케일을 부르지 않음 — {sorted(calls)}")
+    ok("threading.Thread" not in calls,
+       "라우트가 스레드를 직접 띄운다 — 진행 표시·잠금이 gen_jobs 밖으로 새는 두 번째 경로")
+
+    seen: list[str] = []
+
+    def fake(sid, **kw):
+        """실제 업스케일 대신 확대본 한 장을 그 자리에 만든다(과금 0)."""
+        seen.append(sid)
+        out = b.root / "images" / "raw" / sid / "fake_up.png"
+        write_png(out, 2400, 3600)
+        return [out]
+
+    with selected_scene(b) as sid, patched(wa.makefun_client, "upscale_scene", fake):
+        # (1) 이미 그 장면을 굽고 있으면 유료 호출은 시작조차 되면 안 된다
+        wa.gen_jobs.claim(sid, "생성")
+        try:
+            raises(lambda: route({"scene_id": sid}), RuntimeError, "생성 중인데 업스케일이 통과")
+            eq(seen, [], "중복 요청인데 유료 경로가 호출됐다(이중 과금)")
+        finally:
+            wa.gen_jobs.release(sid)
+        # (2) 정상 요청 — 확대본이 저장되고 선택본·상태는 그대로다
+        before = b.scene(sid)
+        route({"scene_id": sid, "sync": True})
+        _settle(wa, sid)
+        eq(seen, [sid], "업스케일이 호출되지 않음")
+        ok((b.root / "images" / "raw" / sid / "fake_up.png").exists(), "확대본 미저장")
+        after = b.scene(sid)
+        eq(after["assets"]["selected_image"], before["assets"]["selected_image"],
+           "웹 업스케일이 사람이 고른 선택본을 바꿈")
+        eq(after["status"], before["status"], "웹 업스케일이 장면 상태를 움직임")
+        eq(wa.gen_jobs.status(sid)["running"], False, "작업이 끝났는데 잠금이 남음(다음 요청이 막힌다)")
+        ok(not b.p(f"logs/gen_locks/{sid}.lock").exists(), "잠금 파일이 남음")
+
+    # (3) 승인된 컷 — 이 기능이 존재하는 이유 그 자체다(1200×1800 7장을 8×10 으로).
+    #     확대는 그림을 바꾸지 않으므로 APPROVED 도 지나가야 하고, 승인 기록은 그대로여야 한다.
+    seen2: list[str] = []
+
+    def fake2(sid, **kw):
+        seen2.append(sid)
+        out = b.root / "images" / "raw" / sid / "fake_up.png"
+        write_png(out, 2400, 3600)
+        return [out]
+
+    with selected_scene(b, approve=True) as sid2, \
+            patched(wa.makefun_client, "upscale_scene", fake2):
+        before2 = b.scene(sid2)
+        err = ""
+        try:
+            route({"scene_id": sid2, "sync": True})
+        except Exception as exc:                      # 동기 실행이면 여기로 온다
+            err = str(exc)
+        msg = _settle(wa, sid2)
+        ok(seen2, f"APPROVED 장면의 업스케일이 시작조차 못 했다 — {err or msg}. "
+                  f"승인 컷을 인화 규격으로 키우는 것이 이 기능의 목적이다(그림은 바뀌지 않는다).")
+        ok(not err and "실패" not in msg,
+           f"확대는 됐는데 실패로 끝났다 — {err or msg}. gen_jobs.run 의 register_images 가 "
+           f"APPROVED 의 후보 변경을 거절한다: 업스케일 경로는 후보 등록을 "
+           f"makefun_client.upscale_scene 에 맡기고 그 거절을 타면 안 된다.")
+        eq(b.scene(sid2), before2, "승인 장면이 웹 업스케일로 바뀜 — 승인 게이트 위반")
+        ok(not b.p(f"logs/gen_locks/{sid2}.lock").exists(), "잠금 파일이 남음")
+
+
+@test("webapp", "W33 /api/credits — 읽기 전용 위임(장면 잠금을 잡지 않는다)")
+def w33(b: Box):
+    """크레딧 조회는 이미지 과금이 아니지만 실제 토큰을 쓰는 호출이다. 라우트는 위임만 하고,
+    생성 잠금을 잡아서 다른 요청을 막지 않아야 한다.
+    """
+    wa, route = _route(b, "/api/credits", "남은 크레딧을 스튜디오에서 볼 수 없다")
+    calls = func_calls(b, "webapp", route.__name__)
+    ok(any(c.startswith("makefun_client.") for c in calls),
+       f"크레딧 조회가 makefun_client 로 위임되지 않음 — {sorted(calls)}")
+    ok(not any(c.startswith("gen_jobs.") for c in calls),
+       f"조회가 생성 잠금을 잡는다 — 그 사이 그 장면의 생성이 막힌다: {sorted(calls)}")
+
+    got: list[dict] = []
+    reply = {"ok": True, "raw": '{"list": []}', "note": "이력 0건 — 잔액은 계정 화면에서"}
+
+    def fake(**kw):
+        got.append(dict(kw))
+        return reply
+
+    with patched(wa.makefun_client, "credits", fake):
+        out = route({})                    # 장면 ID 없이도 답해야 한다
+    eq(len(got), 1, "credits 가 호출되지 않음")
+    ok(isinstance(out, dict), f"응답형 — {type(out).__name__}")
+    for key in ("ok", "raw", "note"):
+        ok(key in out, f"응답에 {key} 가 없음 — {sorted(out)}")
+    eq(out["note"], reply["note"], "note 가 그대로 전달되지 않음")
+
+
 # ============================================================ PIN 인증(LAN)
 @contextlib.contextmanager
 def auth_state(wa, pin: str = "482913"):
@@ -2164,26 +2296,135 @@ def a03(b: Box):
 
 
 # ============================================================ MakeFun (모의)
-@contextlib.contextmanager
-def mf_stub(mk, api, fetch=None):
-    """MakeFun 이 네트워크로 나가는 두 지점만 스텁으로 막는다.
+class _Net:
+    """스텁이 본 요청 기록 — 무엇을 어디로 보냈는지(본문·헤더까지).
 
-    실제 API 는 절대 호출되지 않는다(_once·_fetch_bytes 가 전부다). 대기·백오프는 0초.
+    유료 API 라 '무엇이 나갔는가' 자체가 검사 대상이다(레퍼런스 장수, PUT 헤더, 읽기 전용 여부).
     """
-    calls: list[tuple[str, str]] = []
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict]] = []   # (method, path, body)
+        self.puts: list[dict] = []                     # presigned PUT 요청 전문
+
+    def paths(self) -> list[str]:
+        return [p for _m, p, _b in self.calls]
+
+    def hits(self, needle: str) -> list[tuple[str, str, dict]]:
+        return [c for c in self.calls if needle in c[1]]
+
+    def sent(self, needle: str) -> dict:
+        """그 경로로 **마지막에** 보낸 본문(없으면 {})."""
+        for _m, path, body in reversed(self.calls):
+            if needle in path:
+                return body if isinstance(body, dict) else {}
+        return {}
+
+
+class _PutResp:
+    """presigned PUT 의 최소 응답 — `with opener.open(...) as r:` 를 그대로 흉내낸다."""
+
+    def __init__(self, status: int = 200):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _PutOpener:
+    """업로드 전용 가짜 opener. handler 로 실패(예외)를 흉내낼 수 있다."""
+
+    def __init__(self, rec: _Net, handler=None):
+        self.rec, self.handler = rec, handler
+
+    def open(self, req, timeout=None):
+        self.rec.puts.append({
+            "url": req.full_url, "method": req.get_method(), "data": req.data,
+            "headers": {str(k).lower(): str(v) for k, v in req.header_items()}})
+        if self.handler is not None:
+            self.handler(req)
+        return _PutResp()
+
+
+class _NoNet:
+    """열리면 안 되는 자리. 스텁을 우회해 진짜 소켓으로 나가는 경로가 생기면 즉시 실패시킨다."""
+
+    def __init__(self, label: str):
+        self.label = label
+
+    def open(self, *a, **kw):
+        raise Failed(f"실제 네트워크 호출 시도({self.label}) — 유료 API 는 모의로만 검증한다")
+
+
+@contextlib.contextmanager
+def mf_stub(mk, api, fetch=None, put=None):
+    """MakeFun 이 네트워크로 나가는 지점을 전부 스텁으로 막는다.
+
+    ``_once``(REST) · ``_fetch_bytes``(결과 다운로드) · ``_UP``(R2 presigned PUT) 세 곳이
+    전부이고, 남은 opener(``_API``·``_DL``)는 열리는 순간 실패시킨다 — 실제 호출은 0회다.
+    대기·백오프는 0초.
+    """
+    rec = _Net()
 
     def _once(method, path, body, timeout):
-        calls.append((method, path))
-        return api(method, path, body)
+        rec.calls.append((method, path, body))
+        out = api(method, path, body)
+        # 진짜 _once 는 최상위 배열도 dict 로 감싸 돌려준다 — 스텁이 그 보증을 깨면
+        # 위층이 실제보다 까다로운 조건에서 검사받는다. (그 감싸기 자체는 mf_raw 가 본다.)
+        return {"code": 0, "data": out} if isinstance(out, list) else out
 
     def _fetch(url, timeout):
         if fetch is None:
             raise RuntimeError("다운로드 스텁 없음")
         return fetch(url)
 
-    with patched(mk, "_once", _once), patched(mk, "_fetch_bytes", _fetch), \
-            patched(mk, "POLL_SEC", 0), patched(mk, "_backoff", lambda a, ra: 0.0):
-        yield calls
+    stubs = {"_once": _once, "_fetch_bytes": _fetch, "POLL_SEC": 0,
+             "_backoff": lambda a, ra: 0.0, "_UP": _PutOpener(rec, put),
+             "_API": _NoNet("_API"), "_DL": _NoNet("_DL")}
+    with contextlib.ExitStack() as stack:
+        for name, value in stubs.items():
+            stack.enter_context(patched(mk, name, value))
+        yield rec
+
+
+@contextlib.contextmanager
+def mf_raw(mk, reply):
+    """전송 계층 **한 겹 아래**(_API opener)만 갈아끼운다 — 진짜 ``_once`` 를 통과시킨다.
+
+    스펙에 응답 스키마가 비어 있는 엔드포인트(업스케일 상세·크레딧·allRecords)는 최상위가
+    **배열**로 오기도 한다. 그 정규화는 ``_once`` 안에 있어서 ``_once`` 를 스텁하면 검사에서
+    빠진다 — 여기서만 진짜로 지나간다. 소켓은 열리지 않는다(opener 자체가 가짜다).
+
+    reply(method, url) → bytes(JSON 본문).
+    """
+    class _Resp:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return self.raw
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            return _Resp(reply(req.get_method(), req.full_url))
+
+    with env_var(mk.TOKEN_ENV, "selftest-token"), patched(mk, "_API", _Opener()), \
+            patched(mk, "POLL_SEC", 0), patched(mk, "_backoff", lambda a, ra: 0.0), \
+            patched(mk, "_DL", _NoNet("_DL")), patched(mk, "_UP", _NoNet("_UP")), \
+            patched(mk, "_fetch_bytes", lambda url, timeout: _fail_fetch(url)):
+        yield
+
+
+def _fail_fetch(url):
+    raise Failed(f"이 검사에서는 다운로드가 일어나면 안 된다: {url}")
 
 
 def _mf_api(task_id: str, urls: list[str]):
@@ -2193,6 +2434,74 @@ def _mf_api(task_id: str, urls: list[str]):
             return {"code": 0, "data": [{"_id": task_id}]}
         return {"code": 0, "data": {"current_status": "completed", "image_urls": urls}}
     return api
+
+
+def _r2_reply(body: dict, host: str = "https://cdn.example") -> dict:
+    """R2 서명 발급 응답 — 요청한 key 를 그대로 되돌려 준다(주소 규칙까지 검사할 수 있게)."""
+    key = str((body or {}).get("key") or "vn-studio/unnamed.png")
+    return {"code": 0, "data": {"uploadUrl": f"https://up.example/{key}?X-Amz-Signature=zz",
+                                "cdnUrl": f"{host}/{key}", "key": key,
+                                "bucket": "vn", "expiresIn": 900}}
+
+
+def _mf_upscale_api(up_id: str, result_url: str, *, detail=None, presign=_r2_reply):
+    """업로드(R2) → 업스케일 start → 상세 조회까지 응답하는 모의 서버.
+
+    ``detail`` 을 주면 상세 조회 응답을 그것으로 바꾼다(스펙에 비어 있는 응답 형태 실험용).
+    """
+    def api(method, path, body):
+        if "/r2/" in path:
+            return presign(body)
+        if path.endswith("/userUpscale/start"):
+            return {"success": True, "data": {"_id": up_id}, "timestamp": 1}
+        if "userUpscale" in path:
+            if detail is not None:
+                return detail(method, path, body) if callable(detail) else detail
+            return {"code": 0, "data": {"_id": up_id, "current_status": "completed",
+                                        "image_urls": [result_url]}}
+        raise Failed(f"모의 서버가 모르는 경로: {method} {path}")
+    return api
+
+
+@contextlib.contextmanager
+def manifest_patch(b: Box, fn):
+    """매니페스트를 잠시 고치고 **원문 그대로** 되돌린다(다른 테스트와의 상태 결합 차단).
+
+    돌려주는 것은 (경로, 이 블록이 만든 내용) 이다 — 블록 안에서 도구가 매니페스트를
+    되쓰지 않았는지 대조하는 기준이 '원본' 이 아니라 '방금 내가 둔 상태' 이기 때문이다.
+    """
+    path = b.p("project/manifest.json")
+    orig = path.read_text(encoding="utf-8")
+    data = json.loads(orig)
+    fn(data)
+    write_json(path, data)
+    try:
+        yield path, path.read_text(encoding="utf-8")
+    finally:
+        path.write_text(orig, encoding="utf-8")
+
+
+@contextlib.contextmanager
+def selected_scene(b: Box, approve: bool = False, size=(1200, 1800)):
+    """후보 1장을 **선택까지** 마친 장면 — 업스케일의 출발점(승인까지 갈 수도 있다).
+
+    크기 기본값은 실제 상황과 같다(1200×1800 = 300DPI 엽서가 한계인 승인 컷).
+    """
+    with cli_scene(b, "PROMPT") as sid:
+        cand = b.root / f"_pick_{sid}.png"      # 파일명에 'up' 을 넣지 않는다(확대본 탐색과 섞인다)
+        write_png(cand, size[0], size[1], (190, 170, 210))
+        rc, out = b.run(ADV, "add-images", sid, str(cand))
+        cand.unlink(missing_ok=True)
+        if rc != 0:
+            raise Failed(f"add-images 실패(rc={rc}) {out[:200]}")
+        rc, out = b.run(ADV, "select", sid, "1")
+        if rc != 0:
+            raise Failed(f"select 실패(rc={rc}) {out[:200]}")
+        if approve:
+            rc, out = b.run(ADV, "approve", sid)
+            if rc != 0:
+                raise Failed(f"approve 실패(rc={rc}) {out[:200]}")
+        yield sid
 
 
 def _png_bytes(w: int = 40, h: int = 30) -> bytes:
@@ -2372,6 +2681,365 @@ def m06(b: Box):
            f"생성 결과에 절삭 경고가 없음 — {list(res.warnings)}")
         entry = read_json(out_dir / mk.META_NAME)["entries"][-1]
         eq(max(entry["width"], entry["height"]), plan["long"], "기록된 크기가 실제 요청과 다름")
+
+
+@test("makefun", "M07 R2 업로드 — presigned PUT 에 토큰을 싣지 않는다(서명 파손·키 유출 차단)")
+def m07(b: Box):
+    """업로드는 업스케일·레퍼런스의 **전제**다(두 API 가 URL 만 받는다).
+
+    가장 조용한 사고 둘을 잠근다:
+      * presigned PUT 에 Authorization 을 붙이면 서명이 깨져 업로드가 401 로 죽는다.
+        (그리고 우리 API 토큰이 스토리지 쪽으로 새 나간다.)
+      * 이미지가 아닌 파일이 그대로 올라가면 매니페스트·설정이 공개 CDN 에 놓인다.
+    """
+    mk = b.mod("makefun_client")
+    upload = need_attr(mk, "upload_file", "로컬 파일 → 공개 URL(업스케일·레퍼런스의 전제)")
+    src = b.root / "scratch" / "m07_src.png"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(_png_bytes(64, 96))
+    raw = src.read_bytes()
+
+    def api(method, path, body):
+        if "/r2/" in path:
+            return _r2_reply(body)
+        raise Failed(f"업로드가 예상 밖의 경로를 부름: {method} {path}")
+
+    n0 = _usage_len(b)
+    with mf_stub(mk, api) as net:
+        url = upload(src, quiet=True)
+        url2 = upload(src, quiet=True)          # 같은 파일 → 같은 주소(스토리지 복제 방지)
+    ok(url.startswith("https://"), f"공개 URL 이 https 가 아님: {url[:80]}")
+    eq(url2, url, "같은 파일을 다시 올렸는데 주소가 달라짐(내용 해시 key 아님)")
+    eq(len(net.puts), 2, f"PUT 횟수 — {net.paths()}")
+    put = net.puts[0]
+    eq(put["method"], "PUT", "업로드는 PUT 이어야 한다")
+    eq(put["data"], raw, "올라간 바이트가 원본과 다름")
+    ok("authorization" not in put["headers"],
+       f"presigned PUT 에 Authorization 이 붙었다(서명 파손·토큰 유출) — {sorted(put['headers'])}")
+    ok(not any("bearer" in v.lower() for v in put["headers"].values()),
+       "PUT 헤더에 토큰 문자열이 실렸다")
+    eq(put["headers"].get("content-type"), "image/png", "Content-Type 이 발급 때와 달라짐")
+    body = net.sent("/r2/")
+    eq(str(body.get("contentType") or body.get("content_type")), "image/png", "발급 요청 contentType")
+    ok(len(raw) in (body.get("fileSize"), body.get("contentLength")),
+       f"발급 요청에 실제 크기가 없음 — {body}")
+    rec = _usage_tail(b, n0)
+    ok(rec and rec[0]["kind"] == "upload", f"대장 kind — {rec[:1]}")
+    eq(rec[0]["billable"], False, "업로드가 과금으로 기록됨")
+
+    # 이미지가 아닌 파일 — content_type 을 명시하지 않으면 올라가지 않는다
+    leak = b.root / "scratch" / "m07_secret.json"
+    write_json(leak, {"token": "sk-누출되면안됨"})
+    with mf_stub(mk, api) as net2:
+        raises(lambda: upload(leak, quiet=True), RuntimeError, "이미지가 아닌 파일이 그대로 업로드됨")
+        eq(len(net2.puts), 0, "거부했는데 PUT 이 나감")
+    # 평문 http 주소를 돌려주는 응답은 거부한다(그 주소가 다시 생성 API 로 들어간다)
+    with mf_stub(mk, lambda m, p, bd: _r2_reply(bd, host="http://cdn.example")) as net3:
+        raises(lambda: upload(src, quiet=True), RuntimeError, "http 공개 주소를 받아들임")
+        eq(len(net3.puts), 0, "http 주소인데 PUT 이 나감")
+    raises(lambda: upload(b.root / "scratch" / "m07_없는파일.png", quiet=True),
+           RuntimeError, "없는 파일")
+
+
+@test("makefun", "M08 업스케일 — 재생성 없이 확대해 새 후보로만 저장(선택·승인 불변 · 대장 기록)")
+def m08(b: Box):
+    """이 기능의 존재 이유는 인화다: 1200×1800(엽서 한계) 컷을 재과금 없이 8×10 로 키운다.
+
+    그래서 잠그는 것은 세 가지다 — (1) 확대본이 실제로 저장·등록되는가,
+    (2) **사람이 고른 선택본이 그대로인가**(자동으로 갈아치우면 승인 게이트가 무의미해진다),
+    (3) 비용이 대장에 남는가(kind=upscale · billable).
+    """
+    mk = b.mod("makefun_client")
+    run_up = need_attr(mk, "upscale_scene", "선택 이미지를 재생성 없이 확대")
+    big = _png_bytes(2400, 3600)
+    with selected_scene(b) as sid:
+        before = b.scene(sid)
+        sel = before["assets"]["selected_image"]
+        ok(sel, "픽스처에 선택본이 없다 — 아래 '선택본 불변' 검사가 공회전한다")
+        n0 = _usage_len(b)
+        api = _mf_upscale_api("up_scene01", "https://cdn.example/out/up_scene01.png")
+        with mf_stub(mk, api, lambda url: big) as net:
+            res = run_up(sid, quiet=True)
+        eq(len(res), 1, f"저장된 파일 수 — 경고 {list(getattr(res, 'warnings', []))}")
+        dest = Path(res[0])
+        ok(dest.exists(), f"확대본 미저장: {dest}")
+        eq(dest.parent, b.root / "images" / "raw" / sid, "저장 위치")
+        stem = Path(sel).stem
+        ok(stem in dest.stem and dest.stem != stem,
+           f"원본을 알아볼 수 없는 파일명: {dest.name} (원본 {stem})")
+        # 업로드 → 시작 → 조회 순서와, 시작 요청이 방금 올린 주소를 쓰는지
+        eq(len(net.puts), 1, f"원본 업로드 PUT 이 한 번이 아님 — {len(net.puts)}")
+        started = net.sent("/userUpscale/start")
+        ok(str(started.get("source_url", "")).startswith("https://cdn.example/"),
+           f"업스케일 시작이 업로드한 주소를 쓰지 않음 — {started}")
+
+        after = b.scene(sid)
+        eq(after["assets"]["selected_image"], sel, "업스케일이 사람이 고른 선택본을 바꿈")
+        eq(after["status"], before["status"], "업스케일이 장면 상태를 움직임")
+        eq(after["review"], before["review"], "업스케일이 검수 기록을 건드림")
+        ok(dest.name in [Path(r).name for r in after["assets"]["raw_images"]],
+           f"확대본이 후보로 등록되지 않음 — {after['assets']['raw_images']}")
+        ok("up_scene01" not in mk.scene_task_ids(sid),
+           "업스케일 id 가 makefun_tasks 에 섞였다 — 재수령(--refetch)이 통째로 깨진다")
+
+        rec = _usage_tail(b, n0)
+        up_rows = [r for r in rec if r.get("kind") == "upscale"]
+        ok(up_rows, f"대장에 kind=upscale 기록이 없음 — {[r.get('kind') for r in rec]}")
+        row = up_rows[-1]
+        eq(row["billable"], True, "업스케일이 무과금으로 기록됨(비용 추적 불가)")
+        eq(row["ok"], True, "대장 ok")
+        eq(row["saved"], 1, "대장 saved")
+        eq(row.get("scene_id"), sid, "대장 scene_id")
+        entry = read_json(dest.parent / mk.META_NAME)["entries"][-1]
+        eq(entry["kind"], "upscale", "메타 kind")
+        eq(entry["status"], "ok", "메타 status")
+        eq(entry["files"], [dest.name], "메타 files")
+        # 무엇이 얼마나 커졌는지가 사람에게 도달하는가(이 기능의 존재 이유 그대로)
+        ok(any("2400" in w and "3600" in w for w in res.warnings),
+           f"확대 결과 크기를 알리지 않음 — {list(res.warnings)}")
+
+
+@test("makefun", "M09 APPROVED 장면 업스케일 — 파일만 남기고 승인 도장은 건드리지 않는다")
+def m09(b: Box):
+    """인화 대상은 대부분 **이미 승인된** 컷이다. 그래서 이 경로는 열려 있어야 하고,
+    동시에 승인 기록·선택본·후보 목록은 한 글자도 바뀌면 안 된다(사람 게이트).
+    """
+    mk = b.mod("makefun_client")
+    run_up = need_attr(mk, "upscale_scene", "선택 이미지를 재생성 없이 확대")
+    big = _png_bytes(2400, 3600)
+    with selected_scene(b, approve=True) as sid:
+        before = b.scene(sid)
+        eq(before["status"], "APPROVED", "픽스처가 승인 상태가 아님")
+        api = _mf_upscale_api("up_appr01", "https://cdn.example/out/up_appr01.png")
+        with mf_stub(mk, api, lambda url: big):
+            res = run_up(sid, quiet=True)
+        eq(len(res), 1, "APPROVED 장면인데 확대본이 저장되지 않음")
+        ok(Path(res[0]).exists(), "확대본 파일 없음")
+        eq(b.scene(sid), before, "승인 장면이 업스케일로 바뀌었다 — 승인 게이트 위반")
+        joined = " ".join(res.warnings)
+        ok("revise" in joined,
+           f"되돌리는 방법을 알려 주지 않음(후보 등록을 건너뛴 사실이 조용하다) — {list(res.warnings)}")
+        # 승인 컷 확대는 **정상 경로**다(인화의 본 목적). 예정된 건너뜀을 '실패' 로 알리면
+        # 사용자는 돈이 나갔는데 실패했다고 읽는다 — 실제로는 파일이 저장돼 있다.
+        ok(not any("실패" in w for w in res.warnings),
+           f"예정된 건너뜀을 실패로 알림 — {list(res.warnings)}")
+
+
+@test("makefun", "M10 업스케일 응답 관용성 — 필드명이 달라도 흡수, 모르면 조용히 넘어가지 않는다")
+def m10(b: Box):
+    """업스케일 상세 응답은 **OpenAPI 스펙에 스키마가 비어 있다.** 필드명을 하나로 단정하면
+    이름이 다를 때 이미 과금된 결과를 잃고, 반대로 너무 관대하면 원본을 결과로 착각한다.
+    """
+    mk = b.mod("makefun_client")
+    wait_up = need_attr(mk, "wait_upscale", "업스케일 폴링(관대 파싱의 단일 출처)")
+    src = "https://cdn.example/src/원본.png"
+    out = "https://cdn.example/out/큰그림.png"
+
+    def run(detail, **kw):
+        with mf_stub(mk, _mf_upscale_api("up_x1", out, detail=detail)):
+            return wait_up("up_x1", source_url=src, quiet=True, **kw)
+
+    # 1) 다른 이름(state/outputUrl) · 2) 상태 없이 success 만
+    eq(run({"code": 0, "data": {"state": "SUCCESS", "outputUrl": out}}), out, "state/outputUrl")
+    eq(run({"code": 0, "data": {"success": True, "result_url": out}}), out, "success/result_url")
+    # 3) 상세가 통하지 않으면 목록(allRecords)으로 회수한다 — 과금된 결과를 조회 실패로 잃지 않게
+    def detail_404(method, path, body):
+        if "allRecords" in path:
+            return {"code": 0, "data": {"list": [{"id": "up_x1", "status": "done",
+                                                  "image_url": out}]}}
+        raise mk.VNError("MakeFun HTTP 404")
+    eq(run(detail_404), out, "상세 404 → allRecords 대안")
+    # 4) 최상위가 **배열**인 응답 — 정규화는 _once 안에 있어서 한 겹 아래에서만 진짜로 지나간다
+    arr = json.dumps([{"_id": "up_x1", "current_status": "completed",
+                       "image_urls": [out]}]).encode("utf-8")
+    with mf_raw(mk, lambda method, url: arr):
+        eq(wait_up("up_x1", source_url=src, quiet=True), out, "배열 응답")
+
+    # 5) **가장 나쁜 실패**: 응답이 source_url 을 되돌려 줄 때 그것을 결과로 삼는 것
+    e = raises(lambda: run({"code": 0, "data": {"current_status": "completed",
+                                                "source_url": src, "url": src}}),
+               RuntimeError, "원본 주소를 결과로 되돌려 받았는데 성공 처리")
+    has(str(e), "current_status", "실패 문구에 응답 단서가 없음(무엇이 왔는지 알 수 없다)")
+    # 6) 완료라는데 주소가 없다 / 결과가 https 가 아니다
+    raises(lambda: run({"code": 0, "data": {"current_status": "completed"}}),
+           RuntimeError, "완료+주소 없음인데 조용히 통과")
+    raises(lambda: run({"code": 0, "data": {"current_status": "completed",
+                                            "image_urls": ["ftp://x/y.png"]}}),
+           RuntimeError, "https 가 아닌 결과를 받아들임")
+    # 7) 실패 상태는 사유와 함께 즉시 알린다
+    e2 = raises(lambda: run({"code": 0, "data": {"status": "failed",
+                                                 "failed_message": "차단됨"}}),
+                RuntimeError, "실패 상태인데 계속 기다림")
+    has(str(e2), "차단됨", "실패 사유가 전달되지 않음")
+    # 8) 전혀 모르는 형태 — 조용히 성공하지 않고, 응답 단서와 과금 사실을 담아 던진다
+    e3 = raises(lambda: run({"code": 0, "data": {"foo": "bar"}}, max_sec=0.05),
+                RuntimeError, "모르는 형태인데 조용히 통과")
+    has(str(e3), "foo", "모르는 응답의 단서를 남기지 않음")
+    has(str(e3), "up_x1", "회수에 필요한 작업 id 를 남기지 않음")
+    # 9) 시작 응답의 관문 — id 가 없거나 거절이면 즉시 실패(무엇이 왔는지와 함께)
+    start_up = need_attr(mk, "upscale_start", "업스케일 시작")
+    with mf_stub(mk, lambda m, p, bd: {"success": True, "data": {"note": "id 없음"}}):
+        e4 = raises(lambda: start_up(out, quiet=True), RuntimeError, "작업 id 없음")
+        has(str(e4), "note", "응답 단서 없음")
+    with mf_stub(mk, lambda m, p, bd: {"success": False, "data": {}}):
+        raises(lambda: start_up(out, quiet=True), RuntimeError, "success=False 를 통과시킴")
+    raises(lambda: start_up("http://cdn.example/x.png", quiet=True),
+           RuntimeError, "평문 http 원본을 업스케일에 넘김")
+
+
+@test("makefun", "M11 업스케일 실패 — 이미 과금된 작업·결과 주소를 남겨 재결제 없이 회수한다")
+def m11(b: Box):
+    """업스케일도 유료다. 시작한 뒤의 실패에서 작업 id 와 결과 주소를 잃으면 **돈만 나간다.**"""
+    mk = b.mod("makefun_client")
+    run_up = need_attr(mk, "upscale_scene", "선택 이미지를 재생성 없이 확대")
+
+    # (1) 시작은 됐는데 결과 대기가 실패 — task_id 가 남아야 한다
+    with selected_scene(b) as sid:
+        n0 = _usage_len(b)
+        fail_detail = {"code": 0, "data": {"current_status": "failed",
+                                           "failed_message": "엔진 오류"}}
+        api = _mf_upscale_api("up_fail01", "https://cdn.example/out/x.png", detail=fail_detail)
+        with mf_stub(mk, api, lambda url: b""):
+            raises(lambda: run_up(sid, quiet=True), RuntimeError, "실패인데 성공 반환")
+        entry = read_json(b.root / "images" / "raw" / sid / mk.META_NAME)["entries"][-1]
+        eq(entry["kind"], "upscale", "메타 kind")
+        eq(entry["status"], "failed", "메타 status")
+        eq(entry["task_id"], "up_fail01", "과금된 작업 id 가 남지 않음(회수 불가)")
+        row = [r for r in _usage_tail(b, n0) if r.get("kind") == "upscale"][-1]
+        eq(row["ok"], False, "대장 ok")
+        eq(row["billable"], True, "시작된 유료 작업이 무과금으로 기록됨")
+
+    # (2) 결과는 만들어졌는데 다운로드가 실패 — 결과 주소가 남아야 다시 결제하지 않는다
+    with selected_scene(b) as sid2:
+        keep = b.scene(sid2)
+        out_url = "https://cdn.example/out/up_dl01.png"
+        api2 = _mf_upscale_api("up_dl01", out_url)
+
+        def dead(url):
+            raise RuntimeError("결과 다운로드 HTTP 500")
+
+        with mf_stub(mk, api2, dead):
+            e = raises(lambda: run_up(sid2, quiet=True), RuntimeError, "다운로드 실패인데 성공 반환")
+        has(str(e), "result_url", "회수 방법(결과 주소가 어디 있는지)을 알려 주지 않음")
+        entry2 = read_json(b.root / "images" / "raw" / sid2 / mk.META_NAME)["entries"][-1]
+        eq(entry2.get("result_url"), out_url, "결과 주소가 남지 않음 — 재결제 없이 회수 불가")
+        eq(entry2["status"], "failed", "메타 status")
+        eq(b.scene(sid2)["assets"], keep["assets"], "실패했는데 장면 후보·선택본이 바뀜")
+        ok(not [p for p in (b.root / "images" / "raw" / sid2).glob("*_up*")],
+           "실패했는데 반쪽 파일이 후보 폴더에 남았다")
+
+
+@test("makefun", "M12 레퍼런스(input_images) — 모델 상한을 지키고, 없으면 파라미터를 아예 안 보낸다")
+def m12(b: Box):
+    """컷마다 얼굴이 흔들리던 1차 원인은 프롬프트가 아니라 레퍼런스 미첨부였다.
+
+    상한(A2E 2장)을 넘겨 보내면 요청이 통째로 거절되고, 빈 배열을 보내면 모델이
+    '레퍼런스 있음' 으로 해석할 수 있다 — 그래서 **없을 때는 키 자체가 없어야** 한다.
+    """
+    mk = b.mod("makefun_client")
+    ref_urls = need_attr(mk, "reference_urls", "매니페스트 레퍼런스 → 보낼 수 있는 URL")
+    png = _png_bytes()
+    urls = [f"https://cdn.example/ref/jihye{i}.png" for i in (1, 2, 3)]
+    prompted = {"prompt": {"grok_input_version": 1, "external_generator": "", "external_model": "",
+                           "grok_output": "medium shot, cel shading"}}
+
+    def with_refs(d, value, model=None):
+        for c in d.get("characters", []):
+            if c.get("character_id") == "CHAR-001":
+                c["reference_images"] = value
+        if model:
+            d.setdefault("image_generator", {})["model"] = model
+
+    # 레퍼런스가 없는 기본 상태 — input_images 키 자체가 없어야 한다
+    with fresh_scene(b, **prompted) as sid:
+        with mf_stub(mk, _mf_api("task_ref00", ["https://cdn.example/r_1.png"]),
+                     lambda u: png) as net:
+            mk.generate_for_scene(sid, n=1, quiet=True)
+        ok("input_images" not in net.sent("/userText2Image/start"),
+           f"레퍼런스가 없는데 input_images 를 보냄 — {net.sent('/userText2Image/start')}")
+
+    # A2E 상한 2장 — 3장이 있어도 2장만
+    with manifest_patch(b, lambda d: with_refs(d, urls)) as (mpath, orig):
+        eq(ref_urls(["CHAR-001"], limit=2), urls[:2], "reference_urls 상한")
+        with fresh_scene(b, **prompted) as sid2:
+            with mf_stub(mk, _mf_api("task_ref01", ["https://cdn.example/r_1.png"]),
+                         lambda u: png) as net2:
+                res = mk.generate_for_scene(sid2, n=1, quiet=True)
+            body = net2.sent("/userText2Image/start")
+            eq(body.get("input_images"), urls[:2],
+               f"A2E 2장 상한을 지키지 않음 — {body.get('input_images')}")
+            eq(len(res), 1, "생성 결과")
+            entry = read_json(b.root / "images" / "raw" / sid2 / mk.META_NAME)["entries"][-1]
+            eq(entry.get("input_images"), urls[:2], "무엇을 붙여 보냈는지 메타에 남지 않음")
+            # --no-reference 로 끄면 다시 키가 없다
+            with mf_stub(mk, _mf_api("task_ref02", ["https://cdn.example/r_1.png"]),
+                         lambda u: png) as net3:
+                mk.generate_for_scene(sid2, n=1, quiet=True, reference=False)
+            ok("input_images" not in net3.sent("/userText2Image/start"),
+               "reference=False 인데 레퍼런스를 보냄(--no-reference 가 듣지 않는다)")
+        # 직접 넘겨도 상한은 같다
+        with mf_stub(mk, _mf_api("task_ref03", []), lambda u: png) as net4:
+            mk.start("프롬프트", n=1, quiet=True, input_images=urls + urls)
+        eq(len(net4.sent("/userText2Image/start").get("input_images", [])), 2, "직접 전달 상한")
+
+    # 모델이 바뀌면 상한도 바뀐다(Seedream 5.0 Pro 10장) — 2 가 코드에 박혀 있지 않은지
+    with manifest_patch(b, lambda d: with_refs(d, urls, model="seedream-5.0-pro")):
+        with mf_stub(mk, _mf_api("task_ref04", []), lambda u: png) as net5:
+            mk.start("프롬프트", n=1, quiet=True, input_images=urls)
+        eq(len(net5.sent("/userText2Image/start").get("input_images", [])), 3,
+           "모델 상한이 A2E 2장으로 고정돼 있음")
+
+    # 로컬 경로 레퍼런스는 올려서 URL 로 바꾸되 **매니페스트는 고치지 않는다**
+    local = b.root / "images" / "ref_jihye.png"
+    local.write_bytes(png)
+    with manifest_patch(b, lambda d: with_refs(d, ["images/ref_jihye.png"])) as (mpath, text):
+        with mf_stub(mk, lambda m, p, bd: _r2_reply(bd)) as net6:
+            got = ref_urls(["CHAR-001"], limit=2)
+        eq(len(got), 1, f"로컬 레퍼런스가 URL 로 바뀌지 않음 — {got}")
+        ok(got[0].startswith("https://cdn.example/"), f"업로드 주소가 아님 — {got[0]}")
+        eq(len(net6.puts), 1, "로컬 레퍼런스를 올리지 않음")
+        eq(read_json(mpath)["characters"][0]["reference_images"], ["images/ref_jihye.png"],
+           "레퍼런스 업로드가 매니페스트를 되썼다 — 이 모듈은 매니페스트를 쓰지 않는다")
+        ok(mpath.read_text(encoding="utf-8") == text, "매니페스트가 업로드 과정에서 다시 쓰였다")
+    local.unlink(missing_ok=True)
+
+
+@test("makefun", "M13 크레딧 조회 — 읽기 전용이고, 응답 형식을 모르므로 잔액을 단정하지 않는다")
+def m13(b: Box):
+    """스펙에 응답 스키마가 비어 있다. 숫자 하나를 잔액으로 단정하면 사용자는 그 숫자를
+    믿고 생성을 돌린다 — 보이는 것만 인용하고 판단은 계정 화면으로 넘긴다.
+    """
+    mk = b.mod("makefun_client")
+    credits = need_attr(mk, "credits", "크레딧 이력 조회(읽기 전용)")
+    payload = {"code": 0, "data": {"list": [{"amount": -12, "type": "image"},
+                                            {"amount": -12, "type": "image"}],
+                                   "balance": 1234}}
+    n0 = _usage_len(b)
+    with mf_stub(mk, lambda m, p, bd: payload) as net:
+        rep = credits(quiet=True)
+    ok(isinstance(rep, dict), f"반환형 — {type(rep).__name__}")
+    for key in ("ok", "raw", "note"):
+        ok(key in rep, f"반환 키 {key} 없음 — {sorted(rep)}")
+    eq(rep["ok"], True, "정상 응답인데 ok=False")
+    ok(str(rep["note"]).strip(), "note 가 비어 있음")
+    ok(not net.puts, "크레딧 조회가 파일을 올림")
+    eq([m for m, _p, _b in net.calls], ["GET"], f"읽기 전용이 아님 — {net.calls}")
+    ok(all("transactionRecord" in p for p in net.paths()), f"조회 경로 — {net.paths()}")
+    ok(not re.search(r"잔액[^\n]{0,6}[:=]?\s*1234", str(rep["note"])),
+       f"응답의 숫자를 잔액으로 단정함 — {rep['note']}")
+    row = _usage_tail(b, n0)[-1]
+    eq(row["kind"], "credits", "대장 kind")
+    eq(row["billable"], False, "이미지 생성 과금이 아닌데 과금으로 기록됨")
+    # 최상위 배열 응답(스펙이 비어 있어 실제로 온다)도 삼킨다 — 정규화는 _once 안에 있다
+    with mf_raw(mk, lambda method, url: b'[{"amount": -12, "type": "image"}]'):
+        eq(credits(quiet=True)["ok"], True, "배열 응답을 오류로 처리")
+    # 조회 실패는 예외가 아니라 ok=False 로 — 화면 하나 때문에 스튜디오가 죽지 않게
+    def boom(method, path, body):
+        raise mk.VNError("MakeFun HTTP 500")
+    with mf_stub(mk, boom):
+        bad = credits(quiet=True)
+    eq(bad["ok"], False, "실패인데 ok=True")
+    ok(str(bad["note"]).strip(), "실패 사유가 비어 있음")
 
 
 # ============================================================ 백업 · 복원
@@ -3620,7 +4288,7 @@ GROUP_NOTE = {
     "checker": "검사기가 '떨어뜨리는 능력'(부정 픽스처)",
     "webapp": "웹 스튜디오 라우트·잠금 (서버 기동)",
     "auth": "폰 접속 PIN·토큰",
-    "makefun": "이미지 생성 클라이언트 (모의 · 과금 0)",
+    "makefun": "이미지 생성·업로드·확대·크레딧 클라이언트 (모의 · 실호출 0 · 과금 0)",
     "backup": "스냅샷·복원·zip slip",
     "print": "인화 규격·마스터",
     "viewer": "감상본 데이터·분기",

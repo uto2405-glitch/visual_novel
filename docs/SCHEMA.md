@@ -60,11 +60,17 @@
 | 필드 | 타입 | 필수 | 읽는 쪽 |
 |---|---|---|---|
 | `provider` | str | ⬜ | 표기용 |
-| `model` | str | ⬜ | `makefun_client` 의 `model_type` (기본 `a2e`) |
+| `model` | str | ⬜ | `makefun_client` 의 `model_type` (기본 `a2e`) · **레퍼런스 장수 상한도 이 값이 정한다**(아래) |
 | `max_long_edge_px` | int | ⬜ | `makefun_client` **생성 크기 상한** (기본 2048 · 하드 상한 4096) |
+| `max_reference_images` | int | ⬜ | `makefun_client` 레퍼런스 첨부 장수 상한. **템플릿에 없는 선택 필드** — 기본은 모델별(A2E 2 · Seedream 5.0 Pro 10)이고 어떤 값을 적어도 10 을 넘지 않는다 |
+| `skip_face_enhance` | bool | ⬜ | `makefun_client` — 참이면 A2E 얼굴 유사도 보정을 끈다. **템플릿에 없는 선택 필드**이고 레퍼런스를 실제로 보낼 때만 요청에 실린다(기본: 보정 켬) |
 | `api.base_url` | str | ⬜ | `makefun_client` 접속 주소 |
 | `api.token_env` | str | ⬜ | 토큰을 담은 **환경변수 이름** (`MAKEFUN_API_TOKEN`) |
 | `note` | str | ⬜ | 사람용 메모 |
+
+이 블록 하나가 **생성·업스케일·업로드·크레딧 조회 네 경로 전부**의 접속 설정이다
+(같은 `base_url`·같은 토큰). 어떤 API 를 쓰고 무엇을 아직 안 붙였는지는
+→ [MAKEFUN_CAPABILITIES.md](MAKEFUN_CAPABILITIES.md)
 
 > ### ⚠ `max_long_edge_px` — 인화 해상도의 함정
 > `makefun_client` 는 요청 픽셀을 **이 값으로 잘라 낸다**(`_cap_px()` → `_align8()`).
@@ -142,7 +148,7 @@
 | `profile.signature_props` | list[str] | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 | — |
 | `profile.personality` | str | ⬜ | 사람 | **대화 페르소나**(`prompt_build`) `[너의 성격]` | — |
 | `profile.speech_style` | str | ⬜ | 사람 | **대화 페르소나**(`prompt_build`) `[말투 규칙]` | — |
-| `reference_images` | list[str] | ⬜ | 사람 | 프롬프트 입력의 첨부 안내 | — |
+| `reference_images` | list[str] | ⬜ | 사람 | **이미지 생성에 첨부**(`makefun_client` → `input_images`) · 프롬프트 입력의 첨부 안내 | — |
 | `prompt_anchor` | str | ⚠ | 사람 | 프롬프트 조립 · `scene_lint` 역방향 검사 | **A6 필수** |
 | `wardrobe_default` | str | ⬜ | 사람 | **(없음)** — 아래 참조 | — |
 | `wardrobe_variants[]` | list[obj] | ⬜ | 사람 | **(없음)** — 아래 참조 | — |
@@ -152,6 +158,44 @@
 
 **이 표가 캐릭터 스키마의 정본이다.** 캐릭터는 별도 파일이 아니라 `manifest.characters[]`
 안에 산다. `templates/character.json` 은 여기에 붙여넣을 항목 1개짜리 조각일 뿐이다(§4).
+
+#### `reference_images` — 이제 **생성 요청에 실린다**
+
+오랫동안 이 필드는 "사람이 이미지 AI 창에 직접 첨부하라"는 안내 문구로만 쓰였다
+(`make_grok_input` 의 지시서). 지금은 `makefun_client` 가 **장면의 `characters[]` 를 훑어
+그 캐릭터의 `reference_images` 를 text2image 의 `input_images` 로 함께 보낸다** —
+컷마다 얼굴이 흔들리는 문제의 1차 수단이다. 기본으로 켜져 있고 `--no-reference` 로 끈다.
+
+| 항목 | 규칙 |
+|---|---|
+| 값의 형태 | `https://` URL 은 그대로 실린다. `http://` 는 **경고와 함께** 그대로 보낸다(권장하지 않음) |
+| 로컬 경로 | 저장소 상대경로·절대경로면 **R2 에 올려 URL 로 바꿔** 보낸다. 매니페스트에 되쓰지는 않는다 |
+| 장수 상한 | 모델이 정한다 — **A2E 2장** · Seedream 5.0 Pro 10장. `image_generator.max_reference_images` 로 조정(최대 10) |
+| 넘칠 때 | 앞에서부터 상한까지만 보내고 **몇 장을 잘랐는지 알린다**(조용히 자르지 않는다) |
+| 실패할 때 | 업로드·준비 실패는 생성을 막지 않는다. 그 장만 빼고 생성하고 경고를 남긴다 |
+| 읽는 범위 | **캐릭터 것만 실린다.** `locations[].reference_images` 는 프롬프트 입력 안내용이고 `props[]` 는 읽는 쪽이 없다(§1.7) |
+
+로컬 파일은 매번 올라가지만 **키에 내용 해시가 들어가 같은 파일은 같은 주소**가 되므로
+스토리지가 복사본으로 불어나지 않는다. 주소를 고정해 두고 싶으면 사람이 한 번 올려 등록한다:
+
+```powershell
+python tools/makefun_client.py --upload images/ref/jihye_sheet.png
+#  → https://…/vn-studio/jihye_sheet-<해시>.png   (이 URL 을 reference_images 에 붙여넣는다)
+```
+
+등록 상태는 과금 없이 확인한다 — `python tools/makefun_client.py --check`:
+
+```
+OK   레퍼런스 이미지: 2/3명 등록 (생성마다 최대 2장 첨부)
+주의 캐릭터 3명 모두 reference_images 가 비어 있습니다 — 컷마다 얼굴이 흔들립니다. …
+```
+
+> ### 순서가 곧 돈이다 — **레퍼런스를 먼저 만들고 나머지를 생성한다**
+> 캐릭터 시트를 먼저 뽑아 승인하고 `reference_images` 에 등록한 뒤 장면 컷을 생성하면,
+> 처음부터 같은 얼굴로 나온다. 컷을 다 뽑은 **뒤에** 레퍼런스를 넣으면 앞서 만든 컷들은
+> 다른 얼굴인 채로 남아 **다시 뽑아야 한다 — 그만큼 다시 과금된다.**
+> 워크플로우의 `visual_reference` 게이트(`workflow.human_gates`)가 `scene_plan` 앞에 있는
+> 이유가 이것이다.
 
 #### 의상 배리에이션 — 정의만 있고 **아직 연결되지 않았다**
 
@@ -187,7 +231,7 @@ A6 상호작용을 확인한 뒤에 구현한다. 그때까지 **장면 데이�
 | `location_id` | str | ✅ | 장면 참조 | **A2** 존재·중복 |
 | `name` · `description` | str | ⬜ | 프롬프트 입력 | — |
 | `version` | int | ⬜ | **(없음)** — 템플릿에는 있지만 어떤 코드도 읽지 않는다. 캐릭터 쪽 `version` 만 프롬프트 입력에 찍힌다(`make_grok_input`) | — |
-| `reference_images` | list[str] | ⬜ | 프롬프트 입력의 첨부 안내 | — |
+| `reference_images` | list[str] | ⬜ | 프롬프트 입력의 첨부 안내 **only** — 생성 요청의 `input_images` 에는 **실리지 않는다**(캐릭터 것만 실린다, §1.6) | — |
 | `prompt_anchor` | str | ⚠ | 프롬프트 조립 | **A6** (값이 있으면 프롬프트 포함을 강제) |
 
 `props[]`
@@ -435,6 +479,10 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 최근 **20개**까지 보관하고 오래된 것부터 밀려난다. 기록 실패가 생성을 막지는 않는다
 (이미 과금된 작업을 중단시키지 않기 위해).
 
+> **여기 들어가는 것은 text2image 작업 id 뿐이다.** 업스케일 작업 id 는 다른 엔드포인트의
+> 것이라 섞이면 `--refetch` 가 통째로 실패한다 — 그래서 확대 기록은 이 목록이 아니라
+> `_gen_meta.json` 과 사용 대장에 남는다(§3.2 · §3.3).
+
 ### 2.7 `review`
 
 | 필드 | 타입 | 필수 | 쓰는 쪽 | 읽는 쪽 | 검사기 |
@@ -564,13 +612,25 @@ scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, end
 
 ```json
 { "scene_id": "SCENE-007", "updated_at": "...",
-  "entries": [ { "created_at": "...", "task_id": "...", "prompt": "...", "model": "a2e",
+  "entries": [ { "created_at": "...", "task_id": "...", "kind": "text2image",
+                 "prompt": "...", "model": "a2e", "input_images": [],
                  "width": 832, "height": 1248, "files": ["mf_424c98_1.jpg"],
                  "status": "ok", "error": "" } ] }
 ```
 
 `status` 는 `ok` · `partial` · `failed` · `refetch`. 이미지 폴더 안에 있지만 후보 스캔은
 **허용 확장자(§2.6)만** 집어 가므로 `.json` 인 이 파일은 후보로 잡히지 않는다.
+
+`kind` 로 어떤 경로가 만든 항목인지 구분한다 — `text2image`(생성) · `upscale`(확대).
+확대 항목에는 **되돌아가 회수할 주소**가 붙는다:
+
+| 필드 | 뜻 |
+|---|---|
+| `kind: "upscale"` | 재생성이 아니라 확대로 만든 파일 (`model` 도 `"upscale"`) |
+| `source` | 무엇을 키웠나 — 확대 당시의 `selected_image` 경로 |
+| `source_url` | 그 파일을 올린 R2 주소(확대 API 는 URL 만 받는다) |
+| `result_url` | **다운로드가 실패했을 때만** 붙는다 — 결과는 이미 만들어졌고(=과금 완료) 이 주소로 받으면 **다시 결제하지 않는다** |
+| `input_images` | 생성 항목에 붙는 레퍼런스 URL 목록(§1.6). 무엇을 보고 그렸는지의 기록 |
 
 ### 3.3 `logs/makefun_usage.jsonl`
 
@@ -579,12 +639,16 @@ scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, end
 | 필드 | 뜻 |
 |---|---|
 | `ts` | 시각 |
+| `kind` | 어느 경로인가 — `text2image` · `upscale` · `refetch` · `upload` · `credits` |
 | `scene_id` · `task_id` | 어떤 장면의 어느 작업인가 |
 | `requested` · `saved` | 요청 장수 / 실제 저장된 장수 |
 | `ok` | 완전 성공 여부 |
 | `model` · `width` · `height` | 생성 파라미터 |
-| `billable` | **과금 대상인가** — 재수령은 `false` |
+| `refs` | 그 요청에 함께 보낸 레퍼런스 장수(§1.6) |
+| `billable` | **과금 대상인가** — 재수령·업로드·크레딧 조회는 `false` |
 | `refetch` | 재수령(`--refetch`)일 때만 `true`. 과금 없이 이미 만든 task 를 다시 받은 줄이다 |
+| `source` · `source_url` · `result_url` | `kind: "upscale"` 전용 — 무엇을 키웠고, 어디에 올렸고, (실패했다면) 결과가 어디 있는가 |
+| `src_width` · `src_height` | 확대 **전** 크기. `width`·`height` 와 비교하면 실제 배율이 나온다 |
 | `capped` · `want_px` · `cap_px` | **규격이 깎였을 때만** 붙는 세 필드 — 요청하려던 긴 변(`want_px`)이 `image_generator.max_long_edge_px`(`cap_px`)에 잘렸다는 표시 |
 | `error` | 실패 사유(200자로 자름) |
 

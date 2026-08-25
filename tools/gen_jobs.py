@@ -26,17 +26,21 @@
 
 공개 API
   claim(sid, label="생성")         생성 선점 — 이미 진행 중이면 VNError
-  release(sid, message="")        선점 해제(진행 표시 종료 + 잠금 파일 삭제)
+  release(sid, message="", result=None)  선점 해제(진행 표시 종료 + 잠금 파일 삭제)
   release_all(message="")         이 프로세스가 잡은 잠금 전부 해제(서버 종료 경로)
   claimed(sid, label="생성")       with 문용 — 성공/실패 어느 쪽이든 반드시 해제
   note(sid, message, running=True) 진행 문구 갱신(+ 잠금 만료 시계 연장)
-  run(sid, fn, label)             동기 실행틀(수신 → 후보 등록 → 자동 검사 → 해제)
+  run(sid, fn, label, register=True)  동기 실행틀(수신 → 후보 등록 → 자동 검사 → 해제)
   start(sid, fn, label, ...)      기본은 백그라운드, sync=True 면 동기
-  status(sid)                     {running, message, scene_id} — 다른 프로세스의 잠금도 본다
+  status(sid)                     {running, message, scene_id, result?} — 다른 프로세스의 잠금도 본다
   running()                       **이 프로세스에서** 아직 끝나지 않은 장면 목록
 
 진행 문구는 메모리에만 있다(프로세스 수명). 진행 중에 프로세스가 꺼지면 문구는 사라지지만,
 MakeFun 에 이미 만들어진 결과는 재수령(무과금) 경로로 회수할 수 있다.
+
+끝난 작업의 **결과**(저장된 파일 이름·경고)도 같은 표시에 남겨 :func:`status` 가 함께
+돌려준다. 백그라운드로 돌린 작업은 요청이 끝난 뒤에 결과가 나오므로, 진행 조회 말고는
+"무엇이 저장됐는지" 를 화면에 알려 줄 통로가 없다(확대본 파일 이름이 그 예다).
 
 Python 3.9+ · 표준 라이브러리만. (makefun_client 를 import 하지 않는다 — CLI 쪽에서
 이 모듈을 불러도 순환 import 가 생기지 않게 하는 것이 이 파일의 의존 규약이다.)
@@ -204,13 +208,19 @@ def note(sid: str, message: str, running: bool = True) -> None:
         _touch_lock(sid)
 
 
-def release(sid: str, message: str = "") -> None:
-    """선점 해제 — 진행 표시를 끝내고 잠금 파일을 지운다(문구를 주면 마지막 상태로 남긴다)."""
+def release(sid: str, message: str = "", result: dict | None = None) -> None:
+    """선점 해제 — 진행 표시를 끝내고 잠금 파일을 지운다(문구를 주면 마지막 상태로 남긴다).
+
+    result 는 끝난 작업이 남긴 구조화된 결과(저장 파일 이름 등)다. 문구는 사람이 읽는
+    한 줄이고, 이쪽은 화면이 파싱 없이 쓸 수 있는 형태로 :func:`status` 에 함께 실린다.
+    """
     with _LOCK:
         prev = _JOBS.get(sid) or {}
         _JOBS[sid] = {"running": False,
                       "message": str(message or prev.get("message", "") or "완료"),
                       "ts": time.time()}
+        if isinstance(result, dict):
+            _JOBS[sid]["result"] = dict(result)   # 사본 — 호출부가 나중에 고쳐도 표시는 그대로
         token = _OWNED.pop(sid, "")
     if token:
         _release_file(sid, token)
@@ -264,7 +274,10 @@ def status(sid: str) -> dict:
         if age is not None and age < STALE_SEC:
             return {"running": True, "scene_id": sid,
                     "message": f"다른 곳에서 생성 중입니다({_owner(_read_lock(path))})."}
-    return {"running": running_now, "message": str(job.get("message", "")), "scene_id": sid}
+    out = {"running": running_now, "message": str(job.get("message", "")), "scene_id": sid}
+    if isinstance(job.get("result"), dict):
+        out["result"] = job["result"]      # 끝난 작업이 남긴 것(저장 파일 이름·경고)
+    return out
 
 
 def running() -> list[str]:
@@ -275,18 +288,41 @@ def running() -> list[str]:
                       if j.get("running") and now - float(j.get("ts") or 0) < STALE_SEC)
 
 
-def run(sid: str, fn, label: str) -> dict:
-    """생성/재수령 공통 실행틀 — 성공/실패 어느 쪽이든 선점을 반드시 해제한다.
+def run(sid: str, fn, label: str, *, register: bool = True) -> dict:
+    """생성/재수령/확대 공통 실행틀 — 성공/실패 어느 쪽이든 선점을 반드시 해제한다.
 
-    fn() 은 저장된 파일 경로 목록을 돌려준다. 수신 후 후보 등록·자동 검사까지 여기서 한다.
+    fn() 은 저장된 파일 경로 목록을 돌려준다(경고를 함께 실은 makefun_client.GenResult 도
+    list 라 그대로 받는다 — 경고는 결과·문구에 옮겨 싣는다). 수신 후 후보 등록·자동 검사까지
+    여기서 한다.
     (끝맺음은 note 가 아니라 release 다 — 잠금 파일까지 같이 풀려야 다음 실행이 막히지 않는다.)
+
+    **register=False 는 fn() 이 등록까지 스스로 책임진 경우다**(확대 경로). 여기서 한 번 더
+    scene_ops.register_images 를 부르면 APPROVED 장면에서 VNError 가 나고, **이미 과금돼
+    파일까지 저장된 작업이 '실패' 로 보고된다** — 돈은 나갔는데 화면은 실패인 최악의 조합이다.
+    (확대는 그림을 바꾸지 않으므로 승인 장면에서도 허용되는 대신, 후보 목록을 건드릴지는
+     makefun_client 가 판단해 경고로 알린다.)
     """
     try:
-        files = list(fn())
+        res = fn()
+        files = list(res)
+        names = [Path(f).name for f in files]
+        # 경고는 화면 한 줄에 실리므로 줄바꿈만 편다(내용은 자르지 않는다 — "결과가 원본보다
+        # 크지 않습니다" 처럼 돈이 걸린 문장이 여기 온다).
+        warns = [" ".join(str(w).split()) for w in (getattr(res, "warnings", None) or ())]
+        if not register:
+            out = {"scene_id": sid, "generated": names, "count": len(names),
+                   "auto": "", "warnings": warns, "locked": False}
+            release(sid, " · ".join([f"완료 — {label} {len(names)}장"] + names + warns),
+                    result=out)
+            log.info("%s 완료 %s (%s)", label, sid, ", ".join(names) or "0장")
+            return out
         note(sid, f"{len(files)}장 수신 · 등록·검사 중…")
         reg = scene_ops.register_images(sid)
-        reg["generated"] = [f.name for f in files]
-        release(sid, f"완료 — {len(files)}장 {label} · 자동검사 {reg.get('auto', '')}")
+        reg["generated"] = names
+        if warns:
+            reg["warnings"] = warns
+        release(sid, f"완료 — {len(files)}장 {label} · 자동검사 {reg.get('auto', '')}",
+                result=reg)
         log.info("%s 완료 %s (%d장)", label, sid, len(files))
         return reg
     except Exception as exc:
@@ -296,15 +332,15 @@ def run(sid: str, fn, label: str) -> dict:
 
 
 def start(sid: str, fn, label: str, *, sync: bool = False, message: str = "",
-          count: int = 0) -> dict:
+          count: int = 0, register: bool = True) -> dict:
     """백그라운드 기본 + sync=True 면 동기 — 폰 브라우저가 기다리다 끊기지 않게 한다."""
     claim(sid, label)
     if sync:
-        return run(sid, fn, label)
+        return run(sid, fn, label, register=register)
 
     def _bg():
         try:
-            run(sid, fn, label)
+            run(sid, fn, label, register=register)
         except Exception:
             pass   # 사유는 run() 이 로그·진행 문구에 남긴다(스레드는 조용히 종료)
 

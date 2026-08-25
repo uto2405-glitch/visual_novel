@@ -299,6 +299,24 @@ $("btnContact").onclick=async()=>{
  try{const d=await api("/api/export",{contact_only:true,all:$("exportAll").checked});
   bz.stop(d.contact?"컨택트시트 저장: output/print/contact_sheet.png":"대상 없음");
  }catch(e){bz.stop("실패: "+e.message)}};
+// ---- MakeFun 크레딧 확인 ----
+// 이미지 과금은 없지만 **API 토큰을 쓰는 실제 호출**이다 — 사용자가 토큰 사용을 통제할 수
+// 있어야 하므로 자동 조회는 절대 하지 않는다(이 버튼을 누를 때만 나간다).
+// 응답 스키마가 공개돼 있지 않아 서버도 잔액을 단정하지 않는다 — 화면도 그대로 인용만 한다.
+$("btnCredits").onclick=async()=>{
+ const b=$("btnCredits"),out=$("creditOut");
+ b.disabled=true;
+ const bz=busy($("creditMsg"),"MakeFun 에 조회 중…");
+ try{const d=await api("/api/credits",{});
+  bz.stop((d&&d.ok===false)?"조회 실패":"조회됨 — 아래 내용 확인");
+  const note=(d&&d.note)?String(d.note):"",raw=(d&&d.raw)?String(d.raw):"";
+  out.textContent=(note||"응답을 읽을 수 없습니다 — makefun.ai 계정 화면에서 확인하세요.")
+   +(raw?"\n\n응답 원문(일부):\n"+raw:"");
+  out.hidden=false}
+ catch(e){bz.stop(/not found/i.test(e.message)
+   ?"이 서버는 아직 크레딧 조회를 지원하지 않습니다 — 서버를 최신으로 올린 뒤 다시 시도하세요."
+   :"실패: "+e.message)}
+ b.disabled=false};
 
 // 생성 진행 조회 — 서버가 /api/gen-status 를 지원할 때만 상황을 보여주고, 없으면 조용히 멈춘다.
 function pollGen(sid,msg){let live=true;
@@ -329,9 +347,11 @@ async function pollGenUntilDone(sid,msg){
 // 각 조각이 자기 DOM 만 만들고 돌려주게 했다. sceneCard 는 조립만 한다.
 
 // 카드가 다시 그려져도 사용자가 입력하던 것은 살아남아야 한다(그록 응답 붙여넣기, 펼침 상태).
-const scDraft=new Map();   // scene_id → {gen, set, open}
+// note 는 유료 작업(업스케일)의 결과 한 줄이다 — 성공하면 곧바로 refresh 가 카드를 갈아끼우므로
+// 여기 두지 않으면 "새 후보가 생겼다"는 안내가 만들어지자마자 지워진다.
+const scDraft=new Map();   // scene_id → {gen, set, open, note}
 function draftOf(sid){let d=scDraft.get(sid);
- if(!d){d={gen:"",set:"",open:null};scDraft.set(sid,d)}
+ if(!d){d={gen:"",set:"",open:null,note:""};scDraft.set(sid,d)}
  return d}
 
 function scHeader(sc){const head=el("div","row");
@@ -457,11 +477,37 @@ function scBtnApprove(sc,msg){
   catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
  return b}
 
+// 캐릭터 레퍼런스가 하나도 없으면 생성 요청에 실을 기준 얼굴이 없어 컷마다 인물이 흔들린다.
+// 다만 이것은 **서버가 알려 줄 때만** 말할 수 있다 — /api/state 가 레퍼런스 정보를 싣지 않는
+// 서버에서는 아무 말도 하지 않는다(없는 것과 모르는 것을 구분한다. 추측해서 겁주지 않는다).
+function refsKnownMissing(){
+ if(!S||typeof S!=="object")return false;
+ if(typeof S.refs_missing==="boolean")return S.refs_missing;   // 서버가 직접 판정해 주는 경우
+ const cs=S.characters;
+ if(!Array.isArray(cs)||!cs.length)return false;
+ let known=false,any=false;
+ for(const c of cs){
+  if(!c||typeof c!=="object")continue;
+  let has=null;
+  if(Array.isArray(c.reference_images))has=c.reference_images.length>0;
+  else if(typeof c.has_reference==="boolean")has=c.has_reference;
+  else if(typeof c.reference_count==="number")has=c.reference_count>0;
+  if(has===null)continue;      // 이 인물에 대해서는 서버가 말해 주지 않았다
+  known=true;if(has)any=true}
+ return known&&!any}
+function scRefNote(){
+ if(!refsKnownMissing())return null;
+ const p=el("p","small refnote",
+  "레퍼런스가 없어 컷마다 얼굴이 달라질 수 있습니다 — project/manifest.json 의 "
+  +"characters[].reference_images 에 기준 그림을 넣으면 생성 요청에 함께 보냅니다.");
+ return p}
+
 function scActions(sc){
  const act=el("div","row");act.style.marginTop="8px";
  const msg=el("span","small");msg.setAttribute("role","status");
+ const gen=sc.status!=="APPROVED"&&!!sc.prompt;
  if(sc.status!=="APPROVED"&&!sc.prompt)act.appendChild(scBtnGenPrompt(sc,msg));
- if(sc.status!=="APPROVED"&&sc.prompt)act.appendChild(scBtnGenImage(sc,msg));
+ if(gen)act.appendChild(scBtnGenImage(sc,msg));
  if(sc.prompt){const bcp=el("button","btn ghost","🖼 프롬프트 복사");
   bcp.title="이 프롬프트를 외부 이미지 AI 에 붙여넣을 수도 있습니다";
   bcp.onclick=()=>copyTo(bcp,sc.prompt,"🖼 프롬프트 복사");
@@ -470,7 +516,7 @@ function scActions(sc){
  if(sc.status!=="APPROVED")scAddUpload(act,sc,msg);
  if(sc.selected_image)act.appendChild(scBtnApprove(sc,msg));
  act.appendChild(msg);
- return {act,msg}}
+ return {act,msg,gen}}
 
 // 후보 썸네일: img+onclick 이 아니라 button — 키보드로 고를 수 있고 선택 상태를 읽어 준다.
 // 표시 폭 96px 이므로 원본이 아니라 서버 축소본(?w=)을 받는다(고해상도 화면 대비 2배).
@@ -488,6 +534,7 @@ function scThumbs(sc,msg){
   img.alt="";img.loading="lazy";img.decoding="async";
   b.appendChild(img);
   b.onclick=async()=>{msg.textContent="선택 중…";
+   draftOf(sc.scene_id).note="";   // "새 후보를 고르세요" 안내는 고른 순간 할 일을 다했다
    try{const d=await api("/api/select",{scene_id:sc.scene_id,image:r});
     msg.textContent=d.auto_pass?"선택됨 — 도장 찍을 수 있음":"선택됨 · 경고: "+d.fails;
     await refresh({scene:sc.scene_id})}
@@ -573,6 +620,52 @@ function scCrop(sc){
  wrap.appendChild(ctl);wrap.appendChild(stage);
  return {btn:bc,wrap}}
 
+// ---- 인화용 업스케일 (유료) ----
+// 승인된 컷이 1200×1800 이라 300DPI 로는 엽서가 한계다. 재생성은 7장을 다시 과금하고
+// **사람이 승인한 그림도 바뀐다** — 업스케일은 그 그림 그대로 크기만 키운다.
+// 서버(/api/upscale)는 생성과 같은 gen_jobs 관문을 타므로 폴링도 같은 것을 쓴다.
+function upDoneNote(sc){
+ return sc.status==="APPROVED"
+  ?"확대본을 images/raw/"+sc.scene_id+"/ 에 저장했습니다 — 승인된 장면이라 후보 목록은 "
+   +"그대로 둡니다. 새 후보로 쓰려면 되돌린 뒤(revise) [폴더 스캔]을 누르세요."
+  :"업스케일 완료 — 새 후보가 생겼습니다. 확인 후 선택하세요. (자동으로 선택되지 않습니다)"}
+function scBtnUpscale(sc,p,msg){
+ const weak=p&&p.printable===false;   // 인화 부적합일 때가 이 버튼이 필요한 바로 그때다
+ const b=el("button","btn"+(weak?"":" ghost"),"⬆ 인화용 업스케일");
+ b.title="선택한 그림 그대로 해상도만 키웁니다(다시 그리지 않습니다)."
+  +" MakeFun 크레딧이 차감되는 유료 호출입니다.";
+ b.onclick=async()=>{
+  if(!confirm("선택한 이미지를 인화용으로 확대합니다.\n\n"
+   +"· MakeFun 크레딧이 차감됩니다 (유료 호출).\n"
+   +"· 그림은 다시 그리지 않고 해상도만 커집니다 — 승인한 그림 그대로입니다.\n"
+   +"· 결과는 새 후보로 추가되며 자동으로 선택되지 않습니다.\n\n"
+   +"진행할까요?"))return;
+  const dr=draftOf(sc.scene_id);
+  b.disabled=true;dr.note="";msg.textContent="업스케일 요청 중… (1~3분)";
+  const stop=pollGen(sc.scene_id,msg);
+  try{const d=await api("/api/upscale",{scene_id:sc.scene_id});
+   if(d&&d.running){const r=await pollGenUntilDone(sc.scene_id,msg);stop();
+    // 실패·시간초과는 여기서 끝낸다(refresh 로 카드가 새로 그려지면 사유가 지워진다).
+    if(r&&r.error){msg.textContent="실패: "+r.error
+      +(/APPROVED|승인/.test(r.error)?" — 확대본 파일은 images/raw/"+sc.scene_id
+        +"/ 에 남아 있을 수 있습니다.":"");
+     b.disabled=false;return}
+    if(r&&r.timeout){msg.textContent="시간 초과 — 아직 확대 중일 수 있습니다. "
+      +"잠시 뒤 [폴더 스캔]으로 확인하세요 (다시 누르면 또 과금됩니다).";
+     b.disabled=false;return}}
+   else stop();
+   // 여기까지 왔으면 **과금은 이미 끝났다**. 목록 새로고침이 실패했다고 해서 유료 작업을
+   // '실패' 로 표시하면 사용자가 한 번 더 눌러 두 번 결제한다 — 새로고침만 따로 감싼다.
+   dr.note=upDoneNote(sc);msg.textContent=dr.note;
+   try{await refresh({scene:sc.scene_id})}
+   catch(e2){msg.textContent=dr.note+" · 목록 새로고침 실패("+e2.message+") — 새로고침 해 보세요."}}
+  catch(e){stop();
+   msg.textContent=/not found/i.test(e.message)
+    ?"이 서버는 아직 업스케일을 지원하지 않습니다 — 서버를 최신으로 올린 뒤 다시 시도하세요."
+    :"실패: "+e.message;
+   b.disabled=false}};
+ return b}
+
 // 인화 프리플라이트 배지 (선택 이미지가 실물 인화에 적합한지) — 카드에 붙일 노드 배열
 function scPrint(sc){
  if(!sc.print)return [];
@@ -582,6 +675,11 @@ function scPrint(sc){
  else if(p.printable){txt="인화 @300DPI 최대 "+p.max+" · 긴 변 "+p.long_in+"인치";cls="ok"}
  else{txt="인화 @300DPI 부적합 (긴 변 "+p.long_in+"인치, 엽서 미만) — 업스케일 권장";cls="bad"}
  pr.appendChild(el("span","chip "+cls,txt));
+ const msg=el("span","small");msg.setAttribute("role","status");
+ const dr=draftOf(sc.scene_id);
+ if(dr.note)msg.textContent=dr.note;      // 카드를 다시 그려도 지난 업스케일 결과가 남는다
+ const up=scBtnUpscale(sc,p,msg);
+ if(p.printable===false)pr.appendChild(up);   // 부적합 배지를 읽은 그 자리에서 바로 풀 수 있게
  const out=el("pre");out.hidden=true;out.style.marginTop="6px";out.setAttribute("role","status");
  const btn=el("button","btn ghost","인화 규격 상세");
  btn.onclick=async()=>{try{const d=await api("/api/preflight",{scene_id:sc.scene_id});
@@ -593,6 +691,8 @@ function scPrint(sc){
  pr.appendChild(btn);
  const nodes=[pr];
  if(sc.image_url&&p.px){const c=scCrop(sc);pr.appendChild(c.btn);nodes.push(c.wrap)}
+ if(p.printable!==false)pr.appendChild(up);   // 적합할 때는 굳이 앞자리를 차지하지 않는다
+ pr.appendChild(msg);
  nodes.push(out);
  return nodes}
 
@@ -606,6 +706,7 @@ function sceneCard(sc){
  if(sc.status!=="APPROVED")card.appendChild(scManualGrok(sc));
  const a=scActions(sc);
  card.appendChild(a.act);
+ if(a.gen){const rn=scRefNote();if(rn)card.appendChild(rn)}   // [🎨 이미지 생성] 바로 아래
  card.appendChild(scThumbs(sc,a.msg));
  for(const n of scPrint(sc))card.appendChild(n);
  return card}

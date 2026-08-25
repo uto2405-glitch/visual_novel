@@ -11,7 +11,9 @@
 | **이미지 생성** | **MakeFun AI** (`tools/makefun_client.py`) | **유료 종량제** | `MAKEFUN_API_TOKEN` 환경변수 |
 | 그록(xAI) | **예비 경로** — grok.com 수동 복붙 또는 API | 구독/종량제 | `XAI_API_KEY` (선택) |
 
-창작 텍스트와 인물 대화는 **내 PC 를 벗어나지 않는다.** 외부로 나가는 건 이미지 생성 프롬프트뿐이다.
+창작 텍스트와 인물 대화는 **내 PC 를 벗어나지 않는다.** 외부로 나가는 것은 이미지 생성 프롬프트와,
+**이미지 쪽 기능을 쓸 때의 이미지 파일**이다 — 캐릭터 레퍼런스(로컬 파일일 때)와 업스케일할
+원본 컷은 공급자 스토리지에 업로드된다(→ [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) §1).
 엔진 교체는 `project/manifest.json` 의 `orchestrator` / `image_generator` 만 바꾸면 된다.
 
 > **이미지 생성은 호출 1회가 곧 과금이다.** 자동으로 돌리지 않는다 — 사람이 버튼을 누를 때만 생성한다.
@@ -45,7 +47,7 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 | 1 | 스토리라인 작성 | [스토리] 탭 — 로컬 LLM 과 대화 | 나 + 로컬 LLM |
 | 2 | VN 텍스트 + 장면 분해 | [장면] 탭 — [스토리라인 → 장면 구성] | 로컬 LLM |
 | 3 | 이미지 프롬프트 생성 | [장면] 탭 — 장면 카드의 프롬프트 버튼 | 로컬 LLM (앵커는 코드가 조립) |
-| 4 | 이미지 생성 | [장면] 탭 — MakeFun 생성 / 📤 업로드 / `images/raw/<장면ID>/` 폴더 스캔 | 나 + 이미지 AI |
+| 4 | 이미지 생성 | [장면] 탭 — MakeFun 생성(캐릭터 레퍼런스 자동 첨부) / 📤 업로드 / `images/raw/<장면ID>/` 폴더 스캔 | 나 + 이미지 AI |
 | 5 | 선택 · 승인 | [장면] 탭 — 후보 선택 → 승인 도장 | 나 + 자동 검사기 |
 | 6 | 감상 | [뷰어] · [갤러리] · [대화] 탭 | 나 |
 | 7 | 내보내기 | 단일 HTML 감상본 · PWA · 인화 마스터 | 도구 |
@@ -84,6 +86,8 @@ docs/                          운영 문서
 ```powershell
 copy templates\manifest.json project\manifest.json
 # manifest 에 제목·캐릭터·장소를 채운다 (prompt_anchor 는 필수 — 컷 간 일관성의 근거)
+# 캐릭터 시트를 먼저 뽑아 characters[].reference_images 에 등록한다 (생성마다 자동 첨부된다)
+#   — 컷을 다 뽑은 뒤에 등록하면 앞서 만든 컷은 얼굴이 달라 다시 뽑아야 한다 = 재과금
 # output.visual_style 에 작품 화풍을 적는다
 # 분기 없는 선형 작품이면 dating 블록을 지운다 (지우면 호감도 미터가 숨는다)
 # 실물 인화를 할 작품이면 output.min_long_edge_px 와 image_generator.max_long_edge_px 를 함께 올린다 (아래 ⚠)
@@ -104,6 +108,9 @@ python tools/check_protocol.py
 | 프롬프트 (수동) | `python tools/make_grok_input.py SCENE-001` → 붙여넣기 → `advance_scene.py set-prompt SCENE-001 --file out.txt` |
 | 프롬프트 (그록 API) | `python tools/grok_api.py SCENE-001` |
 | **이미지 생성 (유료)** | `python tools/makefun_client.py SCENE-001 --n 2` — **호출 1회 = 과금** |
+| **인화용 확대 (유료)** | `python tools/makefun_client.py --upscale SCENE-001` — 승인한 그림 그대로 픽셀만 키워 **새 후보로** 저장 |
+| 레퍼런스 URL 만들기 | `python tools/makefun_client.py --upload images/ref/시트.png` → 출력된 URL 을 `reference_images` 에 등록 |
+| 생성 설정 점검 / 크레딧 | `python tools/makefun_client.py --check` (무호출) · `--credits` (이력 조회, 생성 과금 없음) |
 | 후보 등록 + 자동검사 | `python tools/advance_scene.py add-images SCENE-001 a.png b.png` |
 | 선택 / 승인 | `python tools/advance_scene.py select SCENE-001 1` → `approve SCENE-001` |
 | 되돌리기 | `python tools/advance_scene.py revise SCENE-001 IMAGE --note "사유"` |
@@ -153,8 +160,17 @@ MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해�
 > 확인은 과금 없이: `python tools/makefun_client.py --check` → `생성 크기 … · 상한 …px`.
 > (→ [docs/SCHEMA.md](docs/SCHEMA.md) §1.3)
 
-`python tools/print_preflight.py` 로 컷별 판정 후 주문한다 — 실무 절차는
-**[docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md)**.
+**이미 승인한 컷은 다시 만들지 말고 키운다.** 재생성은 그림 자체가 달라져(구도·표정) 사람이
+승인한 컷이 사라지고 과금도 장수만큼 다시 든다. `--upscale` 은 **그 그림 그대로 픽셀만** 키워
+새 후보로 저장하고 선택·승인 상태를 건드리지 않는다 — 1200×1800(엽서 한계)에서 8×10 으로
+가는 길이 이것이다.
+
+```powershell
+python tools/makefun_client.py --upscale SCENE-001   # 유료 · 한 장으로 먼저 시험한다
+```
+
+`python tools/print_preflight.py` 로 컷별 판정 후 주문한다 — 절차(승인 컷을 확대해서
+다시 고르기까지)는 **[docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md)** §1.
 
 ## 문서
 
@@ -163,7 +179,8 @@ MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해�
 | [docs/SCHEMA.md](docs/SCHEMA.md) | 매니페스트·장면 파일의 필드를 확인할 때 (스키마 단일 출처) |
 | [docs/PHONE_TUTORIAL.md](docs/PHONE_TUTORIAL.md) | 폰에서 쓰고 싶을 때 (LAN 접속·PIN·업로드·홈 화면) |
 | [docs/ENV_SETUP.md](docs/ENV_SETUP.md) | 토큰을 영구 등록할 때, 재부팅 후 401 이 날 때 |
-| [docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md) | 실물 인화를 주문할 때 |
+| [docs/PRINT_ORDER_GUIDE.md](docs/PRINT_ORDER_GUIDE.md) | 실물 인화를 주문할 때 · 승인한 컷을 인화 규격으로 키울 때 |
+| [docs/MAKEFUN_CAPABILITIES.md](docs/MAKEFUN_CAPABILITIES.md) | "이미지 AI 로 이것도 되나?" — 쓰는 API·안 붙인 API 와 그 이유 |
 | [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) | 감상본을 인터넷에 올릴까 고민될 때 |
 | [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md) | 뭔가 깨졌을 때, PC 를 새로 세팅할 때 (백업·복원 절차) |
 | [templates/free-assets-ko.md](templates/free-assets-ko.md) | 폰트·BGM·효과음을 무료로 구할 때 (라이선스 등급별) |

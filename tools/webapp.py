@@ -52,6 +52,10 @@
     메모리 표시로, 웹 서버와 CLI 처럼 **프로세스가 다를 때는** logs/gen_locks/<scene_id>.lock
     파일로 막는다(협조적 잠금 — 이 관문을 지나는 경로만 지키고, 좌초된 잠금은 20분 뒤
     회수된다. 보장 범위는 gen_jobs 모듈 설명에 적어 두었다).
+  * 유료 호출은 전부 같은 관문을 지난다 — 생성(/api/gen-image)과 확대(/api/upscale).
+    확대는 사람이 승인한 그 그림의 픽셀만 키워 새 후보로 놓는 경로라 APPROVED 장면에서도
+    허용되지만(선택본·승인 상태는 그대로), 과금이므로 선점·진행 조회·로그는 생성과 같다.
+    /api/credits 는 이미지 과금이 없는 읽기지만 API 토큰을 쓰는 실호출이라 그렇다고 응답에 밝힌다.
 
 로그: logs/webapp.log (회전). 기본은 오류·생성 실패·LAN 접속만, --verbose 면 요청까지.
       생성 작업 로그(vn.gen)도 같은 파일에 모인다.
@@ -579,8 +583,62 @@ def r_refetch(b):
                           message="이전 생성 결과를 다시 받는 중… (무과금)")
 
 
+def r_upscale(b):
+    """선택 이미지를 **재생성 없이** 확대해 새 후보로 저장 — 인화 규격을 키우는 유료 호출.
+
+    왜 있나: 승인된 컷이 1200×1800 이면 300DPI 인화는 엽서(4×6)가 한계다. 크기를 올려
+    다시 만들면 그림이 달라지고(사람이 승인한 그 컷이 아니다) 과금도 장수만큼 다시 든다.
+    확대는 같은 그림의 픽셀만 키운다 — 2400×3600 이면 8×10 이다.
+
+    **assert_mutable 을 걸지 않는다.** 승인 게이트가 지키는 것은 "사람이 고른 그림"인데,
+    확대는 그림도 선택본도 승인 상태도 바꾸지 않고 파일 한 장을 더 놓을 뿐이다. 오히려
+    APPROVED 컷이야말로 인화 대상이라, 여기서 막으면 이 기능의 목적 자체가 사라진다.
+    후보 목록을 건드릴지 말지의 최종 판단은 scene_ops 가 한다 — makefun_client 는 승인
+    장면이면 등록을 건너뛰고 되돌리는 방법을 경고로 알린다(그래서 register=False 다).
+
+    유료라서 나머지 안전장치는 생성과 **완전히 같다**: gen_jobs 선점(웹·CLI 공통 잠금으로
+    중복 과금 차단) · 백그라운드 실행 · /api/gen-status 진행 조회 · 심장박동 · 로그.
+    """
+    sid = b.get("scene_id")
+    sc = _load_scene(sid)
+    # 선택본이 없으면 확대할 대상 자체가 없다. makefun_client 도 같은 검사를 하지만 그쪽은
+    # 백그라운드 스레드 안이라, 여기서 미리 걸러야 사용자가 폴링을 기다리지 않고 바로 안다.
+    if not vn_core.selected_of(sc):
+        raise VNError("선택된 이미지가 없습니다. 확대할 컷을 먼저 고르세요.")
+
+    # 화면 문구·잠금 라벨·사용 대장의 이름을 "업스케일" 하나로 맞춘다 — CLI(--upscale)도
+    # 같은 라벨을 쓴다. 잠금 주인을 알려 주는 문구가 창마다 다른 단어를 쓰면 안 된다.
+    def work():
+        gen_jobs.note(sid, "원본 업로드 후 MakeFun 업스케일 요청 중… (1~3분)")
+        return makefun_client.upscale_scene(sid, on_progress=_progress(sid, "업스케일"))
+
+    return gen_jobs.start(
+        sid, work, "업스케일", sync=bool(b.get("sync")), register=False,
+        count=_candidates(sc),
+        message="MakeFun 업스케일 중… (1~3분) 진행 상황은 자동으로 갱신됩니다.")
+
+
+def r_credits(b):
+    """MakeFun 크레딧 이력 조회 — 이미지 과금은 없지만 **API 토큰을 쓰는 실호출**이다.
+
+    가볍고 장면과 무관하므로 동기로 처리한다(선점 대상도 아니다). 대신 응답에 그 성격을
+    실어 화면이 "이 조회도 토큰을 씁니다" 를 사용자에게 보여줄 수 있게 한다 — 버튼 하나가
+    조용히 계정을 두드리는 일이 없도록.
+
+    잔액 단정은 하지 않는다(응답 스키마가 공개돼 있지 않다). 판단은 makefun_client 담당이고
+    여기서는 그대로 전달만 한다.
+    """
+    res = makefun_client.credits()
+    return {**res, "billable": False, "token_call": True,
+            "notice": "이 조회도 MakeFun API 토큰을 사용합니다(이미지 생성 과금은 없습니다)."}
+
+
 def r_gen_status(b):
-    """생성 진행 조회 — {running, message}."""
+    """생성·업스케일 진행 조회 — {running, message, result?}.
+
+    result 는 끝난 작업이 남긴 것(저장 파일 이름·경고)이다. 백그라운드 작업은 요청이 이미
+    끝난 뒤에 결과가 나오므로, 확대본 파일 이름을 화면에 알려 줄 통로가 여기뿐이다.
+    """
     return gen_jobs.status(b.get("scene_id"))
 
 
@@ -764,6 +822,7 @@ POST_ROUTES = {
     "/api/talk-history": r_talk_history,
     "/api/gen-prompt": r_gen_prompt, "/api/gen-image": r_gen_image,
     "/api/gen-status": r_gen_status, "/api/refetch": r_refetch,
+    "/api/upscale": r_upscale, "/api/credits": r_credits,
     "/api/favorite": r_favorite,
     "/api/talk-to-scene": r_talk_to_scene,
     "/api/logout-all": r_logout_all,

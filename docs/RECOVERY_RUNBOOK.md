@@ -187,6 +187,12 @@ python tools/backup_project.py migrate --dry-run     # 옛 사본을 backups/leg
 이미 만들어진 결과가 있다면 재생성이 아니라 **무과금 재수령**으로 받는다:
 `python tools/makefun_client.py SCENE-00X --refetch` (→ [SCHEMA.md](SCHEMA.md) §2.6 · §3.5)
 
+**업스케일(`--upscale`)이 실패했을 때는 `--refetch` 가 아니다.** 그 작업 id 는 다른
+엔드포인트의 것이라 `makefun_tasks` 에 들어가지 않는다. 대신
+`images/raw/<SCENE-ID>/_gen_meta.json` 에서 `kind: "upscale"` 항목을 찾아
+**`result_url`** 이 있으면 그 주소로 결과를 직접 받는다 — **다시 결제하지 않는다.**
+(→ [SCHEMA.md](SCHEMA.md) §3.2 · [PRINT_ORDER_GUIDE.md](PRINT_ORDER_GUIDE.md) §1)
+
 ---
 
 ## 3. PC 교체 · 완전 재설치 순서

@@ -71,6 +71,8 @@ padding:14px 2px 6px;margin-top:4px;border-top:1px solid var(--line)}
 /* 매니페스트 부재처럼 "이 화면의 전제가 깨졌다"를 알리는 한 줄 */
 .notice{color:var(--warn);border:1px solid var(--warn);border-radius:8px;
 padding:9px 11px;margin-bottom:12px}
+/* 레퍼런스 없음처럼 "이대로도 되지만 결과가 흔들린다"는 한 줄 — 테두리 대신 왼쪽 선만 */
+.refnote{color:var(--warn);border-left:2px solid var(--warn);padding:2px 0 2px 8px;margin-top:6px}
 .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .thumbs img{width:96px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--line);cursor:pointer;display:block}
 .thumbs img.sel{border-color:var(--jade)}
@@ -287,7 +289,14 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <button class="btn ghost" id="btnContact">컨택트시트</button>
 <span class="small" id="exportMsg" role="status"></span></div>
 <p class="small" style="margin-top:6px"><b>output/print/</b> 에 300DPI TIFF+JPEG 와 spec_sheet.json 이 생성됩니다.
-저해상도면 업스케일 경고가 뜹니다 — 외부 AI에서 더 큰 해상도로 생성하세요.</p>
+저해상도면 업스케일 경고가 뜹니다 — 그 장면 카드의 <b>[⬆ 인화용 업스케일]</b> 로 재생성 없이 키울 수 있습니다.</p>
+<div class="row" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+<button class="btn ghost" id="btnCredits"
+ title="MakeFun 서버에 조회합니다 — API 토큰을 쓰는 실제 호출입니다(이미지 과금은 없습니다)">크레딧 확인</button>
+<span class="small">이 조회도 <b>MakeFun API 토큰</b>을 사용합니다 — 자동으로는 절대 조회하지 않으니 필요할 때만 누르세요.
+(이미지 생성 과금은 없습니다.)</span>
+<span class="small" id="creditMsg" role="status"></span></div>
+<pre id="creditOut" style="margin-top:6px" hidden></pre>
 </details>
 
 <!-- 장면이 늘어나면(카드 한 장 = textarea 3개 + 버튼 6~7개) 전체 펼침은 주 작업면을 삼킨다.

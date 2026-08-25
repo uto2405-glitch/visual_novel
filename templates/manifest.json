@@ -20,7 +20,7 @@
       "base_url": "https://makefun.ai",
       "token_env": "MAKEFUN_API_TOKEN"
     },
-    "note": "토큰은 환경변수로만 주입한다(이 파일에 값을 적지 않는다). max_long_edge_px 는 생성 요청 긴 변의 상한이다 — 인화하려면 output.min_long_edge_px 와 함께 올린다(4x6 1800 / 5x7 2250 / 8x10 3600, 하드 상한 4096). 한쪽만 올리면 요청이 이 값으로 깎인 채 과금되고 검사기 A3 도 FAIL 한다. 확인: python tools/makefun_client.py --check"
+    "note": "토큰은 환경변수로만 주입한다(이 파일에 값을 적지 않는다). max_long_edge_px 는 생성 요청 긴 변의 상한이다 — 인화하려면 output.min_long_edge_px 와 함께 올린다(4x6 1800 / 5x7 2250 / 8x10 3600, 하드 상한 4096). 한쪽만 올리면 요청이 이 값으로 깎인 채 과금되고 검사기 A3 도 FAIL 한다. 확인: python tools/makefun_client.py --check. 이미 승인한 컷은 이 값을 올려 재생성하지 말고 확대한다(그림이 그대로 유지된다): python tools/makefun_client.py --upscale SCENE-001. 이 블록은 생성·업스케일·업로드·크레딧 조회의 공통 접속 설정이며, 선택 필드 max_reference_images(기본 A2E 2장) 와 skip_face_enhance 도 여기에 둔다 — docs/SCHEMA.md 1.3 / docs/MAKEFUN_CAPABILITIES.md"
   },
   "output": {
     "mode": "visual_novel_scene_cards",
