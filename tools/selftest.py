@@ -25,6 +25,8 @@
     남은 opener(_API·_DL)는 **열리는 순간 그 테스트를 실패**시킨다 — 스텁을 우회하는 전송
     경로가 새로 생기면 조용히 통과하지 못한다(mf_stub). 응답 정규화처럼 _once 안에 있는
     동작은 한 겹 아래(mf_raw)에서 진짜 _once 를 지나가며 검사한다.
+    ComfyUI 는 무료·로컬이지만 이 PC 에 켜져 있든 말든 결과가 같아야 하므로 HTTP 계약을
+    흉내내는 모의 서버(ComfyMock)를 띄우고 샌드박스 매니페스트 주소만 그쪽으로 돌린다.
   * 웹 스튜디오는 **첫 web=True 테스트에서 한 번만** 뜨고 나머지 웹 테스트가 그 서버를 그대로
     쓴다(Box._web 재사용). 그래서 기동 비용은 실행당 한 번뿐이고, 러너는 그 시간을 테스트
     시간에서 빼서 따로 보여 준다 — 첫 웹 테스트가 느린 것처럼 보이던 착시를 없앤다.
@@ -49,6 +51,7 @@ import http.server
 import importlib.util
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -61,7 +64,9 @@ import threading
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request as ur
+import uuid
 import zipfile
 import zlib
 from pathlib import Path
@@ -85,6 +90,8 @@ REQUIRED_MODULES = (
     # doctor 는 README·start_studio.ps1·복구 런북이 안내하는 1차 진단 도구이고,
     # export_pwa 는 살아 있는 라우트(/api/export-pwa)가 직접 부른다.
     "doctor", "export_pwa", "make_grok_input", "print_export", "grok_api",
+    # 이미지 엔진이 둘이 되면서 생긴 세 모듈 — 공용 조각·로컬 클라이언트·선택기.
+    "gen_common", "comfyui_client", "image_gen",
 )
 
 # REQUIRED_MODULES 밖에 있어도 되는 유일한 목록 — 이유를 함께 적는다(T01 이 나머지를 잡는다).
@@ -105,15 +112,19 @@ LAYER = {
     #   도구가 고칠 수 없는 판정자이기 때문이다(도구를 import 하면 도구 쪽 전역 상태가
     #   판정에 섞인다 — 그래서 부르는 쪽도 서브프로세스로만 부른다).
     "vn_core": 0, "xai_client": 0, "check_protocol": 0,
-    # 1 저장소·전송 계층 — vn_core 만 본다.
+    # 1 저장소·전송 계층 — vn_core 만 본다. gen_common 은 두 이미지 클라이언트가 함께 쓰는
+    #   결과형·메타·대장 조각이라 클라이언트보다 아래에 있어야 한다.
     "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1,
     "make_grok_input": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
+    "gen_common": 1,
     # 2 조립·전이 계층
     "advance_scene": 2, "prompt_build": 2, "gen_jobs": 2, "scene_lint": 2, "export_pwa": 2,
-    # 3 외부 연동·오케스트레이션
-    "makefun_client": 3, "vn_compose": 3, "grok_api": 3,
-    # 4 최상위 진입점 — 아무도 이들을 import 하지 않는다.
-    "webapp": 4, "doctor": 4,
+    # 3 외부 연동·오케스트레이션 — 두 이미지 클라이언트는 서로를 모른다(고르는 것은 image_gen).
+    "makefun_client": 3, "comfyui_client": 3, "vn_compose": 3, "grok_api": 3,
+    # 4 엔진 선택기 — 두 클라이언트 위에 서고, webapp·doctor 만 부른다.
+    "image_gen": 4,
+    # 5 최상위 진입점 — 아무도 이들을 import 하지 않는다.
+    "webapp": 5, "doctor": 5,
 }
 
 # 계층을 부여하지 않는 모듈과 그 이유. 비워 두면(=이름을 안 적으면) L01 이 미부여로 잡는다.
@@ -1032,6 +1043,17 @@ def doc_names(cell: str) -> set[str]:
     return {n.strip() for n in _TICK.findall(cell) if n.strip()}
 
 
+def doc_section(text: str, head: str) -> str:
+    """그 제목으로 시작하는 절의 본문(다음 같은 깊이 제목 전까지). 없으면 실패."""
+    if head not in text:
+        raise Failed(f"SCHEMA.md 에서 {head!r} 절을 찾지 못했습니다"
+                     " — 문서 구조를 바꿨다면 이 검사의 앵커도 함께 고치세요")
+    body = text.split(head, 1)[1]
+    depth = head.split(" ", 1)[0]           # "###" 처럼 우물정자 깊이
+    cut = re.search(rf"^{re.escape(depth)} ", body, re.M)
+    return body[:cut.start()] if cut else body
+
+
 def doc_line(text: str, needle: str) -> str:
     """그 문구가 든 첫 줄. 없으면 실패(문서 구조가 바뀐 것)."""
     for line in text.splitlines():
@@ -1389,11 +1411,12 @@ def p17(b: Box):
     지금까지 구문 검사 외 커버리지가 0이었다. 크래시하면 사용자는 '왜 안 되지?' 를 좁힐
     첫 수단을 잃는다.
 
-    로컬 LLM 주소는 죽은 포트로 고정한다 — 이 PC 에 모델이 떠 있든 말든 결과가 같아야 한다.
-    (유료 API 는 호출하지 않는다: doctor 는 토큰이 '있는지'만 본다.)
+    로컬 LLM·ComfyUI 주소는 죽은 포트로 고정한다 — 이 PC 에 모델이 떠 있든 말든 결과가 같아야
+    한다. (유료 API 는 호출하지 않는다: doctor 는 토큰이 '있는지'만 본다.)
     """
     env = dict(b.env)
     env["LOCAL_LLM_URL"] = "http://127.0.0.1:59997/v1"
+    env["COMFYUI_URL"] = DEAD_COMFY
     before = _tree_sums(b.root)
     rc, out = b.run("tools/doctor.py", "--json", env=env)
     after = _tree_sums(b.root)
@@ -2180,6 +2203,24 @@ def w33(b: Box):
     eq(out["note"], reply["note"], "note 가 그대로 전달되지 않음")
 
 
+@test("webapp", "W34 /api/talk-status — 로컬 LLM 주소는 scheme://host:port 만(리버스 프록시 자격증명 차단)")
+def w34(b: Box):
+    """LOCAL_LLM_URL 은 비밀값이 아니지만 basic-auth 리버스 프록시 뒤에 두면 user:pw@ 가 붙는 자리다.
+    그 응답은 브라우저(폰 포함)로 그대로 나가므로 doctor·image_gen 과 같은 규칙으로 가린다
+    (vn_core.host_port). studio.js 가 읽는 것은 up 뿐이라 화면 기능은 그대로다.
+    """
+    wa, route = _route(b, "/api/talk-status", "로컬 LLM 상태를 스튜디오가 볼 수 없다")
+    with env_var("LOCAL_LLM_URL", "http://svc:secretpw@127.0.0.1:59995/v1"):
+        out = route({})
+    ok(isinstance(out, dict), f"응답형 — {type(out).__name__}")
+    ok("up" in out, f"studio.js 가 읽는 up 이 없음 — {sorted(out)}")
+    eq(out["up"], False, "꺼진 주소인데 up=True")
+    blob = json.dumps(out, ensure_ascii=False)
+    hasnt(blob, "secretpw", "프록시 비밀번호가 브라우저로 나감")
+    has(str(out.get("url", "")), "127.0.0.1:59995", f"어느 주소를 두드렸는지 — {out.get('url')!r}")
+    has(str(out.get("url", "")), "http://", "scheme 이 사라짐")
+
+
 # ============================================================ PIN 인증(LAN)
 @contextlib.contextmanager
 def auth_state(wa, pin: str = "482913"):
@@ -2669,6 +2710,22 @@ def m06(b: Box):
     has(msg, "max_long_edge_px", "고치는 방법(매니페스트 키) 안내")
     has(msg, str(cap), "실제 상한값")
     eq(list(warn_of(plan_of(mk.SIZE_MIN_PX))), [], "깎이지 않았는데 경고")
+    # 권고값은 8의 배수여야 실행 가능하다 — 상한은 8의 배수로 내려 잘리므로(2250 → 2248)
+    # 요청값을 그대로 권하면 "이미 그 값인데 올리라"가 되고, 고쳐도 다시 깎이고 돈만 쓴다.
+    def cap8(d, minpx: int, cap: int):
+        d.setdefault("output", {}).update(aspect_ratio="2:3", min_long_edge_px=minpx)
+        d.setdefault("image_generator", {})["max_long_edge_px"] = cap
+
+    with manifest_patch(b, lambda d: cap8(d, 2250, 2250)):
+        plan8 = plan_of()
+        eq((plan8["long"], plan8["capped"]), (2248, True), f"8의 배수가 아닌 상한 — {plan8}")
+        msg8 = " / ".join(warn_of(plan8))
+        has(msg8, "2256", "권고 상한이 다음 8의 배수로 올라가지 않음(이미 설정된 값을 다시 권고)")
+        hasnt(msg8, "2250 이상", "이미 적혀 있는 값을 올리라고 안내")
+    with manifest_patch(b, lambda d: cap8(d, 2250, 2256)):
+        p8 = plan_of()
+        ok(p8["long"] >= 2250, f"권고대로 올렸는데 여전히 A3 미달 — {p8}")
+        eq(list(warn_of(p8)), [], "권고대로 올렸는데 경고가 남음")
     # 실제 생성 경로가 그 경고를 결과로 돌려주는지 (네트워크 지점은 전부 스텁)
     png = _png_bytes()
     with fresh_scene(b) as sid:
@@ -2947,8 +3004,8 @@ def m12(b: Box):
         for c in d.get("characters", []):
             if c.get("character_id") == "CHAR-001":
                 c["reference_images"] = value
-        if model:
-            d.setdefault("image_generator", {})["model"] = model
+        if model:      # MakeFun 모델은 makefun 블록이 정본이다(있으면 최상위를 덮는다 — SCHEMA §1.3)
+            d.setdefault("image_generator", {}).setdefault("makefun", {})["model"] = model
 
     # 레퍼런스가 없는 기본 상태 — input_images 키 자체가 없어야 한다
     with fresh_scene(b, **prompted) as sid:
@@ -3040,6 +3097,1033 @@ def m13(b: Box):
         bad = credits(quiet=True)
     eq(bad["ok"], False, "실패인데 ok=True")
     ok(str(bad["note"]).strip(), "실패 사유가 비어 있음")
+
+
+# ============================================================ ComfyUI (모의)
+# 실제 ComfyUI 는 무료·로컬이라 불러도 되지만, 자가진단은 이 PC 에 ComfyUI 가 켜져 있든 말든
+# 같은 결과를 내야 한다(P17 이 로컬 LLM 을 죽은 포트로 고정하는 것과 같은 이유). 그래서
+# HTTP 계약(/prompt · /history · /view · /object_info · /system_stats · /queue · /interrupt)을
+# 그대로 흉내내는 모의 서버를 띄우고 **샌드박스 매니페스트의 comfyui.api.base_url** 만 그쪽으로
+# 돌린다 — comfyui_client 의 전송 계층은 스텁하지 않고 진짜 urllib 경로를 끝까지 지나간다.
+# (테스트 이름은 CF 로 시작한다 — checker 그룹의 C01~C06 과 -k 패턴이 섞이지 않게.)
+COMFY_CKPTS = ("waiIllustriousSDXL_v170.safetensors", "juggernautXL_ragnarok.safetensors")
+DEAD_COMFY = "http://127.0.0.1:59996"      # 아무도 듣지 않는 포트 — 'ComfyUI 꺼져 있음' 을 흉내낸다
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class ComfyMock:
+    """모의 ComfyUI 서버. ``mode`` 로 실패를 흉내낸다.
+
+    ok(기본) · reject(POST /prompt 400 + node_errors) · error(실행 실패 메시지) ·
+    pending(영원히 진행 중 — 시간 초과 경로) · badview(/view 가 PNG 가 아닌 것을 준다).
+    ``delay_polls=N`` 이면 /history 를 N 번 비운 뒤 완료로 바꾼다(진행 콜백이 실제로 불리게).
+    결과 PNG 는 제출된 그래프의 캔버스 크기(hires 면 LatentUpscale 크기)로 만든다 — 검사기 A3 가
+    실제와 같은 조건에서 판정하도록.
+    """
+
+    def __init__(self, checkpoints=COMFY_CKPTS, mode: str = "ok", delay_polls: int = 0):
+        self.checkpoints = list(checkpoints)
+        self.mode, self.delay_polls = mode, delay_polls
+        self.calls: list[tuple[str, str, dict]] = []      # (method, path, body|query)
+        self.graphs: dict[str, dict] = {}                 # prompt_id → 제출된 그래프
+        self.order: list[str] = []                        # 제출 순서의 prompt_id
+        self.polls: dict[str, int] = {}
+        self.files: dict[str, tuple[int, int]] = {}       # 결과 파일명 → (w, h)
+        self._png: dict[tuple[int, int], bytes] = {}
+        self._lock = threading.Lock()
+        mock = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code: int, raw: bytes, ctype: str = "application/json") -> None:
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                if raw:
+                    self.wfile.write(raw)
+
+            def _json(self, code: int, obj) -> None:
+                self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+
+            def do_GET(self):
+                u = urllib.parse.urlsplit(self.path)
+                q = dict(urllib.parse.parse_qsl(u.query))
+                mock.calls.append(("GET", u.path, q))
+                if u.path == "/system_stats":
+                    self._json(200, {"system": {"comfyui_version": "0.35.0-mock", "os": "nt",
+                                                "python_version": "3.12"},
+                                     "devices": [{"name": "cuda:0 Mock GPU", "type": "cuda",
+                                                  "vram_total": 12_000_000_000}]})
+                elif u.path == "/object_info/CheckpointLoaderSimple":
+                    self._json(200, {"CheckpointLoaderSimple": {"input": {"required": {
+                        "ckpt_name": [list(mock.checkpoints)]}}}})
+                elif u.path == "/object_info/KSampler":
+                    self._json(200, {"KSampler": {"input": {"required": {
+                        "sampler_name": [["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde"]],
+                        "scheduler": [["normal", "karras", "exponential"]]}}}})
+                elif u.path == "/queue":
+                    active = [pid for pid in mock.order if not mock.done(pid)]
+                    self._json(200, {"queue_running": [[0, pid, {}, {}, []] for pid in active[:1]],
+                                     "queue_pending": [[i + 1, pid, {}, {}, []]
+                                                       for i, pid in enumerate(active[1:])]})
+                elif u.path.startswith("/history/"):
+                    self._json(200, mock.history(urllib.parse.unquote(u.path[len("/history/"):])))
+                elif u.path == "/view":
+                    dims = mock.files.get(str(q.get("filename", "")))
+                    if dims is None:
+                        self._send(404, b"not found", "text/plain")
+                    elif mock.mode == "badview":
+                        self._send(200, b"<html>not a png</html>", "text/html")
+                    else:
+                        self._send(200, mock.png(*dims), "image/png")
+                else:
+                    self._send(404, b"not found", "text/plain")
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(n) if n else b""
+                try:
+                    body = json.loads(raw or b"{}")
+                except ValueError:
+                    body = {"_raw": raw.decode("utf-8", "replace")}
+                path = urllib.parse.urlsplit(self.path).path
+                mock.calls.append(("POST", path, body if isinstance(body, dict) else {"_": body}))
+                if path == "/prompt":
+                    if mock.mode == "reject":
+                        ck = str((((body.get("prompt") or {}).get("4") or {}).get("inputs") or {})
+                                 .get("ckpt_name", "?"))
+                        self._json(400, {
+                            "error": {"type": "prompt_outputs_failed_validation",
+                                      "message": "Prompt outputs failed validation", "details": "",
+                                      "extra_info": {}},
+                            "node_errors": {"4": {
+                                "errors": [{"type": "value_not_in_list", "message": "Value not in list",
+                                            "details": f"ckpt_name: {ck!r} not in {mock.checkpoints}",
+                                            "extra_info": {"input_name": "ckpt_name"}}],
+                                "dependent_outputs": ["9"], "class_type": "CheckpointLoaderSimple"}}})
+                        return
+                    pid = mock.submit(body.get("prompt") or {})
+                    self._json(200, {"prompt_id": pid, "number": len(mock.order), "node_errors": {}})
+                elif path == "/interrupt":
+                    self._send(200, b"")
+                elif path == "/queue":
+                    self._send(200, b"")
+                else:
+                    self._send(404, b"not found", "text/plain")
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        # poll_interval 을 짧게 — 테스트마다 서버를 띄우고 내리므로 shutdown 대기(기본 0.5초)가 쌓인다
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05},
+                         daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    # -------------------------------------------------- 서버 쪽 상태
+    def submit(self, graph: dict) -> str:
+        pid = str(uuid.uuid4())
+        with self._lock:
+            self.graphs[pid] = graph
+            self.order.append(pid)
+            self.polls[pid] = 0
+            inputs = ((graph.get("11") or graph.get("5") or {}).get("inputs") or {})
+            dims = (int(inputs.get("width", 64)), int(inputs.get("height", 64)))
+            prefix = str(((graph.get("9") or {}).get("inputs") or {}).get("filename_prefix", "x"))
+            fname = f"{prefix.rsplit('/', 1)[-1]}_{len(self.order):05d}_.png"
+            self.files[fname] = dims
+            self.graphs[pid]["_file"] = fname
+        return pid
+
+    def done(self, pid: str) -> bool:
+        if pid not in self.graphs or self.mode == "pending":
+            return False
+        return self.polls.get(pid, 0) >= self.delay_polls
+
+    def history(self, pid: str) -> dict:
+        if pid not in self.graphs or self.mode == "pending":
+            return {}
+        with self._lock:
+            self.polls[pid] = self.polls.get(pid, 0) + 1
+            n = self.polls[pid]
+        if n <= self.delay_polls:
+            return {}
+        if self.mode == "error":
+            return {pid: {"status": {"status_str": "error", "completed": True, "messages": [
+                ["execution_start", {"prompt_id": pid}],
+                ["execution_error", {"prompt_id": pid, "node_id": "3", "node_type": "KSampler",
+                                     "exception_message": "CUDA out of memory (mock)"}]]},
+                          "outputs": {}}}
+        fname = self.graphs[pid]["_file"]
+        prefix = str(((self.graphs[pid].get("9") or {}).get("inputs") or {}).get("filename_prefix", ""))
+        sub = prefix.rsplit("/", 1)[0] if "/" in prefix else ""
+        return {pid: {"status": {"status_str": "success", "completed": True, "messages": []},
+                      "outputs": {"9": {"images": [{"filename": fname, "subfolder": sub,
+                                                     "type": "output"}]}}}}
+
+    def png(self, w: int, h: int) -> bytes:
+        key = (w, h)
+        with self._lock:
+            if key not in self._png:
+                self._png[key] = _png_bytes(w, h)
+            return self._png[key]
+
+    # -------------------------------------------------- 테스트 쪽 조회
+    def hits(self, needle: str) -> list[tuple[str, str, dict]]:
+        return [c for c in self.calls if needle in c[1]]
+
+    def prompts(self) -> list[dict]:
+        return [c[2] for c in self.calls if c[0] == "POST" and c[1] == "/prompt"]
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self.server.shutdown()
+            self.server.server_close()
+
+
+def _pid6(pid: str) -> str:
+    return pid.replace("-", "")[:6]
+
+
+@contextlib.contextmanager
+def comfy_mock(b: Box, *mods, checkpoint: str | None = None, **kw):
+    """모의 ComfyUI 를 띄우고 샌드박스 매니페스트 ``comfyui.api.base_url`` 을 그쪽으로 돌린다.
+
+    ``COMFYUI_URL`` 은 비운다(이 PC 의 환경변수가 결과를 바꾸면 안 된다). ``mods`` 로 넘긴
+    comfyui_client 인스턴스의 체크포인트 캐시(60초)는 들어갈 때·나올 때 비운다 — 앞 테스트가
+    본 목록이 이 테스트에 남지 않게. 매니페스트는 블록을 나가면 원문 그대로 돌아간다.
+    """
+    mock = ComfyMock(**kw)
+
+    def point(d):
+        ig = d.setdefault("image_generator", {})
+        ig["engine"] = "comfyui"
+        cu = ig.setdefault("comfyui", {})
+        cu.setdefault("api", {})["base_url"] = mock.url
+        if checkpoint is not None:
+            cu["checkpoint"] = checkpoint
+
+    def flush():
+        for m in mods:
+            cache = getattr(m, "_CKPT_CACHE", None)
+            if isinstance(cache, dict):
+                cache.update(ts=0.0, names=[])
+
+    try:
+        with env_var("COMFYUI_URL", None), manifest_patch(b, point):
+            flush()
+            yield mock
+    finally:
+        flush()
+        mock.close()
+
+
+def _cf_usage(b: Box) -> list[dict]:
+    p = b.p("logs/comfyui_usage.jsonl")
+    if not p.exists():
+        return []
+    out = []
+    for l in p.read_text(encoding="utf-8").splitlines():
+        if l.strip():
+            with contextlib.suppress(ValueError):
+                out.append(json.loads(l))
+    return out
+
+
+def _graph_refs_ok(g: dict) -> None:
+    """모든 노드가 class_type/inputs 를 갖고, 링크([노드, 출력]) 가 존재하는 노드를 가리킨다."""
+    for nid, node in g.items():
+        ok({"class_type", "inputs"} <= set(node), f"노드 {nid} 구조 — {sorted(node)}")
+        for key, v in node["inputs"].items():
+            if isinstance(v, list) and len(v) == 2 and isinstance(v[1], int):
+                ok(v[0] in g, f"노드 {nid}.{key} 가 없는 노드 {v[0]} 를 가리킴")
+
+
+@test("comfyui", "CF01 정상 렌더 — cf_<id6>_n.png 저장 + 메타(engine·seed·billable=false) + 무료 대장 · MakeFun 흔적 0")
+def cf01(b: Box):
+    """ComfyUI 는 과금이 없지만 기록 규약은 MakeFun 과 같아야 한다(gen_jobs·스튜디오가 한 모양만
+    읽는다). 시드가 메타에 남는 것이 재현의 열쇠다 — 같은 체크포인트·프롬프트·시드면 같은 그림.
+    """
+    cf = b.mod("comfyui_client")
+    with comfy_mock(b, cf) as mock, fresh_scene(b) as sid:
+        out_dir = b.root / "images" / "raw" / sid
+        n_mf, n_cf = _usage_len(b), len(_cf_usage(b))
+        scene_text = b.scene_path(sid).read_text(encoding="utf-8")
+        res = cf.generate_to_dir("고백하는 장면", out_dir, n=2, name=sid, scene_id=sid,
+                                 quiet=True, seed=7)
+        eq(len(res), 2, "저장된 파일 수")
+        eq(list(res.warnings), [], "경고")
+        eq(list(res.task_ids), list(mock.order), "task_ids 가 제출한 prompt_id 와 다름")
+        want = sorted(f"cf_{_pid6(pid)}_{i + 1}.png" for i, pid in enumerate(mock.order))
+        eq(sorted(p.name for p in out_dir.glob("*.png")), want, "파일 이름 규약 cf_<promptid6>_<n>.png")
+        for p in res:
+            ok(Path(p).read_bytes().startswith(PNG_MAGIC), f"{Path(p).name} 이 PNG 가 아님")
+        # 제출한 그래프가 그 시드·그 체크포인트(첫 항목)·그 장면 이름을 실었다
+        for i, pid in enumerate(mock.order):
+            g = mock.graphs[pid]
+            eq(g["4"]["inputs"]["ckpt_name"], COMFY_CKPTS[0], "체크포인트 미지정 → ComfyUI 첫 항목")
+            eq(g["3"]["inputs"]["seed"], 7 + i, f"{i + 1}번째 시드(seed+i)")
+            eq(g["9"]["inputs"]["filename_prefix"], f"vn_studio/{sid}", "SaveImage 접두어")
+        body = mock.prompts()[0]
+        ok(body.get("client_id"), "client_id 없이 제출")
+        # 메타 — 엔진·시드·설정·무과금
+        entries = read_json(out_dir / cf.META_NAME)["entries"]
+        eq(len(entries), 2, "메타 항목 수")
+        e0 = entries[0]
+        for key in ("created_at", "scene_id", "task_id", "kind", "engine", "prompt", "negative",
+                    "model", "seed", "steps", "cfg", "sampler", "scheduler", "clip_skip",
+                    "width", "height", "hires", "files", "status", "error", "billable"):
+            ok(key in e0, f"메타에 {key} 없음 — {sorted(e0)}")
+        eq((e0["engine"], e0["kind"], e0["billable"], e0["status"]),
+           ("comfyui", "text2image", False, "ok"), "메타 engine/kind/billable/status")
+        eq((e0["seed"], entries[1]["seed"]), (7, 8), "메타 seed")
+        eq(e0["task_id"], mock.order[0], "메타 task_id = prompt_id")
+        eq(e0["model"], COMFY_CKPTS[0], "메타 model = 체크포인트")
+        eq((e0["width"], e0["height"], e0["hires"]), (832, 1248, False), "메타 크기(2:3 · 1MP 캔버스)")
+        eq(e0["files"], [f"cf_{_pid6(mock.order[0])}_1.png"], "메타 files")
+        eq(e0["error"], "", "성공인데 error 가 비어 있지 않음")
+        # 대장 — logs/comfyui_usage.jsonl 두 줄(billable false) · MakeFun 대장은 한 줄도 늘지 않았다
+        rec = _cf_usage(b)[n_cf:]
+        eq(len(rec), 2, "무료 대장 줄 수")
+        eq((rec[0]["billable"], rec[0]["ok"], rec[0]["saved"], rec[0]["kind"]),
+           (False, True, 1, "text2image"), "대장 billable/ok/saved/kind")
+        eq((rec[0]["scene_id"], rec[0]["task_id"], rec[0]["seed"]), (sid, mock.order[0], 7), "대장 장면/작업/시드")
+        eq(_usage_len(b), n_mf, "ComfyUI 렌더가 MakeFun 대장에 줄을 남김(과금 합산이 어긋난다)")
+        # SCHEMA §3.3b 는 이 대장의 필드를 산문으로 복제한다 — 코드가 쓰는 키가 전부 적혀 있어야 한다
+        # (빠진 필드는 "지워도 잃는 게 없다"는 안내를 조용히 거짓말로 만든다: hires·billable 이 그랬다)
+        sec = doc_section(doc_text(b), "### 3.3b")
+        listed = doc_names(sec)
+        eq(sorted(k for k in rec[0] if k not in listed), [],
+           "comfyui_usage.jsonl 에 쓰는데 SCHEMA §3.3b 가 설명하지 않는 필드")
+        eq(b.scene_path(sid).read_text(encoding="utf-8"), scene_text,
+           "generate_to_dir 가 장면 파일을 건드림(makefun_tasks·status 는 이 경로가 쓰지 않는다)")
+        # 시드를 안 주면 무작위(0 ≤ seed < 2**53) — 그래도 메타에 남는다
+        cf.generate_to_dir("두 번째", out_dir, n=1, name=sid, scene_id=sid, quiet=True)
+        e2 = read_json(out_dir / cf.META_NAME)["entries"][-1]
+        ok(isinstance(e2["seed"], int) and 0 <= e2["seed"] < 2 ** 53, f"무작위 시드 — {e2['seed']!r}")
+        eq(mock.graphs[mock.order[-1]]["3"]["inputs"]["seed"], e2["seed"], "그래프 시드 ≠ 메타 시드")
+        # 레퍼런스가 들어오면 '쓰지 않는다' 경고 — 오류도, 업로드도 아니다
+        res3 = cf.generate_to_dir("셋", out_dir, n=1, scene_id=sid, quiet=True, seed=1,
+                                  input_images=["https://cdn.example/ref.png"])
+        eq(len(res3), 1, "레퍼런스가 있으면 렌더가 막힘")
+        ok(any("레퍼런스" in w for w in res3.warnings), f"레퍼런스 미사용 경고 없음 — {list(res3.warnings)}")
+        known = {"/prompt", "/queue", "/view", "/object_info/CheckpointLoaderSimple", "/system_stats"}
+        odd = sorted({p for _m, p, _q in mock.calls if p not in known and not p.startswith("/history/")})
+        eq(odd, [], "모르는 경로로 요청이 나감(업로드 등)")
+        raises(lambda: cf.generate_to_dir("   ", out_dir, quiet=True), RuntimeError, "빈 프롬프트")
+        raises(lambda: cf.generate_to_dir("p", out_dir, quiet=True, seed="x"), RuntimeError, "정수 아닌 시드")
+
+
+@test("comfyui", "CF02 장면 렌더 — 생성기 기록은 scene_ops 를 거치고, 등록·상태 전이는 gen_jobs/scene_ops 만 한다")
+def cf02(b: Box):
+    """클라이언트 단독 호출은 파일·기록만 남기고 장면의 status·assets 를 움직이지 않는다.
+    run_scene(CLI)은 gen_jobs 관문 → register_images → 자동 검사 → REVIEW_HUMAN 까지 한 번에 간다
+    (무료라 다시 만들면 되므로). APPROVED 는 렌더 자체를 거절한다(서버 요청 0).
+    """
+    cf = b.mod("comfyui_client")
+    with comfy_mock(b, cf) as mock, cli_scene(b, "PROMPT") as sid:
+        before = b.scene(sid)
+        res = cf.generate_for_scene(sid, n=1, quiet=True, seed=3)
+        eq(len(res), 1, "저장된 파일 수")
+        sc = b.scene(sid)
+        eq(sc["prompt"]["external_generator"], "ComfyUI", "prompt.external_generator")
+        eq(sc["prompt"]["external_model"], COMFY_CKPTS[0], "prompt.external_model = 체크포인트")
+        eq(sc["prompt"]["grok_output"], before["prompt"]["grok_output"], "프롬프트 원문이 바뀜")
+        eq(sc["status"], before["status"], "클라이언트 단독 호출이 장면 상태를 움직임")
+        eq(sc["assets"]["raw_images"], [], "클라이언트가 후보 목록을 직접 등록함(등록은 gen_jobs 의 일)")
+        g = mock.graphs[mock.order[-1]]
+        has(g["6"]["inputs"]["text"], before["prompt"]["grok_output"], "장면 프롬프트가 그래프에 실리지 않음")
+        ok(g["6"]["inputs"]["text"].lower().startswith("masterpiece"),
+           f"Illustrious 프리셋 접두어가 붙지 않음 — {g['6']['inputs']['text'][:60]!r}")
+        eq(g["3"]["inputs"]["sampler_name"], "euler_ancestral", "Illustrious 프리셋 샘플러")
+        ok("10" in g and g["10"]["inputs"]["stop_at_clip_layer"] == -2, "clip_skip 2 → CLIPSetLastLayer -2")
+        # 등록까지 — run_scene → gen_jobs.start(sync) → register_images → 자동 검사 PASS → REVIEW_HUMAN
+        rep = cf.run_scene(sid, n=1, seed=4, quiet=True)
+        eq(rep.get("auto"), "PASS", f"자동 검사 — {rep}")
+        eq(rep.get("count"), 2, f"후보 수 — {rep}")
+        sc = b.scene(sid)
+        eq(sc["status"], "REVIEW_HUMAN", "등록 뒤 상태(IMAGE→REVIEW_HUMAN 은 scene_ops 가 찍는다)")
+        eq(len(sc["assets"]["raw_images"]), 2, "후보 등록 수")
+        ok(all(Path(r).name.startswith("cf_") for r in sc["assets"]["raw_images"]),
+           f"후보 이름 — {sc['assets']['raw_images']}")
+        eq(sc["review"]["auto"], "PASS", "review.auto")
+        jobs = cf._jobs()
+        ok(jobs is not None, "comfyui_client 가 gen_jobs 를 찾지 못함")
+        ok(sid not in jobs.running(), "끝났는데 선점 표시가 남음")
+        ok(not b.p(f"logs/gen_locks/{sid}.lock").exists(), "잠금 파일이 남음")
+        # 다른 곳(웹)이 굽고 있으면 CLI 도 같은 관문에서 거절 — 서버 요청 0
+        n_prompt = len(mock.prompts())
+        jobs.claim(sid, "생성")
+        try:
+            raises(lambda: cf.run_scene(sid, n=1, quiet=True), RuntimeError, "선점 중인데 렌더가 시작됨")
+        finally:
+            jobs.release(sid)
+        eq(len(mock.prompts()), n_prompt, "거절됐는데 ComfyUI 에 그래프가 제출됨")
+        # 프롬프트가 없는 장면은 안내와 함께 거절
+    with comfy_mock(b, cf) as mock2, fresh_scene(b) as bare:
+        e = raises(lambda: cf.generate_for_scene(bare, quiet=True), RuntimeError, "프롬프트 없는 장면")
+        has(str(e), "프롬프트", "무엇이 없는지")
+        eq(mock2.prompts(), [], "프롬프트가 없는데 제출됨")
+    # APPROVED — 렌더 자체를 거절(표준 문구는 scene_ops 가 낸다) · 기록도 그대로
+    with comfy_mock(b, cf) as mock3, cli_scene(b, "APPROVED") as sid2:
+        before2 = b.scene(sid2)
+        e = raises(lambda: cf.generate_for_scene(sid2, quiet=True), RuntimeError, "APPROVED 인데 렌더")
+        has(str(e), "APPROVED", "무엇 때문에 막혔는지")
+        has(str(e), "revise", "다음에 할 일 안내")
+        eq(mock3.prompts(), [], "APPROVED 인데 ComfyUI 에 제출됨")
+        eq(b.scene(sid2), before2, "거절됐는데 장면이 바뀜")
+        so = b.mod("scene_ops")
+        raises(lambda: so.record_external_generator(sid2, "ComfyUI", "x"), RuntimeError,
+               "APPROVED 컷의 출처 기록이 덧씌워짐")
+        eq(b.scene(sid2), before2, "거절됐는데 장면이 바뀜(record_external_generator)")
+    # 정적 — 클라이언트는 장면 파일을 직접 쓰지 않는다: 기록은 scene_ops, 등록은 gen_jobs
+    calls = func_calls(b, "comfyui_client", "_record_generator")
+    ok(any(c.split(".")[-1] == "record_external_generator" for c in calls),
+       f"생성기 기록이 scene_ops 를 거치지 않음 — {sorted(calls)}")
+    for fn in ("generate_to_dir", "generate_for_scene", "_record_generator", "run_scene", "download"):
+        calls = func_calls(b, "comfyui_client", fn)
+        for direct in ("atomic_write_json", "vn_core.atomic_write_json", "_save", "register_images",
+                       "scene_ops.register_images", "record_generation_tasks"):
+            ok(direct not in calls, f"comfyui_client.{fn} 이 장면 파일 경로를 직접 씀({direct})")
+    imports = tool_imports(b, "comfyui_client")
+    ok("makefun_client" not in imports, "comfyui_client 가 makefun_client 를 import 함(엔진은 서로를 모른다)")
+
+
+@contextlib.contextmanager
+def _rude_server(reply: bytes):
+    """HTTP 가 아닌 답을 한 번 뱉고 끊는 소켓 — 포트를 넘겨준다(ComfyUI 아닌 것이 앉은 포트)."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def serve():
+        with contextlib.suppress(Exception):
+            conn, _ = srv.accept()
+            with conn:
+                conn.settimeout(2)
+                with contextlib.suppress(Exception):
+                    conn.recv(65536)
+                conn.sendall(reply)
+
+    th = threading.Thread(target=serve, daemon=True)
+    th.start()
+    try:
+        yield port
+    finally:
+        srv.close()
+        th.join(timeout=2)
+
+
+@test("comfyui", "CF03 실패 경로 — 400 node_errors 는 노드·종류를 말하고, 실행 오류·비PNG·꺼진 서버도 VNError(조용한 성공 0)")
+def cf03(b: Box):
+    cf = b.mod("comfyui_client")
+    scratch = b.root / "scratch" / "cf03"
+    scratch.mkdir(parents=True, exist_ok=True)
+    try:
+        with comfy_mock(b, cf, mode="reject") as mock:
+            plan = cf.size_plan()
+            s = cf.settings(COMFY_CKPTS[0])
+            g = cf.build_graph("p", "n", ckpt="bogus.safetensors", seed=1, s=s, plan=plan, name="x")
+            e = raises(lambda: cf.submit(g), RuntimeError, "400 인데 통과")
+            for needle in ("노드 4", "CheckpointLoaderSimple", "Value not in list", "bogus.safetensors"):
+                has(str(e), needle, "400 안내에 노드·종류·메시지")
+            # generate_to_dir 로도 같은 사유가 올라오고, 실패가 메타·대장에 남는다
+            n_cf = len(_cf_usage(b))
+            e2 = raises(lambda: cf.generate_to_dir("p", scratch, scene_id="", quiet=True, seed=1),
+                        RuntimeError, "전부 실패인데 결과를 돌려줌")
+            has(str(e2), "CheckpointLoaderSimple", "실패 사유가 결과에 실리지 않음")
+            eq(sorted(scratch.glob("*.png")), [], "실패인데 파일이 남음")
+            entry = read_json(scratch / cf.META_NAME)["entries"][-1]
+            eq((entry["status"], entry["billable"], entry["files"]), ("failed", False, []), "실패 메타")
+            has(entry["error"], "노드 4", "메타 error 에 사유")
+            rec = _cf_usage(b)[n_cf:]
+            eq(len(rec), 1, "실패도 대장에 한 줄")
+            eq((rec[0]["ok"], rec[0]["saved"], rec[0]["billable"]), (False, 0, False), "실패 대장")
+            eq(mock.hits("/history/"), [], "거절됐는데 결과를 조회함")
+        with comfy_mock(b, cf, mode="error"):
+            e = raises(lambda: cf.generate_to_dir("p", scratch, quiet=True, seed=1), RuntimeError, "실행 오류인데 통과")
+            has(str(e), "KSampler", "실행 오류의 노드 종류")
+            has(str(e), "CUDA out of memory", "실행 오류 메시지")
+        with comfy_mock(b, cf, mode="badview") as mock3:
+            e = raises(lambda: cf.generate_to_dir("p", scratch, quiet=True, seed=1), RuntimeError, "PNG 아님인데 통과")
+            has(str(e), "PNG", "PNG 판정 안내")
+            eq(sorted(scratch.glob("*.png")), [], "PNG 가 아닌 것을 저장함")
+            ok(mock3.hits("/view"), "다운로드를 시도하지 않음")
+        # 완료라는데 결과 파일이 서버에 없다(404) — 크래시 대신 HTTP 상태를 담은 안내
+        with comfy_mock(b, cf) as mock4:
+            pid = cf.submit(cf.build_graph("p", "n", ckpt=COMFY_CKPTS[0], seed=1, s=s, plan=plan))
+            mock4.files.clear()                       # /view 가 404 를 내게
+            with patched(cf, "POLL_SEC", 0.01):
+                e = raises(lambda: cf.download(cf.wait(pid, max_sec=5, quiet=True)[0], scratch / "z.png"),
+                           RuntimeError, "404 다운로드가 통과")
+            has(str(e), "404", "HTTP 상태가 안내에 없음")
+        # 그 포트에 ComfyUI 가 아닌 것이 앉아 있다(다른 앱·프록시·TLS 포트) — 응답 첫 줄이 상태줄이
+        # 아니면 http.client.BadStatusLine 이 난다. 그것은 URLError 도 OSError 도 아니라 CLI 로
+        # traceback 이 그대로 샜다. 사용자가 할 일은 꺼진 서버와 같다 — 주소 확인이다.
+        with _rude_server(b"garbage\r\n") as bad_port, env_var("COMFYUI_URL", f"http://127.0.0.1:{bad_port}"):
+            e = raises(lambda: cf.checkpoints(refresh=True), RuntimeError,
+                       "HTTP 가 아닌 응답이 VNError 로 오지 않음(traceback 이 그대로 샌다)")
+            has(str(e), str(bad_port), "두드린 주소")
+            hasnt(str(e), "Traceback", "traceback")
+        # 서버가 꺼져 있으면 주소를 담은 연결 안내(어디를 두드렸는지 보여야 고칠 수 있다)
+        with env_var("COMFYUI_URL", DEAD_COMFY):
+            e = raises(lambda: cf.checkpoints(refresh=True), RuntimeError, "꺼진 서버")
+            has(str(e), "연결", "연결 안내")
+            has(str(e), "59996", "두드린 주소")
+            hasnt(str(e), "Traceback", "traceback")
+            rep = cf.check(online=True)
+            eq(rep["ok"], False, "온라인 점검이 꺼진 서버를 OK 로 봄")
+            ok(any("FAIL" in l and "연결" in l for l in rep["lines"]), f"점검 줄 — {rep['lines']}")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+@test("comfyui", "CF04 대기 시간 초과 — 끝나지 않는 작업은 중단·삭제 요청을 보내고 VNError(GPU 에 유령 작업 0)")
+def cf04(b: Box):
+    """폴링 간격(POLL_SEC)은 0 에 가깝게, 상한은 1초로 — 실제 600초를 기다리지 않는다.
+    진행 콜백은 매 조회마다 불려야 한다(gen_jobs 의 좌초 판정이 그 심장박동을 본다)."""
+    cf = b.mod("comfyui_client")
+    with comfy_mock(b, cf, mode="pending") as mock:
+        plan = cf.size_plan()
+        s = cf.settings(COMFY_CKPTS[0])
+        pid = cf.submit(cf.build_graph("p", "n", ckpt=COMFY_CKPTS[0], seed=1, s=s, plan=plan))
+        beats: list[tuple[float, str]] = []
+        t0 = time.monotonic()
+        with patched(cf, "POLL_SEC", 0.01):
+            e = raises(lambda: cf.wait(pid, on_progress=lambda el, st: beats.append((el, st)),
+                                       max_sec=1, quiet=True),
+                       RuntimeError, "시간 초과인데 계속 기다림")
+        took = time.monotonic() - t0
+        ok(took < 6, f"상한 1초인데 {took:.1f}초 걸림")
+        has(str(e), "시간 초과", "시간 초과 안내")
+        has(str(e), _pid6(pid), "어느 작업인지")
+        has(str(e), "timeout_sec", "늘리는 방법(매니페스트 키)")
+        ok(len(mock.hits("/history/")) >= 2, "조회를 반복하지 않음")
+        ok(len(beats) >= 2, f"진행 콜백이 {len(beats)}회 — 매 조회마다 불려야 한다")
+        ok(all(isinstance(el, float) and el >= 0 for el, _s in beats), "경과 초가 숫자가 아님")
+        ok(any(st == "렌더 중" for _el, st in beats), f"큐 상태가 진행 문구에 없음 — {beats[:3]}")
+        posts = [(p, body) for m, p, body in mock.calls if m == "POST" and p in ("/interrupt", "/queue")]
+        ok(posts, "시간 초과 뒤 중단(/interrupt)·삭제(/queue) 요청이 없음 — GPU 에 유령 작업이 남는다")
+        dels = [body.get("delete") for p, body in posts if p == "/queue"]
+        ok(any(pid in (d or []) for d in dels), f"큐 삭제 요청에 그 prompt_id 가 없음 — {dels}")
+        ok(any(p == "/interrupt" for p, _b in posts), "렌더 중인 작업인데 /interrupt 를 보내지 않음")
+        # 이미 사라진 작업의 cancel 은 조용히 넘어간다(정리 과정이 두 번째 오류를 만들지 않게)
+        cf.cancel("00000000-0000-0000-0000-000000000000")
+
+
+@test("comfyui", "CF05 크기 계획·그래프 배선·프리셋 — 1MP 기본 캔버스, 큰 목표는 hires 2단(1차의 2배까지), 부정 프롬프트 \"\"=기본, 매니페스트 명시값이 프리셋을 이긴다")
+def cf05(b: Box):
+    cf = b.mod("comfyui_client")
+
+    def target(d, minpx: int, cap: int | None = None):
+        d.setdefault("output", {}).update(aspect_ratio="2:3", min_long_edge_px=minpx)
+        ig = d.setdefault("image_generator", {})
+        if cap is None:
+            ig.pop("max_long_edge_px", None)
+        else:
+            ig["max_long_edge_px"] = cap
+
+    with env_var("COMFYUI_URL", None), manifest_patch(b, lambda d: target(d, 1024)):
+        plan = cf.size_plan()
+        eq((plan["width"], plan["height"], plan["hires"]), (832, 1248, False), "2:3 · 최소 1024 → 1MP 캔버스 한 번")
+        eq((plan["long"], plan["want"], plan["capped"]), (1248, 1024, False), "long/want/capped")
+        eq((plan["cap"], plan["cap_is_default"]), (2048, True), "상한 기본값")
+        eq((plan["base_width"], plan["base_height"]), (832, 1248), "기본 캔버스")
+        eq(plan["source"], "output.min_long_edge_px", "요청 출처")
+        eq(cf.size_warnings(plan), [], "깎이지 않았는데 경고")
+        p2 = cf.size_plan(1536)
+        eq((p2["source"], p2["hires"], p2["long"], p2["width"], p2["height"]),
+           ("--long-edge", True, 1536, 1024, 1536), "--long-edge 요청 → hires")
+        with manifest_patch(b, lambda d: target(d, 2250, 2560)):
+            plan = cf.size_plan()
+            eq(plan["hires"], True, "목표 2250 > 기본 1248 인데 hires 아님")
+            ok(plan["long"] >= 2250, f"긴 변 {plan['long']} < 2250(A3 미달)")
+            eq((plan["width"] % 8, plan["height"] % 8), (0, 0), "8의 배수 정렬")
+            eq(plan["height"], plan["long"], "2:3 세로 — 긴 변은 높이")
+            ok(plan["width"] < plan["height"], f"세로가 아님 {plan['width']}x{plan['height']}")
+            eq((plan["base_width"], plan["base_height"]), (832, 1248), "hires 라도 1차는 1MP 캔버스")
+            eq((plan["capped"], plan["cap"], plan["cap_is_default"]), (False, 2560, False), "상한 2560")
+            eq(cf.size_warnings(plan), [], "깎이지 않았는데 경고")
+        with manifest_patch(b, lambda d: target(d, 3600, 2048)):
+            plan = cf.size_plan()
+            eq((plan["long"], plan["capped"], plan["hires_capped"]), (2048, True, False), "공용 상한에 깎임")
+            w = cf.size_warnings(plan)
+            eq(len(w), 1, "절삭 경고 수")
+            for needle in ("A3", "max_long_edge_px", "3600", "2048"):
+                has(w[0], needle, "절삭 경고 내용")
+        # hires 배수 상한 — 1248 기본 캔버스에서 3600 을 한 번에 재샘플하면(2400x3600 = 8.6MP) 12GB VRAM 이
+        # 2차 KSampler 에서 OOM 으로 죽는다(VAEDecode 만 자동 타일링). 잘라 내고 무엇을 올릴지 말해야 한다.
+        with manifest_patch(b, lambda d: target(d, 3600, 4096)):
+            plan = cf.size_plan()
+            eq((plan["long"], plan["hires"], plan["capped"], plan["hires_capped"], plan["hires_cap"]),
+               (2496, True, True, True, 2496), f"hires 2배 상한이 걸리지 않음 — {plan}")
+            eq((plan["width"], plan["height"]), (1664, 2496), "2배 상한 크기")
+            ok(plan["width"] * plan["height"] <= 4_200_000,
+               f"2차 KSampler 캔버스 {plan['width']}x{plan['height']} 가 4MP 를 크게 넘음")
+            w = cf.size_warnings(plan)
+            eq(len(w), 1, "hires 상한 경고 수")
+            for needle in ("3600", "2496", "base_long_edge_px", "MakeFun", "A3"):
+                has(w[0], needle, "hires 상한 경고 내용")
+            hasnt(w[0], "max_long_edge_px", "공용 상한이 아닌데 max_long_edge_px 를 올리라고 함")
+            p3 = cf.size_plan(3000)
+            eq((p3["long"], p3["hires_capped"]), (2496, True), "--long-edge 도 hires 상한을 따른다")
+            hasnt(cf.size_warnings(p3)[0], "A3", "--long-edge 요청에 A3 경고")
+            with manifest_patch(b, lambda d: d["image_generator"]["comfyui"].__setitem__("base_long_edge_px", 1800)):
+                plan = cf.size_plan()
+                eq((plan["long"], plan["hires_capped"], plan["base_width"], plan["base_height"]),
+                   (3600, False, 1200, 1800), "base_long_edge_px 를 올리면 3600 까지 hires 로 간다")
+                eq(cf.size_warnings(plan), [], "상한 안인데 경고")
+        with manifest_patch(b, lambda d: target(d, 1024, 99999)):
+            eq(cf.size_plan()["cap"], cf.SIZE_HARD_MAX_PX, "하드 상한(4096)을 넘는 값이 그대로 쓰임")
+        # 상한이 8의 배수가 아니면 실제 상한은 내림이다(2250 → 2248) — 그런데 "2250 이상으로
+        # 올리세요" 라고 말하면 사용자는 **이미 그 값**이라 고칠 곳이 없고, 고쳐도 A3 는 계속 FAIL 한다.
+        # 권고는 실행 가능해야 한다: 다음 8의 배수(2256)를 말하고, 그대로 올리면 실제로 통과해야 한다.
+        with manifest_patch(b, lambda d: target(d, 2250, 2250)):
+            plan = cf.size_plan()
+            eq((plan["long"], plan["capped"], plan["hires_capped"]), (2248, True, False),
+               f"8의 배수가 아닌 상한 — {plan}")
+            w = cf.size_warnings(plan)[0]
+            has(w, "2256", "권고 상한이 다음 8의 배수로 올라가지 않음(이미 설정된 값을 다시 권고)")
+            hasnt(w, "2250 이상", "이미 적혀 있는 값을 올리라고 안내")
+        with manifest_patch(b, lambda d: target(d, 2250, 2256)):
+            p8 = cf.size_plan()
+            ok(p8["long"] >= 2250, f"권고대로 올렸는데 여전히 A3 미달 — {p8}")
+            eq(cf.size_warnings(p8), [], "권고대로 올렸는데 경고가 남음")
+    # SCHEMA §1.4 는 이 두 값을 **누가 읽는지** 적는다 — size_plan 이 읽으므로 ComfyUI 도 그 칸에 있어야 한다
+    doc = doc_text(b)
+    ok("comfyui_client" in doc_field_row(doc, "`aspect_ratio`", "make_grok_input"),
+       "SCHEMA §1.4 aspect_ratio 의 '읽는 쪽' 에 comfyui_client 가 없음(size_plan 이 읽는다)")
+    ok("comfyui_client" in doc_field_row(doc, "`min_long_edge_px`", "print_preflight"),
+       "SCHEMA §1.4 min_long_edge_px 의 '읽는 쪽' 에 comfyui_client 가 없음(size_plan 이 읽는다)")
+    # SCHEMA §1.3 comfyui 표 — 매니페스트로 덮을 수 있는 키는 전부 적혀 있어야 한다(코드가 정본)
+    sec13 = doc_section(doc, "### 1.3")
+    eq(sorted(k for k in cf.DEFAULTS if f"`{k}`" not in sec13), [],
+       "comfyui 설정 키인데 SCHEMA §1.3 표에 없음(적히지 않은 키는 아무도 못 쓴다)")
+
+    # 그래프 배선 — clip_skip 1 · 단일 패스
+    s1 = dict(cf.DEFAULTS)
+    plan1 = {"width": 832, "height": 1248, "base_width": 832, "base_height": 1248, "hires": False}
+    g = cf.build_graph("pos", "neg", ckpt="x.safetensors", seed=11, s=s1, plan=plan1, name="SCENE-001")
+    _graph_refs_ok(g)
+    eq(sorted(g), ["3", "4", "5", "6", "7", "8", "9"], "단일 패스 노드 집합")
+    eq(g["4"], {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x.safetensors"}}, "체크포인트 노드")
+    eq((g["6"]["inputs"]["clip"], g["7"]["inputs"]["clip"]), (["4", 1], ["4", 1]), "clip_skip 1 → CLIP 직결")
+    eq((g["6"]["inputs"]["text"], g["7"]["inputs"]["text"]), ("pos", "neg"), "긍정/부정 텍스트")
+    eq((g["5"]["inputs"]["width"], g["5"]["inputs"]["height"], g["5"]["inputs"]["batch_size"]),
+       (832, 1248, 1), "빈 잠재 캔버스")
+    k = g["3"]["inputs"]
+    eq((k["seed"], k["steps"], k["cfg"], k["sampler_name"], k["scheduler"], k["denoise"]),
+       (11, 30, 4.0, "dpmpp_2m", "karras", 1.0), "KSampler 기본값")
+    eq((k["model"], k["positive"], k["negative"], k["latent_image"]),
+       (["4", 0], ["6", 0], ["7", 0], ["5", 0]), "KSampler 배선")
+    eq(g["8"]["inputs"], {"samples": ["3", 0], "vae": ["4", 2]}, "VAEDecode 배선")
+    eq(g["9"]["inputs"], {"filename_prefix": "vn_studio/SCENE-001", "images": ["8", 0]}, "SaveImage")
+    # clip_skip 2 · hires 2단
+    s2 = {**cf.DEFAULTS, "clip_skip": 2, "hires_steps": 12, "hires_denoise": 0.35}
+    plan2 = {"width": 1504, "height": 2256, "base_width": 832, "base_height": 1248, "hires": True}
+    g2 = cf.build_graph("pos", "neg", ckpt="x", seed=11, s=s2, plan=plan2, name="a b/c!")
+    _graph_refs_ok(g2)
+    eq(sorted(g2, key=int), ["3", "4", "5", "6", "7", "8", "9", "10", "11", "12"], "hires 노드 집합")
+    eq(g2["10"], {"class_type": "CLIPSetLastLayer", "inputs": {"stop_at_clip_layer": -2, "clip": ["4", 1]}},
+       "CLIPSetLastLayer")
+    eq((g2["6"]["inputs"]["clip"], g2["7"]["inputs"]["clip"]), (["10", 0], ["10", 0]), "clip_skip 2 → 텍스트 인코더가 10 을 본다")
+    eq((g2["5"]["inputs"]["width"], g2["5"]["inputs"]["height"]), (832, 1248), "1차는 기본 캔버스")
+    eq(g2["11"]["class_type"], "LatentUpscale", "업스케일 노드")
+    eq(g2["11"]["inputs"], {"upscale_method": "bislerp", "width": 1504, "height": 2256,
+                            "crop": "disabled", "samples": ["3", 0]}, "LatentUpscale 입력")
+    k2 = g2["12"]["inputs"]
+    eq((k2["latent_image"], k2["denoise"], k2["steps"], k2["seed"]), (["11", 0], 0.35, 12, 11),
+       "2차 KSampler — 같은 시드·낮은 denoise")
+    eq(g2["8"]["inputs"]["samples"], ["12", 0], "hires 면 VAEDecode 가 2차 결과를 받는다")
+    ok(re.fullmatch(r"vn_studio/[A-Za-z0-9_-]+", g2["9"]["inputs"]["filename_prefix"]),
+       f"파일 접두어에 위험 문자 — {g2['9']['inputs']['filename_prefix']!r}")
+    raw = json.dumps(g2)
+    ok("NaN" not in raw and "Infinity" not in raw, "그래프에 JSON 이 아닌 수")
+    # 시드 범위 — KSampler 는 0 ~ 2**64-1 만 받는다. 넘는 값은 제출까지 간 뒤 400 으로 돌아오는데
+    # 그때는 그래프 전체가 오류 본문이라 무엇이 문제였는지 화면에 남지 않는다. 만들 때 막는다.
+    eq(cf.SEED_MAX, 2 ** 64 - 1, "KSampler 시드 상한")
+    eq(cf.build_graph("p", "n", ckpt="x", seed=cf.SEED_MAX, s=s1, plan=plan1)["3"]["inputs"]["seed"],
+       cf.SEED_MAX, "상한 시드가 그대로 실리지 않음")
+    for bad in (cf.SEED_MAX + 1, -1, 2 ** 70, "abc"):
+        e = raises(lambda bad=bad: cf.build_graph("p", "n", ckpt="x", seed=bad, s=s1, plan=plan1),
+                   RuntimeError, f"범위 밖 시드 {bad!r} 가 그래프에 실림(제출 뒤에야 400)")
+        has(str(e), "시드", "무엇이 문제인지")
+
+    # 프리셋 — 매니페스트가 비운 항목만 채운다
+    def silent(d):
+        cu = d["image_generator"].setdefault("comfyui", {})
+        for key in ("sampler", "scheduler", "cfg", "clip_skip", "prompt_prefix", "negative_prefix", "steps"):
+            cu.pop(key, None)
+
+    with manifest_patch(b, silent):
+        s = cf.settings("waiIllustriousSDXL_v170.safetensors")
+        eq((s["sampler"], s["scheduler"], s["cfg"], s["clip_skip"]), ("euler_ancestral", "normal", 6.0, 2),
+           "Illustrious 프리셋")
+        has(s["prompt_prefix"], "masterpiece", "프리셋 품질 접두어")
+        has(s["negative_prefix"], "worst quality", "프리셋 부정 접두어")
+        eq(s["steps"], 30, "프리셋이 건드리지 않는 항목은 기본값")
+        eq(cf.preset("Illustrious-XL-v2.safetensors")["clip_skip"], 2, "이름 판별(illustrious)")
+        eq(cf.preset("NoobAI-XL.safetensors")["cfg"], 6.0, "이름 판별(noobai)")
+        eq(cf.preset("juggernautXL_ragnarok.safetensors"), {}, "포토리얼 체크포인트에 프리셋이 붙음")
+        sj = cf.settings("juggernautXL_ragnarok.safetensors")
+        eq((sj["sampler"], sj["scheduler"], sj["cfg"], sj["clip_skip"], sj["prompt_prefix"]),
+           ("dpmpp_2m", "karras", 4.0, 1, ""), "기본 SDXL 설정")
+        once = cf._with_prefix("medium shot, girl", s["prompt_prefix"])
+        ok(once.lower().startswith("masterpiece"), f"접두어가 붙지 않음 — {once!r}")
+        eq(cf._with_prefix(once, s["prompt_prefix"]), once, "접두어가 두 번 붙음(재호출 불변 아님)")
+        neg = cf.negative_text(s, True)
+        has(neg, "worst quality", "부정 접두어")
+        eq(cf.negative_text(s, False), "", "negative=False 인데 부정 프롬프트가 남음")
+
+    def explicit(d):
+        silent(d)
+        cu = d["image_generator"]["comfyui"]
+        cu.update(cfg=5.5, sampler="dpmpp_2m_sde", steps=999, clip_skip="abc", negative_prompt="")
+
+    with manifest_patch(b, explicit):
+        s = cf.settings("waiIllustriousSDXL_v170.safetensors")
+        eq((s["cfg"], s["sampler"]), (5.5, "dpmpp_2m_sde"), "매니페스트 명시값이 프리셋에 밀림")
+        eq((s["scheduler"], s["clip_skip"]), ("normal", 2), "비워 둔 항목은 프리셋 그대로")
+        eq(s["steps"], 30, "범위 밖(999) 값이 그대로 쓰임 — 기본값으로 떨어져야 한다")
+        # negative_prompt "" 는 checkpoint "" 와 같은 뜻(기본값) — 배포 템플릿 세 벌이 전부 "" 라서, "" 가 '끔'이면
+        # 모든 새 프로젝트가 글자·말풍선 억제 없이 렌더되고 --no-negative 는 뜻을 잃는다
+        eq(s["negative_prompt"], cf.DEFAULTS["negative_prompt"], '"" 가 기본 부정 문구로 떨어지지 않음')
+        neg = cf.negative_text(s, True)
+        for needle in ("speech bubbles", "watermark", "worst quality"):
+            has(neg, needle, "기본 부정 문구 + 프리셋 접두어")
+        eq(cf.negative_text(s, False), "", "negative=False")
+    for off in (False, "none", " OFF "):
+        def switch(d, v=off):
+            explicit(d)
+            d["image_generator"]["comfyui"]["negative_prompt"] = v
+        with manifest_patch(b, switch):
+            s = cf.settings("waiIllustriousSDXL_v170.safetensors")
+            eq(s["negative_prompt"], "", f"negative_prompt={off!r} 가 '끔'이 아님")
+            neg = cf.negative_text(s, True)
+            has(neg, "worst quality", "부정 프롬프트를 꺼도 프리셋 접두어는 남는다")
+            hasnt(neg, "speech bubbles", "꺼도 기본 문구가 남음")
+            ok(not neg.endswith((",", " ")), f"접두어만 남을 때 끝 쉼표·공백 — {neg!r}")
+            eq(cf.negative_text(cf.settings("juggernautXL_ragnarok.safetensors"), True), "",
+               "프리셋 없는 체크포인트에서 끔 = 빈 문자열")
+    ok(cf.negative_off(False) and cf.negative_off("none") and not cf.negative_off("")
+       and not cf.negative_off(None) and not cf.negative_off(True), "negative_off 판정")
+    # 배포 매니페스트 세 벌 — 어느 것으로 시작해도 비-Illustrious 체크포인트에서 부정 문구가 비지 않는다
+    for rel in ("templates/manifest.json", "examples/manifest.json", "project/manifest.json"):
+        shipped = (read_json(SRC / rel).get("image_generator") or {}).get("comfyui")
+        if shipped is None and rel.startswith("project/"):
+            continue                                   # 사용자 매니페스트에 ComfyUI 블록이 없으면 볼 것이 없다
+        ok(isinstance(shipped, dict), f"{rel} 에 image_generator.comfyui 블록이 없음")
+        with manifest_patch(b, lambda d, blk=shipped: d["image_generator"].__setitem__("comfyui", dict(blk))):
+            sj = cf.settings("juggernautXL_ragnarok.safetensors")
+            has(cf.negative_text(sj, True), "speech bubbles", f"{rel} 그대로면 비-Illustrious 체크포인트의 부정 문구가 빈다")
+            eq(cf.negative_text(sj, False), "", f"{rel} --no-negative")
+
+
+@test("comfyui", "CF06 엔진 선택·설정 병합 — engine 없으면 MakeFun(구 매니페스트), 모르는 값은 MakeFun 폴백+로그, makefun 블록이 최상위를 덮는다")
+def cf06(b: Box):
+    """image_gen.active_engine 은 모르는 값을 **MakeFun 으로 떨어뜨리고 로그를 남긴다**(선택된 규칙:
+    매니페스트 오타 하나로 스튜디오 전체가 뜨지 않는 것보다 예전 동작이 낫다). 반면 요청 body 로
+    들어오는 엔진 이름(client(name))은 거절한다 — 사용자가 고른 값이 조용히 바뀌면 안 된다.
+    """
+    ig = b.mod("image_gen")
+    mk = b.mod("makefun_client")
+    cf = b.mod("comfyui_client")
+    gc = b.mod("gen_common")
+    err = ig.VNError
+    eq(ig.active_engine({}), "makefun", "engine 없음 → MakeFun(구 매니페스트 호환)")
+    eq(ig.active_engine({"image_generator": {"engine": "comfyui"}}), "comfyui", "engine comfyui")
+    eq(ig.active_engine({"image_generator": {"engine": " ComfyUI "}}), "comfyui", "대소문자·공백 관용")
+    eq(ig.active_engine({"image_generator": "broken"}), "makefun", "image_generator 가 dict 가 아님")
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    ig.log.addHandler(handler)
+    try:
+        eq(ig.active_engine({"image_generator": {"engine": "dalle"}}), "makefun", "모르는 엔진 → MakeFun 폴백")
+    finally:
+        ig.log.removeHandler(handler)
+    has(buf.getvalue(), "dalle", "모르는 엔진 값이 로그에 남지 않음(조용한 폴백)")
+    # 같은 오타를 매번 경고하면 안 된다 — 이 함수는 webapp.state() 가 부르고 스튜디오가 주기적으로
+    # 폴링한다. 오타 하나가 logs/webapp.log 를 같은 줄로 채우면 진짜 사고가 그 사이에 묻힌다.
+    buf2 = io.StringIO()
+    h2 = logging.StreamHandler(buf2)
+    ig.log.addHandler(h2)
+    try:
+        for _ in range(5):
+            eq(ig.active_engine({"image_generator": {"engine": "midjourney"}}), "makefun", "모르는 엔진 폴백")
+        eq(ig.active_engine({"image_generator": {"engine": "stablehorde"}}), "makefun", "다른 오타도 폴백")
+    finally:
+        ig.log.removeHandler(h2)
+    lines = [l for l in buf2.getvalue().splitlines() if l.strip()]
+    eq(len([l for l in lines if "midjourney" in l]), 1,
+       f"같은 값을 여러 번 경고(상태 폴링이 로그를 채운다) — {lines[:3]}")
+    eq(len([l for l in lines if "stablehorde" in l]), 1, "값이 바뀌면 한 번은 말해야 한다")
+    e = raises(lambda: ig.client("dalle"), err, "요청 body 의 모르는 엔진이 통과")
+    has(str(e), "comfyui", "가능한 엔진 안내")
+    ok(ig.client("comfyui") is ig.comfyui_client and ig.client("makefun") is ig.makefun_client, "client() 매핑")
+    eq((ig.label("comfyui"), ig.label("makefun"), ig.label("")), ("ComfyUI", "MakeFun", ""), "라벨")
+    eq(sorted(ig.ENGINES), ["comfyui", "makefun"], "ENGINES")
+    eq(ig.configured_engines({"image_generator": {"engine": "comfyui", "comfyui": {}, "makefun": {}}}),
+       ["comfyui", "makefun"], "두 블록 → 기본 엔진이 맨 앞")
+    eq(ig.configured_engines({"image_generator": {"engine": "makefun", "comfyui": {"checkpoint": ""}, "makefun": {}}}),
+       ["makefun", "comfyui"], "MakeFun 기본 + ComfyUI 보조")
+    eq(ig.configured_engines({"image_generator": {"model": "a2e", "api": {"base_url": "https://makefun.ai"}}}),
+       ["makefun"], "구 매니페스트 → MakeFun 하나")
+    eq(ig.configured_engines({"image_generator": {"engine": "comfyui"}}), ["comfyui"], "ComfyUI 만")
+    eq(ig.progress_text("comfyui", "생성", 12.4, "렌더 중"), "ComfyUI 생성 중… 12초 경과 · 렌더 중", "진행 문구")
+    eq(ig.progress_text("makefun", "재수령", 3, ""), "MakeFun 재수령 중… 3초 경과 · 조회중", "상태 없을 때 기본 문구")
+    # engine_info — 비밀값 없음 · url 은 host:port 만
+    with env_var("COMFYUI_URL", None), env_var(mk.TOKEN_ENV, None):
+        info = ig.engine_info(b.manifest())
+        eq((info["engine"], info["billable"], info["mf_token"]), ("comfyui", False, False), "engine_info 기본")
+        eq(info["url"], "127.0.0.1:8188", "url 은 host:port 만")
+        eq(info["engines"], ["comfyui", "makefun"], "engines")
+        eq(info["provider"], "ComfyUI", "provider 표기")
+        ok(info["model"], "model 이 비어 있음")
+    with env_var(mk.TOKEN_ENV, "selftest-token-value"):
+        info = ig.engine_info({"image_generator": {"model": "a2e", "api": {"base_url": "https://makefun.ai"}}})
+        eq((info["engine"], info["billable"], info["mf_token"], info["url"]),
+           ("makefun", True, True, "makefun.ai"), "구 매니페스트 engine_info")
+        hasnt(json.dumps(info), "selftest-token-value", "토큰 값이 state 로 새어 나감")
+        h = ig.health("makefun")
+        eq((h["ok"], h["billable"], h["checkpoints"]), (True, True, []), "MakeFun health = 토큰 유무만")
+        hasnt(json.dumps(h), "selftest-token-value", "토큰 값이 health 로 새어 나감")
+    # COMFYUI_URL 이 매니페스트를 이긴다 · 형식이 틀리면 VNError
+    with env_var("COMFYUI_URL", "http://10.0.0.5:8188/"):
+        eq(cf.base_url(), "http://10.0.0.5:8188", "환경변수 우선 + 끝 슬래시 정리")
+    # basic-auth 리버스 프록시 주소(user:pw@) — 화면(state)·상태(health)·연결 오류 문구·--check 어디에도 비밀번호 0
+    with env_var("COMFYUI_URL", "http://vn:secretpw@127.0.0.1:59996"):
+        info = ig.engine_info(b.manifest())
+        eq(info["url"], "127.0.0.1:59996", "url 에 userinfo 가 남음")
+        hasnt(json.dumps(info), "secretpw", "프록시 비밀번호가 state 로 새어 나감")
+        hd = ig.health("comfyui")
+        eq(hd["ok"], False, "꺼진 주소인데 ok")
+        hasnt(json.dumps(hd), "secretpw", "프록시 비밀번호가 health(연결 오류 문구)로 새어 나감")
+        has(hd["detail"], "127.0.0.1:59996", "연결 오류 문구에 host:port")
+        eq(cf.display_url(), "http://127.0.0.1:59996", "display_url")
+        hasnt("\n".join(cf.check()["lines"]), "secretpw", "--check 출력에 비밀번호")
+    eq(ig._netloc("https://u:p@[::1]:8188/x?y=1"), "[::1]:8188", "IPv6 host:port")
+    eq(ig._netloc("not a url"), "", "주소가 아니면 빈 문자열")
+    eq(b.mod("vn_core").host_port("http://a:b@h"), "h", "포트 없는 주소")
+    with env_var("COMFYUI_URL", "ftp://x"):
+        raises(cf.base_url, RuntimeError, "http(s) 가 아닌 주소가 통과")
+    with env_var("COMFYUI_URL", None):
+        eq(cf.base_url(), "http://127.0.0.1:8188", "매니페스트 주소")
+        with manifest_patch(b, lambda d: d["image_generator"]["comfyui"]["api"].__setitem__("base_url", "http://192.168.0.9:8188")):
+            eq(cf.base_url(), "http://192.168.0.9:8188", "매니페스트 comfyui.api.base_url 이 읽히지 않음")
+    # makefun_client._cfg — 최상위 ⊕ makefun 블록(블록이 이김), comfyui 블록은 섞지 않는다
+    cfg = mk._cfg()
+    eq(cfg.get("model"), "a2e", "makefun.model 이 병합되지 않음")
+    eq(cfg["api"]["base_url"], "https://makefun.ai", "makefun.api.base_url")
+    eq(cfg["api"]["token_env"], mk.TOKEN_ENV, "makefun.api.token_env")
+    ok("comfyui" not in cfg and "makefun" not in cfg, f"블록 자체가 남아 있음 — {sorted(cfg)}")
+    eq(cfg.get("engine"), "comfyui", "공용 키(engine)가 병합에서 빠짐")
+    eq(mk.base_url(), "https://makefun.ai", "base_url")
+
+    def clash(d):
+        top = d["image_generator"]
+        top["model"] = "top-level"
+        top["makefun"]["model"] = "sub-block"
+        top["max_long_edge_px"] = 1600
+
+    with manifest_patch(b, clash):
+        c = mk._cfg()
+        eq(c["model"], "sub-block", "makefun 블록이 최상위를 덮지 않음")
+        eq(c["max_long_edge_px"], 1600, "최상위 공용 키가 사라짐")
+        eq(mk._cap_px(), 1600, "MakeFun 상한이 공용 키를 보지 않음")
+        eq(cf._cap_px(), 1600, "ComfyUI 상한이 공용 키를 보지 않음")
+
+    def legacy(d):
+        top = d["image_generator"]
+        for key in ("makefun", "comfyui", "engine"):
+            top.pop(key, None)
+        top["model"] = "seedream-5.0-pro"
+        top["api"] = {"base_url": "https://legacy.example", "token_env": mk.TOKEN_ENV}
+
+    with manifest_patch(b, legacy):
+        c = mk._cfg()
+        eq(c["model"], "seedream-5.0-pro", "구 매니페스트 최상위 model 이 무시됨")
+        eq(mk.base_url(), "https://legacy.example", "구 매니페스트 최상위 api 가 무시됨")
+        eq(ig.active_engine(b.manifest()), "makefun", "구 매니페스트인데 MakeFun 이 아님")
+        eq(ig.configured_engines(b.manifest()), ["makefun"], "구 매니페스트에 ComfyUI 가 끼어듦")
+    # 결과형·메타 규약은 gen_common 한 벌 — 두 클라이언트가 같은 객체를 가리킨다
+    ok(mk.GenResult is cf.GenResult, "두 클라이언트의 GenResult 가 다른 클래스")
+    ok(mk.write_gen_meta is cf.write_gen_meta, "두 클라이언트의 write_gen_meta 가 다른 함수")
+    eq((mk.META_NAME, cf.META_NAME), (gc.META_NAME, gc.META_NAME), "META_NAME")
+    eq(mk.META_MAX_ENTRIES, gc.META_MAX_ENTRIES, "META_MAX_ENTRIES")
+    r = gc.GenResult([Path("a.png")], warnings=["w"], task_ids=["t"])
+    ok(isinstance(r, list) and len(r) == 1, "GenResult 는 list 여야 한다(gen_jobs 가 list 로 받는다)")
+    eq((r.warnings, r.task_ids), (["w"], ["t"]), "GenResult 부가 정보")
+    eq((cf.TOKEN_ENV, cf.ENGINE, cf.LABEL), ("", "comfyui", "ComfyUI"), "comfyui_client 상수")
+    eq(cf.USAGE_LOG.name, "comfyui_usage.jsonl", "무료 대장 파일명")
+    ok(cf.USAGE_LOG != mk.USAGE_LOG, "두 엔진의 대장이 같은 파일(과금 합산이 어긋난다)")
+
+
+@test("comfyui", "CF07 웹 라우트 — /api/gen-image 가 image_gen 을 거쳐 엔진 이름이 든 진행 문구를 내고, 모르는 엔진은 거절 · /api/image-engine · /api/state.image")
+def cf07(b: Box):
+    """라우트는 in-process 로 부른다(W32·W33 과 같은 방식). 렌더는 모의 ComfyUI 가 받고,
+    MakeFun 경로는 대역으로 갈아끼운다 — 네트워크로 나가는 유료 호출은 0회다.
+    """
+    wa, route = _route(b, "/api/gen-image", "이미지 생성을 웹에서 부를 수 없다")
+    calls = func_calls(b, "webapp", route.__name__)
+    ok(any(c.startswith("image_gen.") for c in calls), f"생성 라우트가 image_gen 을 거치지 않음 — {sorted(calls)}")
+    for direct in ("makefun_client.", "comfyui_client."):
+        ok(not any(c.startswith(direct) for c in calls),
+           f"생성 라우트가 {direct}* 를 직접 부름(엔진 선택이 두 곳이 된다) — {sorted(calls)}")
+    ok(any(c.startswith("gen_jobs.") for c in calls), "생성 라우트가 gen_jobs 관문을 지나지 않음")
+    ok("threading.Thread" not in calls, "라우트가 스레드를 직접 띄움")
+    cf = wa.image_gen.comfyui_client          # 라우트가 실제로 쓰는 인스턴스(b.mod 사본과 다르다)
+    notes: list[str] = []
+    real_note = wa.gen_jobs.note
+
+    def spy(sid, message, running=True):
+        notes.append(str(message))
+        return real_note(sid, message, running)
+
+    with comfy_mock(b, cf, delay_polls=2) as mock, cli_scene(b, "PROMPT") as sid, \
+            patched(wa.gen_jobs, "note", spy), patched(cf, "POLL_SEC", 0.01):
+        # (1) 모르는 엔진 → VNError · 선점 안 잡힘 · 서버 요청 0
+        e = raises(lambda: route({"scene_id": sid, "n": 1, "engine": "bogus"}), RuntimeError, "모르는 엔진 통과")
+        has(str(e), "엔진", "무엇이 틀렸는지")
+        eq(wa.gen_jobs.status(sid)["running"], False, "거절됐는데 선점이 잡힘")
+        eq(mock.prompts(), [], "거절됐는데 제출됨")
+        # (2) engine 생략 = 매니페스트 기본(comfyui) · 동기 실행 → 등록·검사까지
+        with quiet():
+            out = route({"scene_id": sid, "n": 1, "sync": True})
+        eq(out.get("auto"), "PASS", f"자동 검사 — {out}")
+        eq(out.get("count"), 1, f"후보 수 — {out}")
+        ok(all(str(n).startswith("cf_") for n in out.get("generated", [])), f"생성 파일 — {out.get('generated')}")
+        sc = b.scene(sid)
+        eq(sc["status"], "REVIEW_HUMAN", "등록 뒤 상태")
+        eq(sc["prompt"]["external_generator"], "ComfyUI", "출처 기록")
+        ok(any("ComfyUI 생성 중…" in n and "초 경과" in n for n in notes),
+           f"진행 문구에 엔진 이름·경과가 없음 — {notes}")
+        ok(any("ComfyUI" in n and "요청 중" in n for n in notes), f"요청 시작 문구 — {notes}")
+        ok(not any("MakeFun" in n for n in notes), f"ComfyUI 경로인데 MakeFun 문구 — {notes}")
+        eq(wa.gen_jobs.status(sid)["running"], False, "끝났는데 선점이 남음")
+        # (3) engine 명시 · 백그라운드 — 즉시 응답의 문구에 엔진 라벨, 끝나면 완료
+        notes.clear()
+        with quiet():
+            res = route({"scene_id": sid, "n": 1, "engine": "comfyui"})
+            eq(res.get("started"), True, f"백그라운드 응답 — {res}")
+            msg = _settle(wa, sid, 15)
+        has(str(res.get("message", "")), "ComfyUI 생성 중", "즉시 응답 문구")
+        has(msg, "완료", f"백그라운드 결과 문구 — {msg}")
+        eq(len(b.scene(sid)["assets"]["raw_images"]), 2, "두 번째 렌더가 등록되지 않음")
+        n_prompt = len(mock.prompts())
+        # (4) makefun 을 고르면 MakeFun 경로(대역)로 간다 — ComfyUI 에는 아무것도 가지 않는다
+        seen: list[tuple] = []
+
+        def fake_mf(sid_, n=1, **kw):
+            seen.append((sid_, n, sorted(kw)))
+            out_ = b.root / "images" / "raw" / sid_ / "mf_fake00_1.png"
+            write_png(out_, 832, 1248)
+            return wa.makefun_client.GenResult([out_])
+
+        with patched(wa.makefun_client, "generate_for_scene", fake_mf), \
+                patched(wa.makefun_client, "_API", _NoNet("_API")), patched(wa.makefun_client, "_DL", _NoNet("_DL")),                 quiet():
+            out2 = route({"scene_id": sid, "n": 1, "engine": "makefun", "sync": True})
+        eq(len(seen), 1, "MakeFun 경로가 불리지 않음")
+        eq((seen[0][0], seen[0][1]), (sid, 1), "MakeFun 호출 인자")
+        ok("on_progress" in seen[0][2], "진행 콜백이 MakeFun 경로에 전달되지 않음")
+        eq(out2.get("count"), 3, f"MakeFun 결과 등록 — {out2}")
+        eq(len(mock.prompts()), n_prompt, "MakeFun 을 골랐는데 ComfyUI 에 제출됨")
+        # (5) APPROVED 는 어느 엔진이든 거절(표준 문구)
+    with comfy_mock(b, cf) as mock2, cli_scene(b, "APPROVED") as sid2:
+        e = raises(lambda: route({"scene_id": sid2, "engine": "comfyui"}), RuntimeError, "APPROVED 인데 통과")
+        has(str(e), "APPROVED", "승인 잠금 문구")
+        eq(mock2.prompts(), [], "APPROVED 인데 제출됨")
+        # (6) /api/image-engine — 모의 서버의 버전·체크포인트 · MakeFun 은 토큰 유무만(네트워크 0)
+        wa2, health = _route(b, "/api/image-engine", "엔진 상태를 웹에서 볼 수 없다")
+        h = health({"engine": "comfyui"})
+        eq((h["engine"], h["ok"], h["billable"]), ("comfyui", True, False), f"ComfyUI health — {h}")
+        eq(h["checkpoints"], list(COMFY_CKPTS), "체크포인트 목록")
+        has(h["detail"], "0.35.0-mock", "서버 버전")
+        has(h["detail"], mock2.url.split("//", 1)[1], "어느 주소인지")
+        ok(h.get("model"), "model 비어 있음")
+        eq(health({})["engine"], "comfyui", "engine 생략 → 매니페스트 기본")
+        with env_var(wa.makefun_client.TOKEN_ENV, None), patched(wa.makefun_client, "_API", _NoNet("_API")):
+            hm = health({"engine": "makefun"})
+        eq((hm["engine"], hm["ok"], hm["billable"], hm["checkpoints"]), ("makefun", False, True, []), f"MakeFun health — {hm}")
+        has(hm["detail"], wa.makefun_client.TOKEN_ENV, "무엇을 설정해야 하는지")
+        raises(lambda: health({"engine": "bogus"}), RuntimeError, "모르는 엔진 상태 조회가 통과")
+        with manifest_patch(b, lambda d: d["image_generator"]["comfyui"].__setitem__("checkpoint", "missing.safetensors")):
+            hx = health({"engine": "comfyui"})
+        eq(hx["ok"], False, "지정 체크포인트가 없는데 ok")
+        has(hx["detail"], "missing.safetensors", "어느 체크포인트가 없는지")
+        # (7) /api/state.image — 엔진·host:port·엔진 목록, mf_token 은 그대로 불리언
+        st = wa.state()
+        img = st.get("image")
+        ok(isinstance(img, dict), f"state.image 가 없음 — {sorted(st)}")
+        eq(img["engine"], "comfyui", "state.image.engine")
+        eq(img["url"], mock2.url.split("//", 1)[1], "state.image.url 은 host:port 만")
+        eq(img["engines"], ["comfyui", "makefun"], "state.image.engines")
+        eq(img["billable"], False, "state.image.billable")
+        ok(isinstance(st.get("mf_token"), bool), "mf_token 불리언이 사라짐(구 화면 호환)")
+        eq(img["mf_token"], st["mf_token"], "image.mf_token ≠ mf_token")
+    # 꺼진 서버 → ok=false + 연결 안내(크래시 아님)
+    with env_var("COMFYUI_URL", DEAD_COMFY):
+        hd = health({"engine": "comfyui"})
+        eq(hd["ok"], False, "꺼진 서버인데 ok")
+        has(hd["detail"], "연결", "연결 안내")
+
+
+@test("comfyui", "CF08 doctor — '이미지 엔진' 절이 기본 엔진·응답·렌더 계획을 말하고, ComfyUI 가 꺼져 있어도 크래시 없이 경고로 안내한다")
+def cf08(b: Box):
+    env = dict(b.env)
+    env["LOCAL_LLM_URL"] = "http://svc:secretpw@127.0.0.1:59997/v1"
+    env["COMFYUI_URL"] = DEAD_COMFY.replace("http://", "http://vn:secretpw@")   # basic-auth 프록시 모양
+    env.pop("MAKEFUN_API_TOKEN", None)
+
+    def rows_of(out: str) -> tuple[dict, dict]:
+        data, _n = json.JSONDecoder().raw_decode(out[out.index("{"):])
+        return data, {(r["section"], r["name"]): r for r in data["results"]}
+
+    rc, out = b.run("tools/doctor.py", "--json", env=env)
+    hasnt(out, "Traceback", "traceback")
+    ok(rc in (0, 1), f"rc={rc} — {out[:300]}")
+    data, rows = rows_of(out)
+    sec = {k[1]: r for k, r in rows.items() if k[0] == "이미지 엔진"}
+    ok(sec, f"'이미지 엔진' 절이 없음 — 절: {sorted({k[0] for k in rows})}")
+    ok("기본 엔진" in sec, f"기본 엔진 행 없음 — {sorted(sec)}")
+    has(sec["기본 엔진"]["detail"], "ComfyUI", "기본 엔진 이름")
+    has(sec["기본 엔진"]["detail"], "무료", "과금 여부")
+    has(sec["기본 엔진"]["detail"], "MakeFun", "보조 엔진 표기")
+    ok("ComfyUI 응답" in sec, f"응답 행 없음 — {sorted(sec)}")
+    eq(sec["ComfyUI 응답"]["level"], "경고", "꺼진 ComfyUI 가 경고가 아님")
+    has(sec["ComfyUI 응답"]["detail"], "연결", "연결 안내")
+    has(sec["ComfyUI 응답"]["fix"], "comfyui_client.py --check", "고치는 방법")
+    ok("렌더 계획" in sec, f"렌더 계획 행 없음 — {sorted(sec)}")
+    has(sec["렌더 계획"]["detail"], "832x1248", "렌더 계획 크기")
+    envs = {k[1]: r for k, r in rows.items() if k[0] == "환경변수"}
+    tok = next((r for n, r in envs.items() if n.startswith("MAKEFUN_API_TOKEN")), None)
+    ok(tok is not None, f"MAKEFUN_API_TOKEN 행 없음 — {sorted(envs)}")
+    eq(tok["level"], "OK", "ComfyUI 가 기본인데 MakeFun 토큰 부재가 경고")
+    ok("COMFYUI_URL" in envs, f"COMFYUI_URL 행 없음 — {sorted(envs)}")
+    has(envs["COMFYUI_URL"]["detail"], "59996", "환경변수 주소(host:port)")
+    has(envs["LOCAL_LLM_URL"]["detail"], "59997", "환경변수 주소(host:port)")
+    hasnt(out, "selftest-token", "토큰 값")
+    hasnt(out, "secretpw", "주소의 user:pw@ 가 진단(JSON)에 새어 나감")
+    # 사람용 출력에도 절 제목과 엔진 이름이 보인다
+    rc2, out2 = b.run("tools/doctor.py", env=env)
+    hasnt(out2, "Traceback", "traceback(사람용)")
+    hasnt(out2, "secretpw", "주소의 user:pw@ 가 진단(사람용)에 새어 나감")
+    has(out2, "[이미지 엔진]", "절 제목")
+    has(out2, "ComfyUI", "엔진 이름")
+    # 기본 엔진이 MakeFun 인 매니페스트 → 토큰 행(경고) · ComfyUI 응답 행은 없다
+    with manifest_patch(b, lambda d: d["image_generator"].__setitem__("engine", "makefun")):
+        rc3, out3 = b.run("tools/doctor.py", "--json", env=env)
+    hasnt(out3, "Traceback", "traceback(MakeFun)")
+    _d3, rows3 = rows_of(out3)
+    sec3 = {k[1]: r for k, r in rows3.items() if k[0] == "이미지 엔진"}
+    has(sec3["기본 엔진"]["detail"], "MakeFun", "기본 엔진 MakeFun")
+    has(sec3["기본 엔진"]["detail"], "유료", "과금 표기")
+    ok("MakeFun 토큰" in sec3, f"토큰 행 없음 — {sorted(sec3)}")
+    eq(sec3["MakeFun 토큰"]["level"], "경고", "토큰 없는 MakeFun 기본이 경고가 아님")
+    ok("ComfyUI 응답" not in sec3, "MakeFun 기본인데 ComfyUI 를 두드림")
+    envs3 = {k[1]: r for k, r in rows3.items() if k[0] == "환경변수"}
+    tok3 = next((r for n, r in envs3.items() if n.startswith("MAKEFUN_API_TOKEN")), None)
+    eq(tok3["level"], "경고", "MakeFun 기본인데 토큰 부재가 경고가 아님")
 
 
 # ============================================================ 백업 · 복원
@@ -3428,6 +4512,87 @@ def j04(b: Box):
         has(html, m, "런타임 일부만 인라인됨")
     for api in BANNED_DOM:
         eq(html.count(api), 0, f"감상본이 {api} 사용")
+
+
+def _js_funcs(src: str, *names: str) -> str:
+    """studio.js 에서 함수 정의 몇 개만 떼어 낸다 — 브라우저 없이 node 로 불러 보기 위해.
+
+    이 파일의 서식 규약(정의는 열 0 에서 시작하고 이어지는 줄은 공백으로 시작한다)에 기댄다.
+    앵커를 못 찾으면 조용히 통과하지 않고 실패한다(이름을 바꿨다면 이 검사도 함께 고칠 자리다).
+    """
+    lines = src.splitlines()
+    tops = [i for i, l in enumerate(lines) if l and not l[0].isspace()]
+    out = []
+    for name in names:
+        head = next((i for i in tops
+                     if re.match(rf"(async\s+)?function\s+{re.escape(name)}\s*\(", lines[i])), None)
+        if head is None:
+            raise Failed(f"studio.js 에서 {name}() 정의를 찾지 못했습니다 — 이름을 바꿨다면 이 검사도 고치세요")
+        end = next((i for i in tops if i > head), len(lines))
+        out.append("\n".join(lines[head:end]))
+    return "\n".join(out)
+
+
+def _node_json(b: Box, code: str, label: str) -> dict:
+    """작은 JS 조각을 node 로 실행하고 마지막 줄의 JSON 을 돌려준다(DOM 없이 함수 단위 확인)."""
+    node = shutil.which("node")
+    if not node:
+        raise Skip("node 없음 — JS 동작 검사 생략")
+    tmp = b.root / f"_run_{label}.js"
+    tmp.write_text(code, encoding="utf-8")
+    proc = subprocess.run([node, str(tmp)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    tmp.unlink(missing_ok=True)
+    eq(proc.returncode, 0, f"{label} 실행 실패 — {(proc.stderr or proc.stdout)[:400]}")
+    body = [l for l in (proc.stdout or "").splitlines() if l.strip()]
+    ok(body, f"{label} 이 아무것도 내지 않음")
+    return json.loads(body[-1])
+
+
+@test("js", "J05 MakeFun 보조 버튼 — 토큰이 없으면 눌리지 않는다(유료 확인창 뒤의 확정 실패 차단)")
+def j05(b: Box):
+    """매니페스트에 makefun 블록만 있으면 보조 버튼은 생긴다. 그런데 MAKEFUN_API_TOKEN 이 서버에
+    없으면 누르는 순간 '유료 호출입니다. 진행할까요?' 를 묻고 **확인한 뒤에** 실패한다 —
+    사용자는 돈이 나갔는지조차 알 수 없다. 토큰이 없으면 이유를 달고 눌리지 않아야 한다.
+    """
+    src = b.p("tools/studio.js")
+    if not src.exists():
+        raise Gap("tools/studio.js 아직 없음 — 스튜디오 스크립트 분리 대기")
+    funcs = _js_funcs(src.read_text(encoding="utf-8"),
+                      "imgEngine", "imgEngines", "mfToken", "scBtnGenImageAlt")
+    harness = """
+let S={};let confirmed=0,started=0;
+function confirm(){confirmed++;return true}
+function el(tag,cls,txt){return {tag:tag,cls:cls,textContent:txt,title:"",disabled:false,onclick:null}}
+function runGenImage(){started++}
+__FUNCS__
+function probe(state){S=state;confirmed=0;started=0;
+ const b=scBtnGenImageAlt({scene_id:"SCENE-001"},{});
+ if(b&&b.onclick&&!b.disabled)b.onclick();
+ return {present:!!b,label:b?b.textContent:"",title:b?b.title:"",
+         disabled:!!(b&&b.disabled),confirmed:confirmed,started:started}}
+const two={engine:"comfyui",engines:["comfyui","makefun"]};
+console.log(JSON.stringify({
+ noToken:probe({image:Object.assign({},two,{mf_token:false})}),
+ token:probe({image:Object.assign({},two,{mf_token:true})}),
+ free:probe({image:{engine:"makefun",engines:["makefun","comfyui"],mf_token:true}}),
+ alone:probe({image:{engine:"comfyui",engines:["comfyui"],mf_token:true}})}));
+""".replace("__FUNCS__", funcs)
+    r = _node_json(b, harness, "studio_alt")
+    no = r["noToken"]
+    ok(not no["present"] or no["disabled"],
+       f"토큰이 없는데 누를 수 있는 MakeFun 버튼이 붙는다 — {no}")
+    eq((no["confirmed"], no["started"]), (0, 0), f"토큰 없이 과금 확인창·생성 요청 — {no}")
+    if no["present"]:
+        has(no["title"], "MAKEFUN_API_TOKEN", "왜 눌리지 않는지 말하지 않음")
+    yes = r["token"]
+    ok(yes["present"] and not yes["disabled"], f"토큰이 있는데 보조 버튼이 막혔다 — {yes}")
+    has(yes["label"], "MakeFun", "유료 버튼 표기")
+    eq((yes["confirmed"], yes["started"]), (1, 1), f"유료 확인 한 번 뒤 생성 — {yes}")
+    free = r["free"]
+    ok(free["present"] and not free["disabled"], f"무료(ComfyUI) 보조 버튼이 막혔다 — {free}")
+    eq((free["confirmed"], free["started"]), (0, 1), f"무료 경로가 과금 확인창을 띄운다 — {free}")
+    eq(r["alone"]["present"], False, "엔진이 하나뿐인데 보조 버튼이 붙는다")
 
 
 # ============================================================ ux (폰 손짓 · 가독성)
@@ -4275,9 +5440,36 @@ def u15(b: Box):
         ok(direct not in calls, f"생성 클라이언트가 장면 파일을 직접 씀({direct})")
 
 
+@test("unit", "U16 console_guard — 리다이렉트된 출력은 UTF-8(로그 파일에 cp949 가 섞이지 않게)")
+def u16(b: Box):
+    """``start_studio.ps1 > log.txt`` 처럼 출력을 파일로 돌리면 파이썬은 로캘 인코딩으로 쓴다 —
+    한국어 윈도우면 cp949 다. 같은 파일에 PowerShell 이 UTF-8 로 쓴 줄과 섞이면 한쪽이 반드시
+    깨진다(실제로 '웹 스튜디오 주소' 가 '?? ??Ʃ??? ????' 로 남았다). 이 저장소의 파일은 전부
+    UTF-8 이므로, 콘솔(tty)이 아닌 스트림은 UTF-8 로 맞춘다(콘솔은 코드페이지를 그대로 둔다).
+    """
+    korean = "웹 스튜디오 주소"
+    out = b.root / "_u16_stdout.txt"
+    env = {k: v for k, v in b.env.items() if k != "PYTHONIOENCODING"}
+    env["PYTHONUTF8"] = "0"          # UTF-8 모드로 통과해 버리지 않게 로캘 인코딩을 강제한다
+    code = ("import sys; sys.path.insert(0, 'tools'); import vn_core; "
+            f"print({ascii(korean)}, sys.stdout.encoding)")
+    try:
+        with out.open("wb") as fh:                 # 파이프가 아니라 **파일**로 — 실제 사고와 같은 모양
+            proc = subprocess.run([PY, "-c", code], cwd=b.root, stdout=fh,
+                                  stderr=subprocess.PIPE, env=env)
+        eq(proc.returncode, 0, f"자식 프로세스 실패 — {proc.stderr.decode('utf-8', 'replace')[:300]}")
+        raw = out.read_bytes()
+        text = raw.decode("utf-8", "replace")
+        eq(text.count("�"), 0, f"UTF-8 로 읽을 수 없는 바이트가 섞임 — {raw[:48]!r}")
+        has(text, korean, f"한글이 UTF-8 로 왕복하지 않음 — {raw[:48]!r}")
+        has(text.lower(), "utf-8", f"리다이렉트된 stdout 이 UTF-8 이 아님 — {text.strip()!r}")
+    finally:
+        out.unlink(missing_ok=True)
+
+
 # ============================================================ 러너
 GROUPS = ["meta", "arch", "pipeline", "template", "checker", "webapp", "auth", "makefun",
-          "backup", "print", "viewer", "js", "ux", "security", "unit"]
+          "comfyui", "backup", "print", "viewer", "js", "ux", "security", "unit"]
 
 # --list 에서 각 그룹이 무엇을 잠그는지 한 줄로 보여 준다(부분 실행을 고르기 쉽게).
 GROUP_NOTE = {
@@ -4289,6 +5481,7 @@ GROUP_NOTE = {
     "webapp": "웹 스튜디오 라우트·잠금 (서버 기동)",
     "auth": "폰 접속 PIN·토큰",
     "makefun": "이미지 생성·업로드·확대·크레딧 클라이언트 (모의 · 실호출 0 · 과금 0)",
+    "comfyui": "로컬 렌더 클라이언트·엔진 선택기·엔진 라우트 (모의 ComfyUI 서버 · GPU 0)",
     "backup": "스냅샷·복원·zip slip",
     "print": "인화 규격·마스터",
     "viewer": "감상본 데이터·분기",
