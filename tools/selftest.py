@@ -1128,6 +1128,13 @@ def l06(b: Box):
         listed = sorted(w.strip() for w in raw.replace("\n", " ").split("/") if w.strip())
         eq(listed, sorted(std), f"SCHEMA §2.2 의 camera.{label} 표준 어휘 ≠ scene_lint.STD_{label.upper()}S")
 
+    # (3b) §2.3 거리 태그 — prompt_build.SHOT_DISTANCE 가 정본이다
+    #      표만 고치고 코드를 두면(또는 반대면) '넓게 찍으라' 는 지시가 조용히 빈말이 된다.
+    dist_row = doc_line(doc, "prompt_build.SHOT_DISTANCE")
+    for shot, cue in b.mod("prompt_build").SHOT_DISTANCE.items():
+        has(dist_row, f"`{shot}`", f"SCHEMA §2.3 거리 태그 표에 샷 {shot!r} 가 없음")
+        has(dist_row, f"`{cue}`", f"SCHEMA §2.3 거리 태그 표에 태그 {cue!r} 가 없음")
+
     # (4) §2.6 자산 — 확장자 목록과 task 보존 개수
     exts = {n for n in doc_names(doc_line(doc, "허용 확장자")) if n.startswith(".")}
     eq(sorted(exts), sorted(vc.IMAGE_EXTS), "SCHEMA §2.6 허용 확장자 ≠ vn_core.IMAGE_EXTS")
@@ -5863,6 +5870,23 @@ def u17(b: Box):
         ok(so.has_composition_cue(text), "완성된 프롬프트에 인원수 단서가 없음")
         ok(text.index("1girl") < text.index(anchor_g), "인원수 태그가 앵커 뒤에 옴(묘사보다 앞에 와야 한다)")
         hasnt(text, "two-shot shot", "샷 표기가 'shot shot' 으로 겹침")
+
+        # 넓은 컷의 **거리 태그** — 샷 이름만으로는 거리가 지켜지지 않았다(실측 6장 중 1장,
+        # 프로덕션 0/3). 태그 하나가 3/3 으로 바꿨으므로 그 한 토큰과 그 **자리**를 잠근다.
+        # 좁은 컷에 새어 들어가면 연출 의도가 뒤집히므로 그쪽도 함께 잠근다.
+        has(pb._shot_phrase("wide"), "wide shot, full body", "넓은 컷에 거리 태그가 없다")
+        has(pb._shot_phrase("extreme-wide"), "full body, from a distance",
+            "가장 넓은 컷에 거리 태그가 없다")
+        eq(pb._shot_phrase("close-up"), "close-up shot", "좁은 컷에 거리 태그가 붙었다")
+        eq(pb._shot_phrase("medium"), "medium shot", "중간 컷에 거리 태그가 붙었다")
+        wide = pb.compose_image_prompt(dict(sc, camera={"shot": "wide", "angle": "eye-level"}),
+                                       action="walking side by side")
+        has(wide, "wide shot, full body", "넓은 컷 프롬프트에 거리 태그가 없다")
+        ok(wide.index("full body") < wide.index("1girl"),
+           "거리 태그가 구도 태그 뒤로 밀렸다 — 실측에서 그 자리는 두 번째 인물을 지웠다")
+        hasnt(pb.compose_image_prompt(dict(sc, camera={"shot": "close-up"}),
+                                      action="walking side by side"),
+              "full body", "좁게 잡은 컷 프롬프트에 거리 태그가 섞였다")
         with patched(pb.local_llm, "chat", boom):      # 서버가 꺼져 있어도 다시 만들 수 있다
             eq(pb.compose_image_prompt(sc, action="walking side by side"), text,
                "action 경로가 LLM 경로와 다른 프롬프트를 만듦")

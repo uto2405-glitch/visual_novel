@@ -59,6 +59,16 @@ GENDER_EXACT = {"여": "female", "f": "female", "남": "male", "m": "male"}
 
 # 일부러 좁게 잡은 컷 — 여기에 "둘 다 보이게" 를 붙이면 연출 의도를 뒤집는다.
 TIGHT_SHOTS = ("close-up", "extreme-close-up", "medium-close-up", "insert", "pov")
+
+# 넓게 잡은 컷에 붙는 **거리 태그**. 샷 이름만으로는 거리가 지켜지지 않았다 — "wide shot" 만
+# 실은 프롬프트는 60여 개 태그 중 한 토큰이라 체크포인트가 그냥 흘려 보고, 실측에서 넓게
+# 잡힌 것은 6장 중 1장(프로덕션 해상도에서는 0/3, 나머지는 클로즈업·미디엄 투샷)이었다.
+# 앞으로 옮기기·두 번 반복·"distant view"·"scenery focus" 는 소용없거나 해로웠다(반복은
+# 두 번째 인물을, scenery focus 는 인물 자체를 지웠다). 들어맞은 것은 하나뿐이다 —
+# **샷 이름 바로 뒤에 거리 태그를 한 번 붙이는 것**(3/3). 자리도 중요하다: 구도 힌트 뒤로
+# 밀면 프레임은 넓어져도 두 번째 인물이 사라졌다. 어휘는 엔진 중립(자연어로도 뜻이 통한다).
+SHOT_DISTANCE = {"wide": "full body", "extreme-wide": "full body, from a distance",
+                 "full": "full body"}
 # 둘 다 프레임에 있어야 하는 컷의 구도 힌트(2인 장면에서만). 어휘는 scene_lint.STD_SHOTS.
 SHOT_COMPOSITION = {"two-shot": "both characters fully visible, facing each other",
                     "over-the-shoulder": "over-the-shoulder view, both characters visible"}
@@ -137,10 +147,27 @@ def _shot_key(value) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
+# SHOT_DISTANCE 를 표기 흔들림 없는 키로 한 번만 펴 둔다 — 'extreme-wide'·'Extreme Wide'·
+# 'wide shot' 이 모두 같은 항목을 찾는다.
+_DISTANCE_BY_KEY = {_shot_key(k).removesuffix("shot"): v for k, v in SHOT_DISTANCE.items()}
+
+
+def _distance_cue(shot) -> str:
+    """넓은 컷의 거리 태그 — 없으면 ''. 'wide' 와 'wide shot' 을 같은 것으로 읽는다."""
+    key = _shot_key(shot).removesuffix("shot")
+    return _DISTANCE_BY_KEY.get(key, "")
+
+
 def _shot_phrase(shot) -> str:
-    """'medium' → 'medium shot' · 'two-shot' → 'two-shot' ('shot shot' 방지)."""
+    """'medium' → 'medium shot' · 'two-shot' → 'two-shot' ('shot shot' 방지).
+
+    넓게 잡은 컷이면 거리 태그(SHOT_DISTANCE)가 **이름 바로 뒤에** 따라붙는다 — 이름만으로는
+    거리가 지켜지지 않기 때문이다(윗주석). 좁은 컷·중간 컷은 예전 그대로다.
+    """
     s = str(shot or "").strip() or "medium"
-    return s if _shot_key(s).endswith("shot") else f"{s} shot"
+    phrase = s if _shot_key(s).endswith("shot") else f"{s} shot"
+    cue = _distance_cue(s)
+    return f"{phrase}, {cue}" if cue else phrase
 
 
 def _gender_of(ch: dict) -> str:

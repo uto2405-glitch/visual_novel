@@ -78,7 +78,7 @@
 | `api.base_url` | `http://127.0.0.1:8188` | ComfyUI 주소. 환경변수 `COMFYUI_URL`(비밀 아님)이 있으면 그것이 우선 |
 | `checkpoint` | `""` | 체크포인트 파일명. 비우면 ComfyUI 가 가진 첫 번째 |
 | `steps` | 30 | 1차 샘플링 스텝 |
-| `negative_prompt` | `""` | 부정 프롬프트. `""`(또는 키 없음) = **코드 기본 문구**(글자·말풍선·워터마크·손 붕괴 억제 — `checkpoint` 의 `""` 와 같은 뜻) · `false` 또는 `"none"` = **끔** · 프리셋 접두어는 어느 쪽이든 앞에 자동으로 붙는다 |
+| `negative_prompt` | `""` | 부정 프롬프트. `""`(또는 키 없음) = **코드 기본 문구**(글자·말풍선·워터마크·손 붕괴 억제 — `checkpoint` 의 `""` 와 같은 뜻) · `false` 또는 `"none"` = **끔** · 프리셋 접두어는 어느 쪽이든 앞에 자동으로 붙는다. **값을 적으면 코드 기본 문구를 통째로 대체한다** — 한 낱말만 더하려는 것이라도 기본 문구를 그대로 옮겨 적고 그 뒤에 붙여야 글자·워터마크·손 붕괴 억제가 살아남는다. 이 작품이 값을 적어 둔 유일한 이유는 머리색 가드(`blonde hair, platinum hair`)다 → §2.3 |
 | `base_long_edge_px` | 1248 | 1차 렌더의 긴 변(SDXL 은 1MP 근처가 최적). 목표(§1.4 `min_long_edge_px`)가 더 크면 2-pass hires fix 로 키우되 **이 값의 2배까지만**(1248 → 2496 · 그 이상은 12GB VRAM 에서 OOM·디테일 뭉개짐 — 잘리고 경고). 더 큰 인화 목표는 이 값을 올리거나(느려짐) 승인 뒤 MakeFun 업스케일 |
 | `hires_denoise` · `hires_steps` | 0.4 · 16 | 2차(확대) 패스의 디노이즈 · 스텝 |
 | `timeout_sec` | 600 | 한 장 대기 상한 — 넘기면 큐에서 지우고 실패로 기록 |
@@ -444,7 +444,7 @@ FAIL 이 아니다.
 | `purpose` | str | ⬜ | 프롬프트 입력 · 스튜디오 카드 · 컨택트시트 라벨 · 감상본 | — |
 | `action_beat` | str | ⬜ | 프롬프트 입력 · 직전 장면 연속성 | — |
 | `emotion` | str | ⬜ | 프롬프트 입력 · `scene_lint` 감정 반복 | — |
-| `camera.shot` | str | ⬜ | 프롬프트 입력 · **프롬프트 구도 힌트**(`prompt_build`) · `scene_lint` 컷 반복·어휘 | — |
+| `camera.shot` | str | ⬜ | 프롬프트 입력 · **프롬프트 구도 힌트·거리 태그**(`prompt_build`) · `scene_lint` 컷 반복·어휘 | — |
 | `camera.angle` | str | ⬜ | 프롬프트 입력 · `scene_lint` 어휘 | — |
 | `camera.framing` | str | ⬜ | 프롬프트 입력 | — |
 | `camera.focus` | str | ⬜ | 프롬프트 입력 | — |
@@ -496,6 +496,10 @@ A6 를 통과해도 그림에 사람이 하나만 나오는 사고가 있었다(
 ```
 <화풍>, portrait 2:3, two-shot, 1girl, 1boy, 2people, couple,
 both characters fully visible, facing each other, <인물 앵커…>, <동작>, <장소 앵커>, <시간대>
+
+넓게 잡은 컷이면 샷 이름 **바로 뒤**에 거리 태그가 하나 더 붙는다:
+<화풍>, portrait 2:3, wide shot, full body, 1girl, 1boy, 2people, couple,
+both characters visible, <인물 앵커…>, <동작>, <장소 앵커>, <시간대>
 ```
 
 | 무엇에서 나오나 | 규칙 |
@@ -503,6 +507,7 @@ both characters fully visible, facing each other, <인물 앵커…>, <동작>, 
 | `characters[]` + 각 인물의 `profile.gender_presentation` (§1.6) | 성별 수 → `1girl` · `1boy` · `2girls` …, 성별 미상은 `1person`/`N people`. 2인 이상이면 총원 `N people` 을 덧붙이고, 여성 1 + 남성 1 이면 `couple` |
 | `camera.shot` (§2.2 표준 어휘) | 2인 이상일 때만 구도 힌트: `two-shot` → `both characters fully visible, facing each other` · `over-the-shoulder` → `over-the-shoulder view, both characters visible` · 그 밖 → `both characters visible`(3인 이상은 `all characters visible`) |
 | 좁게 잡은 컷(`close-up`·`extreme-close-up`·`medium-close-up`·`insert`·`pov`) | 구도 힌트를 **넣지 않는다** — 연출 의도를 뒤집지 않기 위해 |
+| `camera.shot` 이 `wide`·`extreme-wide`·`full` | 샷 이름 **바로 뒤**에 거리 태그를 한 번 붙인다: `full body`(`extreme-wide` 는 `full body, from a distance`) — 정본 `prompt_build.SHOT_DISTANCE`. 이름만으로는 거리가 지켜지지 않는다(실측: `wide shot` 만 쓴 6장 중 넓게 잡힌 것은 1장, 프로덕션 832×1248·30steps 에서는 0/3 → 거리 태그 하나를 더하면 3/3). 인원수가 몇이든 붙는다 |
 
 **태그는 엔진을 보지 않는다.** 프롬프트는 장면에 저장되고 어느 엔진이 그릴지는 매니페스트
 한 줄(`image_generator.engine`)로 바뀌므로, 엔진별 문구를 굳혀 두면 엔진을 바꾼 순간 저장된
@@ -538,10 +543,37 @@ both characters fully visible, facing each other, <인물 앵커…>, <동작>, 
 | 붙는 자리 | **그 인물의 `prompt_anchor` 바로 앞** — 두 번째 인물부터는 `with` 뒤 |
 | 인원수·구도 태그 | 그대로 맨 앞에 남는다(§ 위) — 두 줄은 서로 다른 문제를 고친다 |
 
-앵커 원문은 손대지 않으므로 **A6 판정은 달라지지 않는다.** 네거티브 프롬프트는 이 문제에
-쓰지 않는다 — 효과가 시드 노이즈와 구분되지 않았고, 길어진 네거티브가 그림에 흰 액자
-테두리를 만드는 부작용이 관측됐다. 체크포인트별 부정 문구가 정말 필요해지면 그 자리는
-`image_generator.comfyui.negative_prompt`(§1.4) 하나이고, 조립부에는 넣지 않는다.
+앵커 원문은 손대지 않으므로 **A6 판정은 달라지지 않는다.** 네거티브 프롬프트는 **의상**
+드리프트에는 여전히 쓰지 않는다 — `dark jacket, black sweater` 를 넣어 봐도 효과가 시드
+노이즈와 구분되지 않았다.
+
+#### 머리 **색** 은 예외다 — 네거티브 두 낱말 (실측으로 뒤집힌 항목)
+
+앞 문단은 오래도록 "네거티브는 이 문제에 쓰지 않는다(흰 액자 테두리 부작용)" 라고 적어
+두었지만, 머리색에 한해 재측정 결과가 그 둘을 모두 뒤집었다. CHAR-001 의 `light brown hair`
+는 프로덕션 설정(832×1248·30steps)에서 샴페인/애시 블론드로 나왔고(SCENE-002 0/3 ·
+SCENE-006 0/2), **긍정 쪽 손질은 전부 실패했다** — `brown hair` 를 더해도 머리 영역 평균
+명도가 0.01~0.03 밖에 움직이지 않았고, `medium brown`·`chestnut` 은 갈색이 되는 대신
+'밝은' 을 잃었고, `(not blonde)` 는 오히려 가장 밝게 나왔으며(CLIP 에 부정은 없다 —
+`blonde` 라는 낱말이 그대로 읽힌다), `(light brown hair:1.3)` 은 A1111/ComfyUI 전용
+가중치 문법이라 엔진 중립 규약(§ 위)을 깬다. **그러므로 `prompt_tags` 는 건드리지 않는다.**
+
+효과가 있었던 것은 하나뿐이다 — `image_generator.comfyui.negative_prompt`(§1.3) 에
+`blonde hair, platinum hair` 두 낱말을 더하는 것. 명도가 0.06~0.29 움직였고(시드 노이즈
+밖), 두 장면·두 조명에서 프로덕션 5/5 가 믿을 만한 밝은 갈색으로 나왔으며 반묶음과 별
+귀걸이는 그대로였다. 예전에 적어 둔 **흰 액자 테두리 부작용은 2낱말 추가에서는 재현되지
+않았다**(가장자리 흰 픽셀 수가 기준본과 같았다 — SCENE-002 54~58/260 대 50~59/260,
+SCENE-006·010 은 양쪽 0/260).
+
+체크포인트별 부정 문구의 자리는 `image_generator.comfyui.negative_prompt`(§1.3) 하나이고,
+조립부에는 넣지 않는다. 값을 적을 때 함께 기억할 것 둘 —
+① 매니페스트 값은 코드 기본 문구를 **대체**한다. 기본 문구를 그대로 옮겨 적고 뒤에 붙이지
+않으면 글자·워터마크·손 붕괴 억제가 조용히 사라진다(§1.3).
+② 이 가드는 **ComfyUI 전용**이다. MakeFun 에는 부정 프롬프트가 없어
+(`makefun_client.NEGATIVE_PHRASES` 가 긍정 프롬프트 뒤에 붙는 구조)
+`image_generator.engine` 을 `makefun` 으로 바꾸면 머리색 가드는 경고 없이 사라진다.
+③ 색 네거티브는 **작품 전체에 걸린다** — 지금은 안전하지만(CHAR-001 밝은 갈색 ·
+CHAR-002 검은 머리), 금발 인물을 새로 만들 때는 이 줄을 먼저 손봐야 한다.
 
 ### 2.4 `dialogue[]`
 
