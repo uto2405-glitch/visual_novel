@@ -125,6 +125,9 @@
 - [x] **101** 프롬프트 인원수·구도 태그 — `prompt_build.composition_tags` 가 앵커 **앞에**
   `1girl, 1boy, 2people, couple, …` 을 넣는다(엔진 중립 · docs/SCHEMA.md §2.3)
 - [x] **102** `scene_lint` 역방향 경고 — `composition-cue` · `two-shot-single` (자문, PASS/FAIL 아님)
+- [x] **115** 인물 태그 — `characters[].prompt_tags` 를 `prompt_build.character_tags` 가
+  **그 인물 앵커 바로 앞**에 붙인다(앵커 원문 보존 → A6 그대로 · 엔진 중립 · docs/SCHEMA.md §2.3 · 회귀 U18).
+  살아 있는 ComfyUI 로 51장을 구워 고른 결과다 — SCENE-001~007 재렌더로 흰 셔츠·파스텔 가디건이 돌아왔다
 
 ## 8단계 · 인화 파이프라인 (Pillow 필요 · 토큰 0)
 - [x] **103** 인화 해상도 조치의 단일 출처 — `comfyui_client/makefun_client.size_recipe` 가
