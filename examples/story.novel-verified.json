@@ -1,0 +1,174 @@
+{
+  "title": "우산이 하나뿐인데요",
+  "style": "warm pastel romance, soft bokeh, rainy overcast light, wet pavement reflections, visual novel still, 16:9",
+  "note": "비 오는 버스 정류장에서 두 사람의 짧은 대화만으로 가는 장면 — 대사는 원고 그대로, 조용하고 다정한 톤. 인물 외모(머리 길이·옷)는 원고에 묘사가 없어 최소로 지어냈습니다.",
+  "characters": [
+    {
+      "id": "her",
+      "name": "그녀",
+      "ref": "her.jpg",
+      "look": "korean woman, shoulder-length dark hair, beige raincoat"
+    },
+    {
+      "id": "him",
+      "name": "그",
+      "ref": "him.jpg",
+      "look": "korean man, short black hair, navy jacket"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "s001",
+      "shot": "full",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "her",
+        "him"
+      ],
+      "pose": "standing a step apart, she holds up a single umbrella",
+      "emotion": "awkward, quiet",
+      "sfx": "rain",
+      "bgm": true,
+      "next": "s002",
+      "webtoon": {
+        "pageBreak": true,
+        "caption": "우산 아래"
+      }
+    },
+    {
+      "id": "s002",
+      "shot": "portrait",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "her"
+      ],
+      "pose": "holding a single umbrella with both hands",
+      "emotion": "hesitant, shy, glancing sideways",
+      "text": "우산이 하나뿐인데요.",
+      "speaker": "her",
+      "sfx": "rain",
+      "next": "s003",
+      "webtoon": {
+        "kind": "say",
+        "tail": "l",
+        "pos": "tl"
+      }
+    },
+    {
+      "id": "s003",
+      "shot": "portrait",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "him"
+      ],
+      "pose": "reaching for the umbrella handle next to her hands",
+      "emotion": "calm, warm half-smile",
+      "text": "그럼 반씩 쓰죠.",
+      "speaker": "him",
+      "sfx": "rain",
+      "next": "s004",
+      "webtoon": {
+        "kind": "say",
+        "tail": "r",
+        "pos": "tr"
+      }
+    },
+    {
+      "id": "s004",
+      "shot": "full",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "her",
+        "him"
+      ],
+      "pose": "he tilts the single umbrella over her head, standing close",
+      "emotion": "gentle, tender",
+      "text": "그가 우산을 기울였다.",
+      "speaker": "narration",
+      "sfx": "rain",
+      "next": "s005"
+    },
+    {
+      "id": "s005",
+      "shot": "full",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "her",
+        "him"
+      ],
+      "pose": "umbrella still tilted over her, his outer shoulder and sleeve soaked dark with rain",
+      "emotion": "unbothered, quietly content",
+      "hold": true,
+      "text": "어깨 한쪽이 곧 젖었다.",
+      "speaker": "narration",
+      "sfx": "rain",
+      "next": "s006"
+    },
+    {
+      "id": "s006",
+      "shot": "portrait",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "her"
+      ],
+      "pose": "one hand on the umbrella handle, turned toward his wet shoulder",
+      "emotion": "worried, flustered",
+      "text": "젖잖아요.",
+      "speaker": "her",
+      "sfx": "rain",
+      "next": "s007",
+      "webtoon": {
+        "kind": "say",
+        "tail": "l",
+        "pos": "tl"
+      }
+    },
+    {
+      "id": "s007",
+      "shot": "portrait",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "him"
+      ],
+      "pose": "holding the umbrella tilted toward her, wet shoulder, sleeve dripping",
+      "emotion": "faint smile, calm",
+      "text": "괜찮아요.",
+      "speaker": "him",
+      "sfx": "rain",
+      "next": "s008",
+      "webtoon": {
+        "kind": "say",
+        "tail": "r",
+        "pos": "tr"
+      }
+    },
+    {
+      "id": "s008",
+      "shot": "wide",
+      "bg_prompt": "roadside bus stop shelter in heavy rain, wet asphalt, puddles, overcast sky, empty road with no bus",
+      "chars": [
+        "her",
+        "him"
+      ],
+      "emotion": "wistful, longing",
+      "text": "버스가 오지 않기를 둘 다 바랐다는 걸,",
+      "speaker": "narration",
+      "sfx": "rain",
+      "next": "s009",
+      "webtoon": {
+        "pos": "bl"
+      }
+    },
+    {
+      "id": "s009",
+      "shot": "wide",
+      "bg": "reuse:s008",
+      "text": "그날은 아무도 말하지 않았다.",
+      "speaker": "narration",
+      "sfx": "rain",
+      "webtoon": {
+        "pos": "br"
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "title": "가장 짧은 예시",
+  "style": "cinematic realistic photo, soft lighting, 16:9",
+  "characters": [],
+  "scenes": [
+    { "id": "s01", "shot": "full", "bg_prompt": "a quiet room at night", "text": "첫 문장이 흐른다.", "speaker": "narration", "next": "s02" },
+    { "id": "s02", "shot": "full", "bg": "reuse:s01", "text": "그리고 막이 내린다.", "speaker": "narration" }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "title": "심야 편의점의 손님",
+  "style": "cinematic realistic photo, soft lighting, visual novel still, consistent face matching reference, 16:9",
+  "note": "감독 노트 — 나만 보는 메모. 2막에서 비가 그치는 연출로 여운을 남길 것. AI 이어쓰기 프롬프트에도 함께 전달됩니다.",
+  "characters": [
+    {
+      "id": "jun",
+      "name": "준",
+      "ref": "jun.jpg",
+      "look": "20s korean man, short black hair, navy hoodie, tired eyes",
+      "castCrop": {
+        "y": "center"
+      }
+    },
+    {
+      "id": "guest",
+      "name": "손님",
+      "ref": "guest.jpg",
+      "look": "woman in a long beige coat, wet hair, calm expression"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "s01",
+      "shot": "full",
+      "bg_prompt": "empty convenience store at 3am, cold fluorescent light, rain streaks on the window",
+      "chars": [
+        "jun"
+      ],
+      "pose": "leaning on the counter",
+      "emotion": "bored, sleepy",
+      "text": "새벽 3시. 오늘도 손님은 없다.",
+      "speaker": "jun",
+      "sfx": "rain",
+      "bgm": true,
+      "next": "s02",
+      "webtoon": {
+        "caption": "새벽 3시",
+        "line": "새벽 3시. 오늘도 손님은 없다."
+      }
+    },
+    {
+      "id": "s02",
+      "shot": "full",
+      "bg": "reuse:s01",
+      "chars": [
+        "jun",
+        "guest"
+      ],
+      "pose": "a guest standing at the sliding door",
+      "emotion": "surprised",
+      "text": "문이 열렸다. 비에 젖은 손님이 들어왔다.",
+      "speaker": "narration",
+      "next": "s03"
+    },
+    {
+      "id": "s03",
+      "shot": "focus",
+      "chars": [
+        "guest"
+      ],
+      "pose": "close-up",
+      "emotion": "gentle, tired smile",
+      "text": "「…따뜻한 거, 있어요?」",
+      "speaker": "guest",
+      "choices": [
+        {
+          "label": "따뜻한 커피를 건넨다",
+          "next": "s04a"
+        },
+        {
+          "label": "말없이 온장고를 가리킨다",
+          "next": "s04b"
+        }
+      ],
+      "webtoon": {
+        "caption": "따뜻한 거, 있어요?",
+        "kind": "say",
+        "pos": "tr",
+        "tail": "l"
+      },
+      "bg_prompt": "empty convenience store at 3am, cold fluorescent light, rain streaks on the window"
+    },
+    {
+      "id": "s04a",
+      "shot": "full",
+      "bg": "reuse:s01",
+      "chars": [
+        "jun",
+        "guest"
+      ],
+      "text": "따뜻한 캔커피를 내밀었다. 손님이 처음으로 웃었다.",
+      "speaker": "narration",
+      "next": "s05"
+    },
+    {
+      "id": "s04b",
+      "shot": "full",
+      "bg": "reuse:s01",
+      "chars": [
+        "jun",
+        "guest"
+      ],
+      "text": "온장고를 가리켰다. 손님은 잠시 나를 바라보았다.",
+      "speaker": "narration",
+      "next": "s05"
+    },
+    {
+      "id": "s05",
+      "shot": "full",
+      "bg_prompt": "convenience store window, rain stopping, first pale light of dawn outside",
+      "chars": [
+        "jun"
+      ],
+      "emotion": "thoughtful",
+      "text": "손님이 떠난 뒤에도, 창밖의 비는 어느새 그쳐 있었다.",
+      "speaker": "jun",
+      "sfx": "night",
+      "bgm": false
+    }
+  ],
+  "coverSubtitle": "막차가 지난 뒤의 이야기"
+}

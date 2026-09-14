@@ -1,0 +1,29 @@
+{
+  "scenes": [
+    {
+      "id": "s06",
+      "shot": "full",
+      "bg_prompt": "convenience store at dawn, warm morning light, empty aisles",
+      "chars": [
+        "jun"
+      ],
+      "pose": "restocking the hot-drink shelf",
+      "emotion": "quiet anticipation",
+      "text": "다음 날 밤, 나는 온장고를 조금 더 채워두었다.",
+      "speaker": "jun",
+      "sfx": "night",
+      "next": "s07"
+    },
+    {
+      "id": "s07",
+      "shot": "focus",
+      "chars": [
+        "jun"
+      ],
+      "emotion": "small hope",
+      "text": "혹시, 오늘도 올까.",
+      "speaker": "jun",
+      "bg_prompt": "convenience store at dawn, warm morning light, empty aisles"
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "title": "젖은 발소리 1화",
+  "style": "grainy 16mm horror, harsh flashlight, deep shadows, dread, visual novel still, 16:9",
+  "note": "규칙: 얼굴은 절대 웃지 않는다. 소리는 늘 문 밖에서 온다.",
+  "characters": [
+    {
+      "id": "sonyeo",
+      "name": "소녀",
+      "ref": "sonyeo.jpg",
+      "look": "pale korean girl, wet long hair, white nightgown"
+    },
+    {
+      "id": "eomma",
+      "name": "엄마",
+      "ref": "eomma.jpg",
+      "look": "tired korean woman, 40s, grey cardigan"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "s001",
+      "shot": "full",
+      "bg_prompt": "narrow wooden corridor at night, single bare bulb, peeling wallpaper",
+      "chars": [
+        "sonyeo"
+      ],
+      "pose": "standing still, listening to the door",
+      "emotion": "afraid",
+      "text": "새벽 두 시. 누가 문을 두드렸다.",
+      "speaker": "narration",
+      "sfx": "night",
+      "bgm": true,
+      "next": "s002",
+      "webtoon": {
+        "pageBreak": true,
+        "caption": "첫째 밤"
+      }
+    },
+    {
+      "id": "s002",
+      "shot": "focus",
+      "chars": [
+        "sonyeo"
+      ],
+      "pose": "turning her head slowly toward the door",
+      "emotion": "terrified",
+      "text": "「…엄마?」",
+      "speaker": "sonyeo",
+      "next": "s003",
+      "webtoon": {
+        "kind": "say",
+        "tail": "l",
+        "pos": "bl"
+      },
+      "bg_prompt": "narrow wooden corridor at night, single bare bulb, peeling wallpaper"
+    },
+    {
+      "id": "s003",
+      "shot": "full",
+      "bg_prompt": "narrow wooden corridor at night, single bare bulb, peeling wallpaper",
+      "chars": [
+        "sonyeo"
+      ],
+      "pose": "reaching for the door handle, same spot in the corridor",
+      "emotion": "trembling",
+      "text": "대답은 없었다. 문틈으로 물이 스며들고 있었다.",
+      "speaker": "narration",
+      "next": "s004"
+    },
+    {
+      "id": "s004",
+      "shot": "action",
+      "bg_prompt": "narrow wooden corridor at night, single bare bulb, peeling wallpaper",
+      "chars": [
+        "sonyeo"
+      ],
+      "pose": "running away down the corridor",
+      "emotion": "panic",
+      "text": "소녀는 뒤도 돌아보지 않고 달렸다.",
+      "speaker": "narration",
+      "webtoon": {
+        "fx": "speed"
+      },
+      "choices": [
+        {
+          "label": "엄마 방으로 뛰어든다",
+          "next": "s005a"
+        },
+        {
+          "label": "현관으로 나간다",
+          "next": "s005b"
+        }
+      ]
+    },
+    {
+      "id": "s005a",
+      "shot": "full",
+      "bg_prompt": "small bedroom at night, empty bed, curtain moving",
+      "chars": [
+        "sonyeo",
+        "eomma"
+      ],
+      "pose": "shaking her mother awake",
+      "emotion": "desperate",
+      "text": "「엄마, 문 밖에 누가 있어.」",
+      "speaker": "sonyeo",
+      "next": "s006",
+      "webtoon": {
+        "pageBreak": true,
+        "caption": "엄마의 방"
+      }
+    },
+    {
+      "id": "s005b",
+      "shot": "back",
+      "bg_prompt": "front door of an old house, water pooling on the floor",
+      "chars": [
+        "sonyeo"
+      ],
+      "pose": "standing before the front door, not turning around, shoulders squared",
+      "text": "손잡이는 얼음처럼 차가웠다.",
+      "speaker": "narration",
+      "next": "s006",
+      "webtoon": {
+        "pageBreak": true,
+        "caption": "현관"
+      }
+    },
+    {
+      "id": "s006",
+      "shot": "wide",
+      "bg_prompt": "old house seen from the rainy street, one window lit",
+      "text": "그 밤, 집에는 발소리가 하나 더 늘었다.",
+      "speaker": "narration",
+      "sfx": "rain",
+      "webtoon": {
+        "pageBreak": true,
+        "caption": "비 오는 거리"
+      }
+    }
+  ]
+}
