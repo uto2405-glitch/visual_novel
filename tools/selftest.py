@@ -649,7 +649,7 @@ def fresh_scene(b: Box, **over):
 def cli_scene(b: Box, stage: str = "PLAN", images: int = 2):
     """advance_scene CLI 로 장면을 만들어 원하는 단계까지 올린다.
 
-    stage: PLAN → PROMPT → REVIEW(후보 등록까지) → APPROVED
+    stage: PLAN → PROMPT → REVIEW(후보 등록까지 — 상태는 IMAGE) → APPROVED
     각 테스트가 자기 장면을 갖게 해 앞 테스트의 잔여 상태에 기대지 않는다.
     """
     before = {p.name for p in (b.root / "project" / "scenes").glob("*.json")}
@@ -1237,8 +1237,10 @@ def p03(b: Box):
         hasnt(out, "FAIL", "자동 검사")
 
 
-@test("pipeline", "P04 add-images → 자동검사 PASS → REVIEW_HUMAN 전이")
+@test("pipeline", "P04 add-images → 자동검사 PASS → IMAGE 에 머문다(고르기 전에는 검사기도 초록)")
 def p04(b: Box):
+    """등록만으로 REVIEW_HUMAN 을 찍으면 그 순간부터 A3 가 selected_image 를 요구해
+    **렌더 직후~사람이 고르기 전** 저장소가 자기 게이트에 FAIL 한다. 등록은 IMAGE 까지다."""
     with cli_scene(b, "PROMPT") as sid:
         a, c = b.root / "cand_a.png", b.root / "cand_b.png"
         write_png(a, 1400, 1000)
@@ -1248,9 +1250,13 @@ def p04(b: Box):
         c.unlink(missing_ok=True)
         st = b.scene(sid)
         eq(rc, 0, f"rc — {out[:200]}")
-        eq(st["status"], "REVIEW_HUMAN", "status")
+        eq(st["status"], "IMAGE", "status")
         eq(st["review"]["auto"], "PASS", "review.auto")
+        eq(st["assets"]["selected_image"], "", "고르지도 않았는데 선택본이 생김")
         eq(len(st["assets"]["raw_images"]), 2, "후보 수")
+        hasnt(out, "REVIEW_HUMAN", "등록 안내가 시사 단계로 올라갔다고 말함")
+        rc_all, out_all = b.checker()
+        eq(rc_all, 0, f"후보만 있고 선택이 없는 중간 상태에서 저장소 전체 검사가 FAIL — {out_all[:400]}")
 
 
 @test("pipeline", "P05 select → approve → APPROVED + human PASS")
@@ -1458,6 +1464,98 @@ def p18(b: Box):
             text2 = mgi.build_input(sid)
         has(text2, anchor_c, "형제 장면 하나가 손상되자 앵커가 빠짐")
     raises(lambda: mgi.build_input("SCENE-404"), FileNotFoundError, "없는 장면")
+
+
+@test("pipeline", "P19 상태 계약 — 등록은 IMAGE 까지, REVIEW_HUMAN 은 선택이 찍는다(중간에 게이트가 빨개지지 않는다)")
+def p19(b: Box):
+    """SCHEMA §2.1 의 계약을 한 장면으로 통째로 지난다.
+
+      · 후보만 있고 선택이 없으면 `IMAGE` — **그 사이에도 check_protocol 은 PASS** 여야 한다.
+        (예전에는 등록이 곧바로 REVIEW_HUMAN 을 찍어, 렌더가 끝난 순간부터 사람이 고를 때까지
+         A3 가 selected_image 를 요구하며 저장소가 자기 게이트에 FAIL 했다.)
+      · `IMAGE` → `REVIEW_HUMAN` 은 select 하나만 찍는다(재스캔·자동검사 PASS 는 승격이 아니다).
+      · approve 는 여전히 REVIEW_HUMAN + selected_image 둘 다 요구한다.
+      · 이미 고른 REVIEW_HUMAN 장면은 재스캔이 건드리지 않는다.
+      · revise 는 그대로 동작한다(상태·선택본이 함께 내려간다).
+    """
+    so = b.mod("scene_ops")
+    with cli_scene(b, "PROMPT") as sid:
+        cand = b.root / f"_p19_{sid}.png"
+        write_png(cand, 1400, 1000, (170, 200, 150))
+        rc, out = b.run(ADV, "add-images", sid, str(cand))
+        cand.unlink(missing_ok=True)
+        eq(rc, 0, f"add-images rc — {out[:200]}")
+        eq(b.scene(sid)["status"], "IMAGE", "등록 뒤 상태")
+        rc0, out0 = b.checker()
+        eq(rc0, 0, f"고르기 전 저장소 전체 검사가 FAIL — {out0[:400]}")
+
+        reg = so.register_images(sid)                      # 다시 스캔해도 올라가지 않는다
+        eq(reg["auto"], "PASS", f"재스캔 자동 검사 — {reg}")
+        eq(b.scene(sid)["status"], "IMAGE", "자동 검사 PASS 가 상태를 올림(승격 조건이 아니다)")
+
+        rc1, out1 = b.run(ADV, "approve", sid)             # 고른 것이 없으면 승인도 막힌다
+        ok(rc1 != 0, "선택 없이 승인됨")
+        hasnt(out1, "Traceback", "traceback")
+        eq(b.scene(sid)["status"], "IMAGE", "거절된 승인이 상태를 움직임")
+
+        rc2, out2 = b.run(ADV, "select", sid, "1")         # 선택이 승격을 찍는다
+        eq(rc2, 0, f"select rc — {out2[:200]}")
+        st = b.scene(sid)
+        eq(st["status"], "REVIEW_HUMAN", "선택 뒤 상태")
+        eq(st["review"]["auto"], "PASS", "review.auto")
+        rc3, out3 = b.checker()
+        eq(rc3, 0, f"선택 뒤 저장소 전체 검사 — {out3[:400]}")
+
+        reg2 = so.register_images(sid)                     # 고른 장면은 재스캔이 그대로 둔다
+        eq(reg2["count"], 1, f"재스캔 후보 수 — {reg2}")
+        st2 = b.scene(sid)
+        eq(st2["status"], "REVIEW_HUMAN", "이미 고른 장면을 재스캔이 되돌림")
+        eq(st2["assets"]["selected_image"], st["assets"]["selected_image"], "재스캔이 선택본을 바꿈")
+
+        rc4, out4 = b.run(ADV, "approve", sid)
+        eq(rc4, 0, f"approve rc — {out4[:200]}")
+        eq(b.scene(sid)["status"], "APPROVED", "승인 상태")
+
+        rc5, out5 = b.run(ADV, "revise", sid, "IMAGE", "--note", "상태 계약 회귀")
+        eq(rc5, 0, f"revise rc — {out5[:200]}")
+        st3 = b.scene(sid)
+        eq(st3["status"], "IMAGE", "되돌린 뒤 상태")
+        eq(st3["assets"]["selected_image"], "", "되돌렸는데 선택본이 남음")
+        rc6, out6 = b.checker()
+        eq(rc6, 0, f"되돌린 뒤 저장소 전체 검사 — {out6[:400]}")
+
+
+@test("pipeline", "P20 선택본 파일이 사라진 시사 장면 — 재스캔이 IMAGE 로 내리고 검사기는 초록을 지킨다")
+def p20(b: Box):
+    """불변식의 반대쪽: 'REVIEW_HUMAN 이상 ⇔ selected_image 있음'.
+
+    선택본 파일이 사라지면 재스캔이 선택을 비운다 — 상태만 REVIEW_HUMAN 으로 남겨 두면
+    그 순간부터 A3 가 FAIL 인데, 화면에는 '시사 중' 이라고 적혀 있어 고칠 곳이 보이지 않는다.
+    """
+    so = b.mod("scene_ops")
+    with cli_scene(b, "PROMPT") as sid:
+        srcs = []
+        for i in range(2):
+            q = b.root / f"_p20_{sid}_{i}.png"
+            write_png(q, 1400, 1000, (140 + i * 30, 180, 210))
+            srcs.append(str(q))
+        rc, out = b.run(ADV, "add-images", sid, *srcs)
+        for q in srcs:
+            Path(q).unlink(missing_ok=True)
+        eq(rc, 0, f"add-images rc — {out[:200]}")
+        rc, out = b.run(ADV, "select", sid, "1")
+        eq(rc, 0, f"select rc — {out[:200]}")
+        st = b.scene(sid)
+        eq(st["status"], "REVIEW_HUMAN", "선택 뒤 상태")
+
+        (b.root / st["assets"]["selected_image"]).unlink()      # 사람이 파일을 지웠다
+        reg = so.register_images(sid)
+        st2 = b.scene(sid)
+        eq(st2["assets"]["selected_image"], "", "사라진 파일이 선택본으로 남음")
+        eq(st2["status"], "IMAGE", "선택본이 없는데 시사 단계에 머무름(A3 가 곧바로 FAIL 이다)")
+        eq(reg["auto"], "PASS", f"재스캔 자동 검사 — {reg}")
+        rc2, out2 = b.checker()
+        eq(rc2, 0, f"선택본 유실 뒤 저장소 전체 검사 — {out2[:400]}")
 
 
 # ============================================================ template (새 작품 시작)
@@ -3417,7 +3515,7 @@ def cf01(b: Box):
 @test("comfyui", "CF02 장면 렌더 — 생성기 기록은 scene_ops 를 거치고, 등록·상태 전이는 gen_jobs/scene_ops 만 한다")
 def cf02(b: Box):
     """클라이언트 단독 호출은 파일·기록만 남기고 장면의 status·assets 를 움직이지 않는다.
-    run_scene(CLI)은 gen_jobs 관문 → register_images → 자동 검사 → REVIEW_HUMAN 까지 한 번에 간다
+    run_scene(CLI)은 gen_jobs 관문 → register_images → 자동 검사 → IMAGE 까지 한 번에 간다
     (무료라 다시 만들면 되므로). APPROVED 는 렌더 자체를 거절한다(서버 요청 0).
     """
     cf = b.mod("comfyui_client")
@@ -3437,12 +3535,12 @@ def cf02(b: Box):
            f"Illustrious 프리셋 접두어가 붙지 않음 — {g['6']['inputs']['text'][:60]!r}")
         eq(g["3"]["inputs"]["sampler_name"], "euler_ancestral", "Illustrious 프리셋 샘플러")
         ok("10" in g and g["10"]["inputs"]["stop_at_clip_layer"] == -2, "clip_skip 2 → CLIPSetLastLayer -2")
-        # 등록까지 — run_scene → gen_jobs.start(sync) → register_images → 자동 검사 PASS → REVIEW_HUMAN
+        # 등록까지 — run_scene → gen_jobs.start(sync) → register_images → 자동 검사 PASS → IMAGE
         rep = cf.run_scene(sid, n=1, seed=4, quiet=True)
         eq(rep.get("auto"), "PASS", f"자동 검사 — {rep}")
         eq(rep.get("count"), 2, f"후보 수 — {rep}")
         sc = b.scene(sid)
-        eq(sc["status"], "REVIEW_HUMAN", "등록 뒤 상태(IMAGE→REVIEW_HUMAN 은 scene_ops 가 찍는다)")
+        eq(sc["status"], "IMAGE", "등록 뒤 상태(REVIEW_HUMAN 승격은 사람이 고를 때만)")
         eq(len(sc["assets"]["raw_images"]), 2, "후보 등록 수")
         ok(all(Path(r).name.startswith("cf_") for r in sc["assets"]["raw_images"]),
            f"후보 이름 — {sc['assets']['raw_images']}")
@@ -3994,7 +4092,7 @@ def cf07(b: Box):
         eq(out.get("count"), 1, f"후보 수 — {out}")
         ok(all(str(n).startswith("cf_") for n in out.get("generated", [])), f"생성 파일 — {out.get('generated')}")
         sc = b.scene(sid)
-        eq(sc["status"], "REVIEW_HUMAN", "등록 뒤 상태")
+        eq(sc["status"], "IMAGE", "등록 뒤 상태(고르기 전에는 시사 단계로 올리지 않는다)")
         eq(sc["prompt"]["external_generator"], "ComfyUI", "출처 기록")
         ok(any("ComfyUI 생성 중…" in n and "초 경과" in n for n in notes),
            f"진행 문구에 엔진 이름·경과가 없음 — {notes}")

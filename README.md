@@ -58,6 +58,8 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 내부 상태 흐름: `SCENE_PLAN → PROMPT → IMAGE → REVIEW_HUMAN → APPROVED`
 (되돌리기: `advance_scene revise <ID> SCENE_PLAN|PROMPT|IMAGE`)
 자동 검사는 후보 등록·선택 시점에 그 자리에서 돌고 `review.auto` 에 남는다 — 머무는 단계가 아니다.
+`IMAGE` 는 **후보만 있고 아직 안 고른 상태**다. `REVIEW_HUMAN` 으로 올리는 것은 **후보 선택 하나뿐**이다
+(렌더가 끝난 것만으로는 올라가지 않는다 — 선택 없이 올리면 검사기 A3 가 `selected_image` 를 요구해 FAIL 이다).
 검사기는 **상태에 맞는 항목만** 본다. `SCENE_PLAN` 장면은 이미지가 없어도 FAIL 이 아니다.
 
 > `status` 를 손으로 `REVIEW_AUTO` 라고 적지 마라. 검사기 열거값에만 남은 미사용 상태라

@@ -60,10 +60,12 @@
     "selected_image": ""
   },
   "review": {
-    "auto": "PENDING",
+    "auto": "PASS",
     "human": "PENDING",
     "score": null,
-    "notes": []
+    "notes": [
+      "[2026-09-15] REVISE → SCENE_PLAN: 외부 요청이 남긴 후보 파일(evil.png) 제거 후 계획 단계로 복원"
+    ]
   },
-  "version": 1
+  "version": 2
 }

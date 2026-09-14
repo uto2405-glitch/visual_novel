@@ -840,7 +840,8 @@ def run_scene(scene_id: str, *, n: int = 1, long_edge: int | None = None, negati
     """CLI 용 — 선점 → 렌더 → (register 면) 후보 등록·자동 검사까지 gen_jobs.run 으로.
 
     MakeFun CLI 는 파일만 남기고 등록은 스튜디오에 맡겼다(유료 결과를 검사기 실패로 잃지 않게).
-    로컬 렌더는 다시 만들면 되므로 한 명령으로 REVIEW_HUMAN 까지 간다 — --no-register 로 끌 수 있다.
+    로컬 렌더는 다시 만들면 되므로 한 명령으로 후보 등록·자동 검사(상태 IMAGE)까지 간다
+    — --no-register 로 끌 수 있다. 시사 단계(REVIEW_HUMAN)는 사람이 후보를 고를 때 찍힌다.
     gen_jobs 가 없으면 등록 없이 파일만 남긴다.
     """
     def work():

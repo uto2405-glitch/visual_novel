@@ -581,6 +581,10 @@ function scActions(sc){
 function scThumbs(sc,msg){
  const th=el("div","thumbs");
  const raws=sc.raw_images||[];
+ // 후보는 있는데 아직 고르지 않은 단계(IMAGE)에서는 '고르면 다음으로 간다'를 말해 준다.
+ // 등록만으로는 시사 단계로 올라가지 않는다(선택이 REVIEW_HUMAN 을 찍는다 — SCHEMA §2.1).
+ if(raws.length&&!sc.selected_image&&sc.status!=="APPROVED")
+  th.appendChild(el("p","pickhint","후보 "+raws.length+"장 — 하나를 고르면 시사 단계로 올라갑니다"));
  raws.forEach((r,i)=>{
   const sel=r===sc.selected_image;
   const b=el("button");

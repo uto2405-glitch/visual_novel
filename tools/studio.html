@@ -61,6 +61,10 @@ border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
 .badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--sub)}
 .badge.APPROVED{color:var(--seal-ink);border-color:var(--seal)}
 .badge.REVIEW_HUMAN{color:var(--warn);border-color:var(--warn)}
+/* IMAGE = 후보는 있는데 아직 안 고른 단계 — 사람이 손대야 다음으로 간다(REVIEW_HUMAN 과 같은 주목색). */
+.badge.IMAGE{color:var(--jade);border-color:var(--jade-d)}
+/* .thumbs 는 flex-wrap 이라 안내 한 줄은 한 행을 통째로 차지하게 둔다(썸네일 옆에 끼지 않게). */
+.pickhint{flex:0 0 100%;color:var(--jade);font-size:12px;margin:2px 0 0}
 .stamp{position:absolute;top:10px;right:12px;color:var(--seal-ink);border:2.5px solid var(--seal);
 border-radius:50%;width:52px;height:52px;display:flex;align-items:center;justify-content:center;
 font-weight:800;transform:rotate(-9deg);font-size:13px;opacity:.92}

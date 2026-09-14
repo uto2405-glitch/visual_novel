@@ -7,8 +7,8 @@
   new [SCENE-ID]                  다음 번호 장면 생성 (id·order 자동, 화는 마지막 장면에서 승계)
   set-prompt SID [--file F]       Grok 출력 저장, 상태 → PROMPT (미지정 시 붙여넣기,
                                   종료: Windows Ctrl+Z+Enter / mac·Linux Ctrl+D)
-  add-images SID 파일...           후보 복사·기록 → 자동 검사 → PASS 시 REVIEW_HUMAN
-  select SID <번호|파일명>          후보 1장을 selected_image 로 지정
+  add-images SID 파일...           후보 복사·기록 → 자동 검사 (상태 → IMAGE = 고르기 대기)
+  select SID <번호|파일명>          후보 1장을 selected_image 로 지정 (상태 → REVIEW_HUMAN)
   approve SID                     검사 PASS 확인 후 APPROVED 잠금 (FAIL 시 롤백)
   revise SID <단계> [--note 사유]   SCENE_PLAN/PROMPT/IMAGE 로 되돌림 (자료 보존)
 
@@ -110,7 +110,9 @@ def cmd_add_images(args: argparse.Namespace) -> None:
     for i, r in enumerate(res.get("imported", []), 1):
         print(f"  [{i}] {r}")
     if res["auto"] == "PASS":
-        print("자동 검사 PASS → 상태 REVIEW_HUMAN")
+        # 등록만으로는 REVIEW_HUMAN 이 되지 않는다 — 그 단계는 '사람이 고른 것을 시사 중'
+        # 이라는 뜻이고, 검사기 A3 도 거기서부터 selected_image 를 요구한다(SCHEMA §2.1).
+        print("자동 검사 PASS → 상태 IMAGE (후보 고르기 대기)")
         print(f"다음: 시사 후  python tools/advance_scene.py select {sid} <번호>")
     else:
         print("자동 검사 FAIL — 아래 원인을 해결하세요:")
@@ -123,6 +125,7 @@ def cmd_select(args: argparse.Namespace) -> None:
     res = scene_ops.select_image(sid, chosen)
     print(f"선택: {res['selected']}")
     if res["auto_pass"]:
+        print("자동 검사 PASS → 상태 REVIEW_HUMAN")
         print(f"다음: python tools/advance_scene.py approve {sid}")
     else:
         _print_fails(res["fails"])
@@ -152,6 +155,13 @@ def cmd_revise(args: argparse.Namespace) -> None:
           "기존 이미지·프롬프트는 보존됨.")
 
 
+def _raws(sc: dict) -> list:
+    """장면에 등록된 후보 이미지 목록(손상된 파일에서도 빈 목록)."""
+    assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
+    raws = assets.get("raw_images")
+    return raws if isinstance(raws, list) else []
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     scenes = sorted(vn_core.all_scenes(), key=lambda s: s.get("scene_order", 0))
     if not scenes:
@@ -167,12 +177,16 @@ def cmd_status(args: argparse.Namespace) -> None:
               f"{review.get('human','?'):<8} {sel}")
     nxt = {"SCENE_PLAN": "계획 작성 후 make_grok_input.py 실행",
            "PROMPT": "외부 AI 생성 → add-images",
-           "IMAGE": "자동 검사 원인 해결 또는 add-images 재실행",
-           "REVIEW_HUMAN": "시사 → select → approve",
+           "IMAGE": "후보 고르기 — select <번호> (후보가 없으면 add-images)",
+           "REVIEW_HUMAN": "시사 → approve",
            "REVISE": "지정 단계 작업 재개",
            "APPROVED": None}
     for s in scenes:
         hint = nxt.get(s.get("status"))
+        if hint and s.get("status") == "IMAGE" and not _raws(s):
+            # 후보가 하나도 없는 IMAGE 는 '고를 것이 없는' 상태다 — 검사 FAIL 로 되돌아온
+            # 장면이거나 파일이 사라진 경우라, 할 일이 고르기가 아니라 다시 넣기다.
+            hint = "자동 검사 원인 해결 또는 add-images 재실행"
         if hint:
             print(f"\n다음 할 일: {s.get('scene_id')} — {hint}")
             break

@@ -54,6 +54,7 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1     # 로컬 LLM + 스
 
 장면 단계(`status`): `SCENE_PLAN` → `PROMPT` → `IMAGE` → `REVIEW_HUMAN` → `APPROVED`, 되돌리기 `REVISE`
 (`REVIEW_AUTO` 는 후보 등록 시 자동 실행되어 별도 상태로 머물지 않는다)
+후보 등록은 `IMAGE` 까지다 — `REVIEW_HUMAN` 은 **사람이 후보를 고른 뒤**(`select`)에만 찍힌다.
 
 ---
 

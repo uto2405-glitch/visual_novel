@@ -16,8 +16,8 @@ webapp 의 r_* 와 advance_scene 의 cmd_* 는 이 함수들을 부르는 얇은
 공개 API
   create_scene(sid=None, fields=None, episode=...)  새 장면 파일 생성(생성 경로의 유일한 구현)
   set_prompt(sid, text, fix_anchors=False)        프롬프트 저장 → PROMPT + 자동 검사
-  register_images(sid, run_check=True)            images/raw/<sid>/ 스캔 → 후보 등록·검사
-  select_image(sid, rel)                          후보 1장을 selected_image 로
+  register_images(sid, run_check=True)            images/raw/<sid>/ 스캔 → 후보 등록·검사(IMAGE 까지)
+  select_image(sid, rel)                          후보 1장을 selected_image 로 → REVIEW_HUMAN
   approve(sid)                                    REVIEW_HUMAN → APPROVED (FAIL 시 롤백)
   revise(sid, stage, note="")                     이전 단계로 되돌림(자료 보존)
   update_fields(sid, fields)                      장면 계획 필드 병합 저장(화이트리스트)
@@ -467,6 +467,17 @@ def register_images(sid: str, run_check: bool = True) -> dict:
     """images/raw/<scene_id>/ 를 스캔해 후보 목록을 갱신하고 자동 검사를 돌린다.
 
     반환: {count, auto, fails, locked}
+
+    **여기서 올라가는 최고 단계는 IMAGE 다.** 예전에는 자동 검사가 PASS 면 곧바로
+    REVIEW_HUMAN 을 찍었는데, 검사기 A3 는 REVIEW_HUMAN 이상에 ``selected_image`` 를
+    요구한다 — 렌더가 끝난 순간부터 사람이 후보를 고를 때까지 저장소가 **자기 검사기에
+    FAIL** 했다(`[A3] … REVIEW_HUMAN 이상 단계는 selected_image 가 필요함`). 정상적인
+    작업 중간이 빨간불이면 게이트가 신호이기를 그만둔다. REVIEW_HUMAN 은 '사람이 후보를
+    골라 시사 중' 이라는 뜻이므로, 그 승격은 :func:`select_image` 하나만 찍는다(SCHEMA §2.1).
+
+    같은 불변식("REVIEW_HUMAN 이상 ⇔ selected_image 있음")의 반대쪽도 여기서 지킨다 —
+    선택본 파일이 사라져 선택이 비면 REVIEW_HUMAN 장면을 IMAGE 로 **내린다**.
+
     APPROVED 장면은 **바뀔 것이 없을 때만** 조용히 통과한다(재스캔이 승인 상태를
     훼손하지 못하게 하는 불변식). 후보가 실제로 달라졌다면 VNError 로 막는다 —
     승인된 컷을 사람 확인 없이 교체하는 유일한 통로였기 때문이다.
@@ -495,6 +506,11 @@ def register_images(sid: str, run_check: bool = True) -> dict:
             sc["assets"]["selected_image"] = ""   # 사라진 파일이 선택본으로 남지 않게
         if files and sc.get("status") in ("SCENE_PLAN", "PROMPT"):
             sc["status"] = "IMAGE"
+        if (sc.get("status") == "REVIEW_HUMAN"
+                and not sc["assets"]["selected_image"].strip()):
+            # 선택본이 사라진 시사 단계 — A3 가 곧바로 FAIL 이다. 고를 것이 다시 후보뿐이니
+            # 상태도 '고르기 대기'(IMAGE)로 정직하게 내린다(승격은 select_image 가 다시 한다).
+            sc["status"] = "IMAGE"
         _save(path, sc)
         if not run_check:
             return {"count": len(rels), "auto": sc["review"].get("auto", "PENDING"),
@@ -502,8 +518,7 @@ def register_images(sid: str, run_check: bool = True) -> dict:
         code, out = vn_core.run_checker(sid)
         sc = _load(path)
         sc["review"]["auto"] = "PASS" if code == 0 else "FAIL"
-        if code == 0 and sc.get("status") == "IMAGE":
-            sc["status"] = "REVIEW_HUMAN"
+        # 상태는 여기서 올리지 않는다 — IMAGE → REVIEW_HUMAN 은 select_image 의 몫이다.
         _save(path, sc)
     return {"count": len(rels), "auto": sc["review"]["auto"], "fails": _fails(out),
             "locked": False}
@@ -579,7 +594,13 @@ def resolve_candidate(sid: str, key: Any) -> str:
 
 
 def select_image(sid: str, rel: str) -> dict:
-    """후보 1장을 selected_image 로 지정한다. 반환: {selected, auto_pass, fails}"""
+    """후보 1장을 selected_image 로 지정한다. 반환: {selected, auto_pass, fails}
+
+    **IMAGE → REVIEW_HUMAN 승격의 유일한 자리다.** REVIEW_HUMAN 은 "사람이 후보 하나를
+    골랐고 그것을 시사 중" 이라는 뜻이고, 검사기 A3 도 그 단계부터 selected_image 를
+    요구한다 — 선택과 승격이 같은 잠금 안에서 함께 일어나야 그 둘이 어긋나지 않는다.
+    자동 검사가 FAIL 이면 승격하지 않는다(선택은 남고 상태는 IMAGE 에 머문다).
+    """
     path = _require(sid)
     with _LOCK:   # 검사~저장을 한 잠금 안에 둬 승인 직후의 교체(경쟁 상태)까지 막는다
         _deny_if_approved(_load(path), sid, "선택 이미지를 바꾸려면")
@@ -598,7 +619,7 @@ def select_image(sid: str, rel: str) -> dict:
         code, out = vn_core.run_checker(sid)
         sc = _load(path)
         if code == 0:
-            if sc.get("status") == "IMAGE":     # register_images(run_check=True) 가 하던 승격
+            if sc.get("status") == "IMAGE":     # 승격은 여기 한 곳에서만 일어난다(SCHEMA §2.1)
                 sc["status"] = "REVIEW_HUMAN"
                 _save(path, sc)
         else:

@@ -337,14 +337,31 @@ SCENE_PLAN → PROMPT → IMAGE → REVIEW_HUMAN → APPROVED
      ↑__________________|  되돌리기: advance_scene revise <SCENE_PLAN|PROMPT|IMAGE>
 ```
 
+각 단계의 뜻:
+
+| 단계 | 뜻 | 여기로 올리는 것 |
+|---|---|---|
+| `SCENE_PLAN` | 장면 계획만 있다 | `advance_scene new` · `vn_compose` |
+| `PROMPT` | 이미지 프롬프트가 있다 | `scene_ops.set_prompt` |
+| `IMAGE` | **후보 이미지가 있고, 사람이 아직 고르지 않았다** | `scene_ops.register_images` |
+| `REVIEW_HUMAN` | **사람이 후보 하나를 골랐고 그것을 시사 중이다** | `scene_ops.select_image` |
+| `APPROVED` | 사람이 승인해 잠갔다 | `scene_ops.approve` |
+
 자동 검사는 **후보 등록·이미지 선택 시점에 그 자리에서 실행**되고 결과는 `review.auto` 에 적힌다.
-따로 머무는 단계가 아니다 — 검사가 PASS 면 `IMAGE` 가 곧바로 `REVIEW_HUMAN` 으로 올라간다
-(`scene_ops.register_images` · `select_image`).
+따로 머무는 단계가 아니다.
+
+> **`IMAGE` → `REVIEW_HUMAN` 은 `scene_ops.select_image` 만이 찍는다.**
+> 후보 등록(`register_images`)은 자동 검사가 PASS 여도 `IMAGE` 에서 멈춘다 — `REVIEW_HUMAN`
+> 이상은 A3 가 `selected_image` 를 요구하므로, 렌더가 끝난 순간 상태만 올려 두면 사람이
+> 후보를 고르기 전까지 저장소가 **자기 검사기에 FAIL 한다**(`[A3] … REVIEW_HUMAN 이상 단계는
+> selected_image 가 필요함`). 그 사이는 잘못된 상태가 아니라 정상적인 '고르기 대기'다.
+> 같은 이유로 `register_images` 는 선택본 파일이 사라져 선택이 비면 `REVIEW_HUMAN` 장면을
+> `IMAGE` 로 **내린다** — 불변식은 "`REVIEW_HUMAN` 이상 ⇔ `selected_image` 있음" 이다.
 
 > ### ⚠ `REVIEW_AUTO` 는 **쓰면 안 되는 값**이다
 > `check_protocol.SCENE_STATES` 열거에 이름만 남아 있어서 **검사기는 통과시킨다.** 그런데
 > 이 값을 만드는 도구도, 이 값에서 다음 단계로 올려 주는 도구도 **없다** — 승격은 `IMAGE`
-> 에서만 일어나고(`register_images`/`select_image`), `approve` 는 `REVIEW_HUMAN` 만 받는다.
+> 에서만 일어나고(`select_image`), `approve` 는 `REVIEW_HUMAN` 만 받는다.
 > 손으로 `status: "REVIEW_AUTO"` 라고 적으면 그 장면은 초록불인 채로 **승인까지 영영 못 간다.**
 > 빠져나오는 길은 `advance_scene revise <ID> IMAGE` 뿐이고, 그때 `selected_image` 는 비워진다.
 >
@@ -363,7 +380,7 @@ FAIL 이 아니다.
 | 단계 | 그 단계부터 강제되는 것 |
 |---|---|
 | `PROMPT` | `prompt.grok_output` 이 있으면 A6 앵커 검사 대상 |
-| `IMAGE` 이상 | A6 프롬프트 필수 · A3 이미지 경로/존재/해상도 |
+| `IMAGE` 이상 | A6 프롬프트 필수 · A3 이미지 경로/존재/해상도 (`selected_image` 는 **아직 없어도 된다**) |
 | `REVIEW_HUMAN` 이상 | A3 `selected_image` 필수 · A7 `review.auto == "PASS"` |
 | `APPROVED` | A7 `review.auto == review.human == "PASS"` |
 
@@ -544,11 +561,13 @@ ending_label  →  (옛 데이터의 문자열 ending — 적재할 때 ending_l
 | 필드 | 타입 | 필수 | 쓰는 쪽 | 읽는 쪽 | 검사기 |
 |---|---|---|---|---|---|
 | `raw_images` | list[str] | ⚠ | `scene_ops.register_images` | 스튜디오 후보 썸네일 | **A3** 나열된 파일이 실제로 있어야 함 |
-| `selected_image` | str | ⚠ | `scene_ops.select_image` | 감상본 · 인화 · 갤러리 · 앨범 | **A3** REVIEW_HUMAN 이상 필수 |
+| `selected_image` | str | ⚠ | `scene_ops.select_image` (이 값이 생기는 순간 `IMAGE` → `REVIEW_HUMAN`) | 감상본 · 인화 · 갤러리 · 앨범 | **A3** REVIEW_HUMAN 이상 필수 |
 | `makefun_tasks[]` | list[obj] | ⬜ | `makefun_client` (자동) | **재과금 없이 재수령** | — |
 
 `IMAGE` 이상 단계에서는 `raw_images` 와 `selected_image` 중 **최소 하나**에 값이 있어야 하고
 (둘 다 비면 A3 FAIL), `REVIEW_HUMAN` 이상에서는 `selected_image` 가 반드시 있어야 한다.
+그래서 **후보만 있고 선택이 없는 장면은 `IMAGE` 에 머문다** — 렌더가 끝나자마자 `REVIEW_HUMAN`
+으로 올리면 사람이 고르기 전까지 A3 가 FAIL 이다(§2.1 의 승격 규칙).
 
 경로는 저장소 루트 기준 상대경로(`images/raw/SCENE-001/xxx.png`).
 허용 확장자: `.png` `.jpg` `.jpeg` `.tif` `.tiff` `.webp` (A3 · `vn_core.IMAGE_EXTS`).
