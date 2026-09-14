@@ -2,7 +2,7 @@
   "scene_id": "SCENE-008",
   "scene_order": 8,
   "episode": 2,
-  "status": "PROMPT",
+  "status": "REVIEW_HUMAN",
   "location_id": "LOC-003",
   "time": "밤",
   "characters": [
@@ -23,8 +23,8 @@
   "prompt": {
     "grok_input_version": 1,
     "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, 1girl, 1boy, 2people, couple, both characters visible, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, seen from behind, walking home slowly as she lingers half a step back holding his sleeve, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, night",
-    "external_generator": "",
-    "external_model": ""
+    "external_generator": "ComfyUI",
+    "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
   "dialogue": [
     {
@@ -44,11 +44,13 @@
     }
   ],
   "assets": {
-    "raw_images": [],
-    "selected_image": ""
+    "raw_images": [
+      "images/raw/SCENE-008/cf_d36edd_1.png"
+    ],
+    "selected_image": "images/raw/SCENE-008/cf_d36edd_1.png"
   },
   "review": {
-    "auto": "PENDING",
+    "auto": "PASS",
     "human": "PENDING",
     "score": null,
     "notes": []
