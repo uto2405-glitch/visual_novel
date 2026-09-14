@@ -7,6 +7,8 @@ API: POST /api/v1/userText2Image/start → {code:0, data:[{_id,...}]}
      POST /api/v1/userUpscale/start → GET /api/v1/userUpscale/{id} (해상도만 키우는 유료 호출)
      GET  /api/v1/transactionRecord/creditsHistory (읽기 전용 — 그래도 토큰을 쓰는 실호출)
 토큰은 환경변수 MAKEFUN_API_TOKEN 로만 공급한다(파일 저장 금지 — 검사기 A8).
+설정은 manifest image_generator.makefun(model·api) + 공용 키(max_long_edge_px) — 옛 최상위
+api/model 도 그대로 읽힌다(_cfg 가 합친다). 기본 엔진 선택은 image_generator.engine(image_gen).
 
 사용:
   python tools/makefun_client.py SCENE-001 [--n 2] [--long-edge 1536] [--no-reference]
@@ -48,16 +50,16 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:          # 저장소가 복제된 곳에서 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
     sys.path.insert(0, str(_HERE))
 
+import gen_common                                              # noqa: E402
 import vn_core                                                 # noqa: E402
-from vn_core import (IMAGE_EXTS, WRITE_LOCK, VNError,          # noqa: E402
-                     atomic_write_bytes, atomic_write_json, is_scene_id,
+from vn_core import (IMAGE_EXTS, VNError,                      # noqa: E402
+                     atomic_write_bytes, is_scene_id,
                      iter_scenes, load_json, load_json_safe, safe_path,
                      safe_slug, selected_of)
 
@@ -69,7 +71,16 @@ MANIFEST = vn_core.MANIFEST        # 테스트가 갈아끼우므로 함수는 �
 SCENES_DIR = vn_core.SCENES
 RAW_DIR = vn_core.IMAGES_RAW
 USAGE_LOG = vn_core.LOGS / "makefun_usage.jsonl"
-META_NAME = "_gen_meta.json"
+# 결과형·메타 파일 규약은 엔진 공용(gen_common)이다 — ComfyUI 경로와 같은 모양이어야
+# gen_jobs·스튜디오가 어느 엔진의 결과든 같은 코드로 읽는다. 이름은 별칭으로 남겨 둔다
+# (mk.GenResult / mk.META_NAME / mk.write_gen_meta 를 쓰는 호출부·테스트가 그대로 동작).
+GenResult = gen_common.GenResult
+META_NAME = gen_common.META_NAME
+META_MAX_ENTRIES = gen_common.META_MAX_ENTRIES
+write_gen_meta = gen_common.write_gen_meta
+_now = gen_common.now_iso
+ENGINE = "makefun"
+LABEL = "MakeFun"
 TOKEN_ENV = "MAKEFUN_API_TOKEN"
 DEFAULT_BASE = "https://makefun.ai"
 POLL_SEC = 4
@@ -106,12 +117,9 @@ SIZE_HARD_MAX_PX = 4096
 # 이미지 내 글자 억제(15) — text2image API 에 negative 필드가 없어 프롬프트 말미에 덧붙인다.
 NEGATIVE_PHRASES = ("no text", "no letters", "no speech bubbles", "no watermark", "no signature")
 
-META_MAX_ENTRIES = 200      # _gen_meta.json 무한 증식 방지
-# 장면 assets.makefun_tasks 의 보존 개수는 그 파일을 쓰는 쪽(scene_ops.GEN_TASKS_MAX)이 정한다.
-
-# 대장·메타·장면 JSON 의 read-modify-write 직렬화는 저장소 전역 잠금(vn_core.WRITE_LOCK)을 쓴다.
-# 예전처럼 이 파일만의 잠금을 따로 두면 웹에서 장면을 저장하는 순간과 task_id 를 적는 순간이
-# 서로를 막지 못해, 이미 과금된 task_id 기록이 통째로 덮여 사라질 수 있다(재수령 불가 = 금전 손실).
+# _gen_meta.json 보존 개수(META_MAX_ENTRIES)는 gen_common 이, 장면 assets.makefun_tasks 의
+# 보존 개수는 그 파일을 쓰는 쪽(scene_ops.GEN_TASKS_MAX)이 정한다.
+# 대장·메타의 read-modify-write 직렬화는 gen_common 이 저장소 전역 잠금(vn_core.WRITE_LOCK)으로 한다.
 
 
 # 생성 작업 로그와 같은 채널(vn.gen) — webapp.setup_logging 이 logs/webapp.log 에 물린다.
@@ -144,15 +152,6 @@ class _Transient(RuntimeError):
         self.presend = presend
 
 
-class GenResult(list):
-    """저장된 파일 경로 목록 — list 그대로라 기존 호출부와 호환되고, 부분 실패 정보를 함께 싣는다(11)."""
-
-    def __init__(self, files=(), warnings=None, task_ids=None):
-        super().__init__(files)
-        self.warnings: list[str] = list(warnings or [])
-        self.task_ids: list[str] = list(task_ids or [])
-
-
 def token() -> str:
     t = os.environ.get(TOKEN_ENV, "").strip()
     if not t:
@@ -162,9 +161,22 @@ def token() -> str:
 
 
 def _cfg() -> dict:
+    """manifest image_generator — 최상위 블록에 ``makefun`` 하위 블록을 덧씌운 한 장의 dict.
+
+    엔진이 둘이 되면서(ComfyUI 기본·MakeFun 보조) MakeFun 전용 설정(model·api·
+    max_reference_images·skip_face_enhance)은 ``image_generator.makefun`` 아래로 들어갔다.
+    공용 키(max_long_edge_px 등)는 최상위에 남는다. 예전 매니페스트(최상위 api/model)도
+    그대로 읽힌다 — 하위 블록이 있으면 그 키가 이기고, 다른 엔진 블록은 섞지 않는다.
+    """
     mf = load_json_safe(MANIFEST, {})
     cfg = mf.get("image_generator", {})
-    return cfg if isinstance(cfg, dict) else {}
+    if not isinstance(cfg, dict):
+        return {}
+    merged = {k: v for k, v in cfg.items() if k not in ("makefun", "comfyui")}
+    sub = cfg.get("makefun")
+    if isinstance(sub, dict):
+        merged.update(sub)
+    return merged
 
 
 def base_url() -> str:
@@ -172,10 +184,6 @@ def base_url() -> str:
     if not u.startswith("https://"):
         raise VNError(f"MakeFun base_url 은 https 만 허용합니다: {u}")
     return u
-
-
-def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
 
 
 def _say(msg: str, quiet: bool = False) -> None:
@@ -473,7 +481,11 @@ def _cap_px() -> int:
 
 
 def _align8(px: int) -> int:
-    """8의 배수 정렬 — 긴 변은 '최소' 요구라 올림하되 상한은 넘지 않는다."""
+    """8의 배수 정렬 — 긴 변은 '최소' 요구라 올림하되 상한은 넘지 않는다.
+
+    상한이 8의 배수가 아니면 **내려서** 자른다(2250 → 2248). 그래서 상한을 올리라는 권고는
+    8의 배수여야 실행 가능하다(size_warnings 가 gen_common.align_up 으로 올려 말한다).
+    """
     cap = _cap_px() // 8 * 8
     px = max(SIZE_MIN_PX, min(int(px), cap))
     return min((px + 7) // 8 * 8, cap)
@@ -560,9 +572,12 @@ def size_warnings(plan: dict | None = None, long_edge: int | None = None) -> lis
         return []
     a3 = ("" if plan.get("source") == "--long-edge" else
           f" 지금 생성하면 검사기 A3(긴 변 ≥ {plan['want']}px)도 FAIL 합니다.")
+    # 권고값은 8의 배수로 올린다 — 상한 자체가 8의 배수로 **내려** 잘리므로(cap 2250 → 2248)
+    # 요청값을 그대로 권하면 "이미 그 값인데 올리라"가 되고, 고쳐도 다시 깎이고 돈만 쓴다.
+    need = gen_common.align_up(plan["want"])
     msgs = [f"요청 {plan['want']}px({plan.get('source', '')}) → 실제 {plan['long']}px "
             f"— 상한 {plan['cap']}px 에 깎였습니다. 과금은 요청대로 됩니다. "
-            f"매니페스트 image_generator.max_long_edge_px 를 {plan['want']} 이상으로 "
+            f"매니페스트 image_generator.max_long_edge_px 를 {need} 이상(8의 배수)으로 "
             f"올린 뒤 생성하세요.{a3}"]
     note = _print_note(plan["width"], plan["height"])
     if note:
@@ -592,32 +607,12 @@ def apply_negative(prompt: str, enabled: bool = True) -> str:
 # --- 기록: 대장(17) · 메타(12) · 장면 task(10) --------------------------------
 
 def log_usage(record: dict) -> None:
-    """종량제 비용 추적용 append-only 대장(17). 기록 실패가 생성을 막지 않는다."""
-    try:
-        with WRITE_LOCK:
-            USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
-            with USAGE_LOG.open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"ts": _now(), **record}, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    """종량제 비용 추적용 append-only 대장(17) — logs/makefun_usage.jsonl 고정.
 
-
-def write_gen_meta(out_dir: Path, entry: dict) -> None:
-    """생성 메타데이터를 images/raw/<scene>/_gen_meta.json 에 누적(12)."""
-    try:
-        path = Path(out_dir) / META_NAME
-        with WRITE_LOCK:
-            doc = load_json_safe(path, {})
-            entries = doc.get("entries")
-            if not isinstance(entries, list):
-                entries = []
-            entries.append(entry)
-            doc["entries"] = entries[-META_MAX_ENTRIES:]
-            doc.setdefault("scene_id", entry.get("scene_id", ""))
-            doc["updated_at"] = _now()
-            atomic_write_json(path, doc)
-    except Exception:
-        pass
+    쓰기 자체는 gen_common 이 한다(ComfyUI 대장과 같은 형식·같은 잠금). 파일이 엔진마다
+    다른 이유는 유료·무료 기록을 한 파일에 섞으면 과금 합산이 어긋나기 때문이다.
+    """
+    gen_common.log_usage(USAGE_LOG, record)
 
 
 def _scene_path(scene_id: str) -> Path:
