@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import http.client
 import json
 import logging
 import mimetypes
@@ -152,6 +153,38 @@ class _Transient(RuntimeError):
         self.presend = presend
 
 
+def _host_of(url: str) -> str:
+    """안내문에 실을 수 있는 주소 — scheme://host[:port]/path 까지, **쿼리는 버린다.**
+
+    presigned URL 의 쿼리에는 서명(자격증명)이 들어 있다. 오류 문장은 화면과 로그에
+    그대로 남으므로, 여기서 잘라내지 않으면 안내 한 줄이 곧 유출이다.
+    """
+    try:
+        u = urllib.parse.urlsplit(str(url))
+        return urllib.parse.urlunsplit((u.scheme, u.netloc, u.path, "", ""))[:200]
+    except ValueError:
+        return "(주소 판독 불가)"
+
+
+def _not_http(where: str, exc: Exception) -> VNError:
+    """HTTP 가 아닌 응답(http.client.HTTPException) → **재시도하지 않는** 안내.
+
+    그 주소에 MakeFun 이 아닌 것이 앉아 있으면(오타난 base_url · 사내 프록시 · TLS 포트에
+    평문 요청) 응답 첫 줄이 상태줄이 아니라 ``BadStatusLine`` 이 난다. 그것은 URLError 도
+    OSError 도 아니라서 여기서 잡지 않으면 **CLI 로 traceback 이 그대로 샜다**.
+
+    **_Transient 가 아니라 VNError 다 — 다시 보내지 않는다.** 이 예외는 요청을 보낸 *뒤*
+    응답을 읽다가 난다. 생성 시작(POST start)은 task 를 만드는 순간 과금되므로, 서버가
+    이미 받아 처리했는지 알 수 없는 POST 를 다시 보내면 **한 번 더 청구될 수 있다.**
+    사용자가 할 일은 재시도가 아니라 주소 확인이라, 두드린 주소를 문장에 담는다
+    (토큰은 담지 않는다 — 안내문은 로그·화면에 그대로 남는다).
+    """
+    return VNError(f"{where} 에서 HTTP 응답이 아닌 답을 받았습니다 — 그 주소에 MakeFun API 가 "
+                   f"아닌 것이 있는 것 같습니다({type(exc).__name__}). "
+                   "base_url(매니페스트 image_generator.makefun.api.base_url)을 확인하세요. "
+                   "이미 과금됐을 수 있는 요청이라 자동으로 다시 보내지 않습니다.")
+
+
 def token() -> str:
     t = os.environ.get(TOKEN_ENV, "").strip()
     if not t:
@@ -206,8 +239,9 @@ def _retry_after(headers) -> float | None:
 
 
 def _once(method: str, path: str, body: dict | None, timeout: int) -> dict:
+    url = base_url() + path       # 아래 안내문이 '어디를 두드렸나'를 말하려면 이름이 필요하다
     req = urllib.request.Request(
-        base_url() + path,
+        url,
         data=json.dumps(body).encode("utf-8") if body is not None else None,
         headers={"Authorization": "Bearer " + token(), "Content-Type": "application/json"},
         method=method)
@@ -229,6 +263,8 @@ def _once(method: str, path: str, body: dict | None, timeout: int) -> dict:
         # DNS·연결거부는 요청이 나가기 전 실패 — POST 재시도해도 이중 생성 위험이 없다.
         presend = isinstance(e.reason, (socket.gaierror, ConnectionRefusedError))
         raise _Transient(f"MakeFun 연결 실패: {e.reason}", None, None, presend)
+    except http.client.HTTPException as e:
+        raise _not_http(f"{method} {url}", e) from e
     try:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
@@ -397,6 +433,8 @@ def _put_once(url: str, data: bytes, content_type: str, timeout: int) -> int:
         raise VNError(f"업로드 HTTP {e.code}")
     except urllib.error.URLError as e:
         raise _Transient(f"업로드 연결 실패: {e.reason}", None, None, True)
+    except http.client.HTTPException as e:
+        raise _not_http(f"업로드(PUT {_host_of(url)})", e) from e
 
 
 def _put_bytes(url: str, data: bytes, content_type: str, quiet: bool = True) -> int:
@@ -877,6 +915,8 @@ def _fetch_bytes(url: str, timeout: int) -> bytes:
         raise VNError(f"결과 다운로드 HTTP {e.code}")
     except urllib.error.URLError as e:
         raise _Transient(f"결과 다운로드 연결 실패: {e.reason}", None, None, True)
+    except http.client.HTTPException as e:
+        raise _not_http(f"결과 다운로드({_host_of(url)})", e) from e
     if len(data) > DL_CAP:
         raise VNError("결과 이미지가 30MB 를 초과합니다.")
     return data

@@ -3197,6 +3197,73 @@ def m13(b: Box):
     ok(str(bad["note"]).strip(), "실패 사유가 비어 있음")
 
 
+@test("makefun", "M14 HTTP 가 아닌 응답 — traceback 대신 주소를 담은 VNError, 그리고 재시도 0(이중 과금 차단)")
+def m14(b: Box):
+    """base_url 오타·사내 프록시·TLS 포트에 평문 요청이면 응답 첫 줄이 상태줄이 아니라
+    ``http.client.BadStatusLine`` 이 난다. 그것은 URLError 도 OSError 도 아니라서, 잡지 않으면
+    CLI 로 **traceback 이 그대로 샜다**(comfyui_client 는 이미 막았다 — CF03. 같은 구멍이
+    유료 경로에 남아 있었다).
+
+    **_Transient 로 올리면 안 된다.** 이 예외는 요청을 *보낸 뒤* 응답을 읽다가 난다 —
+    생성 시작(POST start)은 task 를 만드는 순간 과금이므로, 서버가 이미 받아 처리했는지
+    알 수 없는 요청을 다시 보내면 한 번 더 청구될 수 있다. 그래서 재시도 대상이 아니다.
+    (이미 재시도하던 코드들 — 429·5xx·전송 전 실패 — 의 의미는 M02 가 그대로 지킨다.)
+
+    소켓은 진짜로 연다(_rude_server = ComfyUI 검사 CF03 이 쓰는 그 헬퍼). 스텁으로는
+    전송 계층에서만 나는 이 예외를 재현할 수 없기 때문이다.
+    """
+    mk = b.mod("makefun_client")
+    tok = "selftest-token-not-a-real-key"
+    rude = b"garbage" + BAD_LINE_END
+
+    # (1) _once — VNError(재시도 대상 아님) · 두드린 주소 · 토큰은 안 샌다
+    with _rude_server(rude) as port, env_var(mk.TOKEN_ENV, tok), \
+            patched(mk, "base_url", lambda: f"http://127.0.0.1:{port}"):
+        e = raises(lambda: mk._once("POST", mk.P_T2I_START, {"prompt": "x"}, 5),
+                   RuntimeError, "HTTP 아닌 응답이 VNError 로 오지 않음(traceback 이 그대로 샌다)")
+    ok(isinstance(e, mk.VNError), f"VNError 가 아님 — {type(e).__name__}")
+    ok(not isinstance(e, mk._Transient),
+       f"재시도 대상(_Transient)으로 올림 — 과금됐을 수 있는 POST 를 다시 보낸다 ({type(e).__name__})")
+    has(str(e), str(port), "두드린 주소")
+    has(str(e), "base_url", "무엇을 고쳐야 하는지")
+    hasnt(str(e), "Traceback", "traceback")
+    hasnt(str(e), tok, "안내문에 토큰이 섞임")
+
+    # (2) _call — 재시도 가치가 있는 오류였다면 여러 번 보낸다. 한 번이어야 한다.
+    #     (멱등 GET 으로 센다 — idempotent=False 는 _Transient 여도 한 번이라 구분이 안 된다.)
+    calls = {"n": 0}
+    real_once = mk._once
+
+    def counting(method, path, body, timeout):
+        calls["n"] += 1
+        return real_once(method, path, body, timeout)
+
+    with _rude_server(rude) as port2, env_var(mk.TOKEN_ENV, tok), \
+            patched(mk, "base_url", lambda: f"http://127.0.0.1:{port2}"), \
+            patched(mk, "_backoff", lambda a, ra: 0.0), patched(mk, "_once", counting):
+        e2 = raises(lambda: mk._call("GET", mk.P_CREDITS, timeout=5, quiet=True),
+                    RuntimeError, "HTTP 아닌 응답")
+    eq(calls["n"], 1, f"멱등 GET 인데도 재시도했다(재시도 한도 {mk.RETRY_MAX}) — "
+                      "같은 경로를 POST 가 타면 이중 과금이다")
+    has(str(e2), str(port2), "두드린 주소")
+
+    # (3) 업로드(PUT)·결과 다운로드도 같은 구멍이었다 — 서명 쿼리는 안내문에 남기지 않는다
+    secret = "deadbeefsignature"
+    with _rude_server(rude) as port3:
+        up = f"http://127.0.0.1:{port3}/bucket/key.png?X-Amz-Signature={secret}"
+        e3 = raises(lambda: mk._put_once(up, b"x", "image/png", 5), RuntimeError, "업로드 PUT")
+    ok(isinstance(e3, mk.VNError) and not isinstance(e3, mk._Transient),
+       f"업로드가 재시도 대상으로 올라감 — {type(e3).__name__}")
+    has(str(e3), str(port3), "두드린 주소")
+    hasnt(str(e3), secret, "안내문에 presigned 서명이 그대로 남음")
+    with _rude_server(rude) as port4:
+        e4 = raises(lambda: mk._fetch_bytes(f"http://127.0.0.1:{port4}/a.png?sig={secret}", 5),
+                    RuntimeError, "결과 다운로드")
+    ok(isinstance(e4, mk.VNError) and not isinstance(e4, mk._Transient),
+       f"다운로드가 재시도 대상으로 올라감 — {type(e4).__name__}")
+    hasnt(str(e4), secret, "안내문에 서명이 그대로 남음")
+
+
 # ============================================================ ComfyUI (모의)
 # 실제 ComfyUI 는 무료·로컬이라 불러도 되지만, 자가진단은 이 PC 에 ComfyUI 가 켜져 있든 말든
 # 같은 결과를 내야 한다(P17 이 로컬 LLM 을 죽은 포트로 고정하는 것과 같은 이유). 그래서
@@ -3585,6 +3652,11 @@ def cf02(b: Box):
             ok(direct not in calls, f"comfyui_client.{fn} 이 장면 파일 경로를 직접 씀({direct})")
     imports = tool_imports(b, "comfyui_client")
     ok("makefun_client" not in imports, "comfyui_client 가 makefun_client 를 import 함(엔진은 서로를 모른다)")
+
+
+# HTTP 가 아닌 첫 줄 — 상태줄 자리에 아무 말이나 오면 http.client.BadStatusLine 이 난다.
+# (줄끝은 소스에 직접 쓰지 않는다 — 에디터·도구가 CRLF 를 만지면 검사 자체가 흔들린다.)
+BAD_LINE_END = bytes([13, 10])
 
 
 @contextlib.contextmanager
