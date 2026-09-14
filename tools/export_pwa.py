@@ -181,10 +181,27 @@ def export(include_all: bool, max_edge: int, quality: int,
     html = html.replace("</body>", SW_REG + "</body>", 1)
     wm = webmanifest(data["title"])
 
-    cut = _square_image(_pick_cut(data, icon_scene) or "") if icon_from_cut else None
-    icons = {}
+    # 아이콘이 대표 컷으로 만들어졌는지 **여기서** 판정하고 말한다. 예전에는 실패해도 조용히
+    # 기본 아이콘으로 떨어진 뒤 main() 이 "대표 컷 중앙 크롭으로 생성" 이라고 알렸다 —
+    # --icon-scene 에 없는 장면을 적어도 성공했다고 답하던 자리다.
+    cut = None
+    if icon_from_cut:
+        src = _pick_cut(data, icon_scene)
+        if src is None:
+            print(f"  ⚠ 아이콘: {icon_scene or '대표 컷'} 에 해당하는 이미지가 없습니다 "
+                  "— 기본 아이콘을 씁니다.")
+        else:
+            cut = _square_image(src)
+            if cut is None:
+                print("  ⚠ 아이콘: 컷을 다룰 수 없어(Pillow 없음 또는 해석 실패) "
+                      "기본 아이콘을 씁니다.")
+    icons, from_cut = {}, False
     for size in ICON_SIZES:
-        icons[size] = (cut is not None and _cut_icon_bytes(cut, size)) or ev.app_icon_png(size)
+        made = _cut_icon_bytes(cut, size) if cut is not None else None
+        if made:
+            from_cut = True
+        icons[size] = made or ev.app_icon_png(size)
+    export.last_icon_from_cut = from_cut      # main() 이 사실대로 보고하기 위한 값
 
     # 캐시 버전은 번들 내용의 sha256 — 내용이 같으면 재실행해도 그대로(불필요한 재캐시 방지)
     h = hashlib.sha256()
@@ -228,10 +245,12 @@ def main() -> int:
     print(f"PWA 번들 생성: {out.relative_to(ROOT).as_posix()}/ ({total / 1_000_000:.2f} MB)")
     print("  index.html · manifest.webmanifest · sw.js · icon-192/512.png")
     if args.icon_from_cut:
-        if not ev.has_pillow():
+        if getattr(export, "last_icon_from_cut", False):
+            print("  아이콘: 대표 컷 중앙 크롭으로 생성")
+        elif not ev.has_pillow():
             print("  아이콘: Pillow 가 없어 기본 아이콘으로 폴백 (pip install pillow)")
         else:
-            print("  아이콘: 대표 컷 중앙 크롭으로 생성")
+            print("  아이콘: 기본 아이콘으로 폴백 (위 경고 참고)")
     print("다음: 이 폴더를 정적 호스팅 → 폰에서 '홈 화면에 추가' 또는 PWABuilder.com 으로 APK 생성.")
     return 0
 

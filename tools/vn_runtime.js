@@ -253,6 +253,18 @@
     return (!isNaN(n) && n > 0) ? n : null;
   }
 
+  /** 반드시 유한한 수로 — 아니면 fb.
+   *
+   * 손으로 고친 장면의 `"affection": "8"`(문자열) 하나가 분기를 통째로 뒤집었다:
+   * `aff + "8"` 은 덧셈이 아니라 이어붙이기라 30 이 "308" 이 되고, clamp 를 지나면 눈금
+   * 최대값으로 튄다 — 한 번의 선택으로 모든 호감도 분기가 열렸다. 분기 문턱(`min`)도 같다.
+   * 그래서 숫자 판정은 이 한 곳에서만 한다(호출부마다 다시 방어하지 않는다).
+   */
+  function num(v, fb) {
+    var n = (typeof v === "number") ? v : parseFloat(v);
+    return (typeof n === "number" && isFinite(n)) ? n : fb;
+  }
+
   function normScene(s) {
     s = (s && typeof s === "object") ? s : {};
     var o = {
@@ -271,12 +283,19 @@
     }
     var ep = epNum(s.ep);
     if (ep) o.ep = ep;
-    if (Array.isArray(s.choices) && s.choices.length) o.choices = s.choices.filter(function (c) {
-      return c && typeof c === "object";
-    });
-    if (Array.isArray(s.branch) && s.branch.length) o.branch = s.branch.filter(function (b) {
-      return b && typeof b === "object" && b.goto;
-    });
+    // 선택지·분기는 여기서 **수로 못 박아** 내려보낸다 — 두 호스트가 각자 방어하지 않게.
+    if (Array.isArray(s.choices) && s.choices.length) {
+      o.choices = s.choices.filter(function (c) { return c && typeof c === "object"; })
+        .map(function (c) {
+          var n = { text: String(c.text == null ? "" : c.text), affection: num(c.affection, 0) };
+          if (c.goto) n.goto = String(c.goto);
+          return n;
+        });
+    }
+    if (Array.isArray(s.branch) && s.branch.length) {
+      o.branch = s.branch.filter(function (b) { return b && typeof b === "object" && b.goto; })
+        .map(function (b) { return { min: num(b.min, 0), goto: String(b.goto) }; });
+    }
     // 엔딩 표기 정규화: 규약은 ending:true + ending_label. 예전 데이터의 ending:"이름" 도 받아준다.
     var label = String(s.ending_label || "").trim();
     if (typeof s.ending === "string") {
@@ -464,7 +483,8 @@
     var vi = 0, di = 0, ended = false, revealing = false, fullText = "", awaiting = false, hintLeft = 0;
     var autoOn = false, skipOn = false, isOpen = false;
     var revealTimer = null, autoTimer = null, affTimer = null, wakeLock = null, idleTimer = null;
-    var aff = 0, navStack = [], backlog = [], backlogKeys = new Set(), seen = new Set();
+    var aff = 0, affPicks = {}, navStack = [], backlog = [], backlogKeys = new Set(), seen = new Set();
+    var guardUntil = 0;        // 이 시각까지는 포인터 활성화를 무시한다(아래 guardPointer 설명)
     var preloaded = new Set(), lastFocus = null, returnFocus = null;
     var SET = { textSpeed: 26, autoDelay: 1500, fs: 17, skipAll: false, cinema: false };
 
@@ -494,7 +514,8 @@
       return (p && typeof p === "object") ? p : null;
     }
     function savePos() {
-      lsSet(kPos(), JSON.stringify({ vi: vi, di: di, aff: aff, stack: navStack.slice(-300) }));
+      lsSet(kPos(), JSON.stringify({ vi: vi, di: di, aff: aff, picks: affPicks,
+                                    stack: navStack.slice(-300) }));
       fire("onSavedChange", true);
     }
     function clearPos() { lsDel(kPos()); fire("onSavedChange", false); }
@@ -562,6 +583,30 @@
       for (var i = 0; i < data.scenes.length; i++) if (data.scenes[i].id === id) return i;
       return -1;
     };
+    /** 0 이상 hi 미만의 **정수만** 통과시킨다(아니면 -1).
+     *
+     * 저장된 위치는 이 브라우저의 localStorage 라 언제든 낡거나 손댄 값이 돌아온다. 예전에는
+     * `pos.vi >= 0 && pos.vi < 장면수` 만 봤는데, 그 비교는 `"3"`·`2.7`·`null` 을 전부 통과시킨다:
+     *   "3" → vi 가 문자열이 되어 vi+1 이 "31"(진행률 "31 / 12"), data.scenes["3"] 는 있어도
+     *         다음 장면 계산이 전부 어긋난다.
+     *   2.7·null → data.scenes[vi] 가 undefined → showLine·advance 가 조용히 되돌아가
+     *         **글자 없는 화면에 멈춘 채 아무 키도 듣지 않는** 뷰어가 된다(사이트 데이터를
+     *         지우는 것 말고 빠져나올 길이 없었다).
+     */
+    var intIn = function (v, hi) {
+      return (typeof v === "number" && isFinite(v) && Math.floor(v) === v
+              && v >= 0 && v < hi) ? v : -1;
+    };
+    /** 지금 장면. 어떤 경로로든 무대 밖을 가리키게 되면 처음으로 되돌린다 —
+     *  "아무 반응 없는 뷰어" 대신 언제나 읽을 수 있는 화면을 남긴다. */
+    function curScene() {
+      var sc = data.scenes[vi];
+      if (sc) return sc;
+      vi = 0; di = 0;
+      sc = data.scenes[0];
+      if (sc) renderImg();
+      return sc;
+    }
 
     /* ------------------------------------------------------------------ DOM */
     var E = {};
@@ -802,15 +847,20 @@
         if (f && f.focus) f.focus();
       }
     }
+    /** 거부돼도 조용히 넘어간다 — 전체화면은 브라우저·권한 정책이 언제든 막을 수 있다.
+     *  try/catch 만으로는 부족했다: 요청은 **약속(Promise)** 을 돌려주므로 거부는 던지지 않고
+     *  "Uncaught (in promise)" 로 사용자 콘솔에 남는다. */
+    function quietly(fn, self) {
+      if (!fn) return;
+      try {
+        var p = fn.call(self);
+        if (p && typeof p.then === "function") p.then(null, function () { /* 무시 */ });
+      } catch (e) { /* 무시 */ }
+    }
     function toggleFull() {
       var s = E.stage;
-      if (!D.fullscreenElement) {
-        var rq = s.requestFullscreen || s.webkitRequestFullscreen;
-        if (rq) { try { rq.call(s); } catch (e) { /* 사용자 제스처 없이 거부되면 무시 */ } }
-      } else {
-        var ex = D.exitFullscreen || D.webkitExitFullscreen;
-        if (ex) { try { ex.call(D); } catch (e) { /* 무시 */ } }
-      }
+      if (!D.fullscreenElement) quietly(s.requestFullscreen || s.webkitRequestFullscreen, s);
+      else quietly(D.exitFullscreen || D.webkitExitFullscreen, D);
     }
 
     function updateAff(delta) {
@@ -869,27 +919,42 @@
       for (var i = 0; i < imgs.length; i++) if (imgs[i] !== keep) imgs[i].remove();
     }
     function emptyNote(sc, why) {
+      curImg = null;
       clearImgs(null);
       if (!E.img.querySelector(".vnr-empty")) {
         E.img.appendChild(el("div", "vnr-empty", why + " " + ((sc && (sc.purpose || sc.id)) || "")));
       }
     }
+    /* 지금 무대에 올라 있어야 할 컷. **이 한 변수가 늦게 도착한 일들의 유일한 심판이다.**
+     *
+     * 예전에는 컷마다 "0.54초 뒤 나 말고 전부 치워라" 타이머를 따로 걸었다. 장면이 그보다 빨리
+     * 바뀌면(스킵은 0.045초마다 넘어간다) 앞 컷의 타이머가 **새 컷을** 치우고, 새 컷의 타이머가
+     * 남은 앞 컷을 치워 **그림이 한 장도 없는 검은 무대**가 됐다 — 대사만 흐르고 그림은 다음
+     * 장면 전환까지 돌아오지 않았다. 늦게 도착한 onerror 도 같은 문제였다: 이미 지나온 컷의
+     * 실패가 지금 보고 있는 그림을 지우고 남의 장면 설명을 띄웠다.
+     */
+    var curImg = null;
     function renderImg() {
       var sc = data.scenes[vi], url = imgOf(sc, "full");
       var old = E.img.querySelector(".vnr-empty");
       if (old) old.remove();
       if (!url) { emptyNote(sc, "(이미지 없음)"); preloadAround(vi); return; }
       var cur = E.img.querySelector("img.vnr-show");
-      if (cur && cur.getAttribute("src") === url) { preloadAround(vi); return; }
+      if (cur && cur.getAttribute("src") === url) { curImg = cur; preloadAround(vi); return; }
       var im = el("img");
       im.src = url;
       im.alt = (sc && (sc.purpose || sc.id)) || "";
       im.decoding = "async";
+      curImg = im;
       var show = function () {
+        if (im !== curImg) { im.remove(); return; }   // 이미 다음 컷으로 넘어갔다 — 무대에 올리지 않는다
         im.classList.add("vnr-show");
-        setTimeout(function () { clearImgs(im); }, REDUCE ? 0 : 540);
+        setTimeout(function () { if (im === curImg) clearImgs(im); }, REDUCE ? 0 : 540);
       };
-      im.onerror = function () { emptyNote(sc, "(이미지를 불러올 수 없음)"); };
+      im.onerror = function () {
+        if (im !== curImg) { im.remove(); return; }   // 지나온 컷의 늦은 실패는 지금 그림을 지우지 않는다
+        emptyNote(sc, "(이미지를 불러올 수 없음)");
+      };
       E.img.appendChild(im);
       if (REDUCE || im.complete) global.requestAnimationFrame(show); else im.onload = show;
       preloadAround(vi);
@@ -943,7 +1008,7 @@
     }
 
     function showLine() {
-      var sc = data.scenes[vi];
+      var sc = curScene();
       if (!sc) return;
       updateProg();
       if (hintLeft > 0 && --hintLeft === 0) E.hint.hidden = true;   // 조작법을 익힌 뒤엔 자리를 돌려준다
@@ -971,7 +1036,20 @@
       savePos();
     }
 
-    /* -------------------------------------------------------------- 선택지 */
+    /* -------------------------------------------------------------- 선택지
+     * 손짓 한 번은 한 가지 일만 한다.
+     *
+     * 선택지가 **뜨는 그 손짓**이 선택까지 해 버리고 있었다. 폰에서는 탭 하나로 충분했다:
+     * touchend 가 advance → 선택지 상자가 화면 한가운데(=엄지가 놓인 자리)에 뜨고, 뒤따라
+     * 오는 click 이 그 자리에 방금 생긴 버튼을 눌렀다 — **선택지를 보지도 못한 채 엄지 위치가
+     * 분기를 정했다.** 데스크톱의 더블클릭도 같았다(첫 클릭이 열고 둘째 클릭이 골랐다).
+     * 반대로 선택 **직후** 따라오는 클릭은 목적지 장면의 첫 줄을 한 줄 삼켰다.
+     * 그래서 선택지가 열린 직후·선택 직후의 짧은 구간 동안 포인터 활성화를 무시한다.
+     * 키보드는 막지 않는다 — Space/Enter 는 버튼에 포커스가 간 뒤에야 눌리므로 같은 사고가 없다.
+     */
+    var PICK_GUARD_MS = 320;
+    function guardPointer() { guardUntil = Date.now() + PICK_GUARD_MS; }
+    function pointerGuarded() { return Date.now() < guardUntil; }
     function hideChoices() {
       awaiting = false;
       E.choices.hidden = true;
@@ -985,7 +1063,12 @@
       sc.choices.forEach(function (c) {
         var b = el("button", null, c.text || "…");
         b.type = "button";
-        b.addEventListener("click", function () { pick(c); });
+        b.addEventListener("click", function (e) {
+          // 선택지를 띄운 바로 그 손짓이 이어서 누른 것이면 무시한다(선택지는 그대로 남는다).
+          // detail===0 은 키보드로 누른 버튼이다 — 그쪽은 이 사고가 없으므로 막지 않는다.
+          if (pointerGuarded() && !(e && e.detail === 0)) return;
+          pick(c);
+        });
         E.choices.appendChild(b);
       });
       E.choices.hidden = false;
@@ -993,24 +1076,41 @@
       say("선택지 " + sc.choices.length + "개 · 위아래 화살표로 고르고 Enter");
       var first = E.choices.firstElementChild;
       if (first && first.focus) first.focus();
+      guardPointer();
     }
+    /** 한 장면에서 **마지막으로 고른 것 하나만** 셈에 넣는다.
+     *
+     * [장면]·[기록]으로 되돌아가 같은 선택지를 다시 고르면 호감도가 그대로 **쌓였다**:
+     * +8 을 세 번 고르면 +24 라, 어떤 시작값에서도 눈금 최대까지 올려 원하는 엔딩을 열 수 있었다.
+     * 다시 고르는 것은 **결정을 바꾸는 것**이지 덤을 받는 것이 아니므로, 그 장면에서 앞서
+     * 반영한 값을 되돌리고 새 값을 얹는다(눈금에 뜨는 변화량도 그 실제 차이다).
+     */
     function pick(c) {
+      guardPointer();              // 선택 직후 따라오는 클릭이 다음 장면의 첫 줄을 삼키지 않게
       hideChoices();
-      var d = c.affection || 0;
-      if (d) aff = clampAff(aff + d);
-      updateAff(d);
+      var sc = data.scenes[vi], key = (sc && sc.id) || String(vi);
+      var prev = num(affPicks[key], 0), d = num(c.affection, 0);
+      var before = aff;
+      aff = clampAff(aff - prev + d);
+      affPicks[key] = d;
+      updateAff(aff - before);
       savePos();
-      var nx = c.goto ? idxOf(c.goto) : (vi + 1 < data.scenes.length ? vi + 1 : -1);
-      if (nx < 0) { endPlayback(); return; }
+      var nx = c.goto ? idxOf(c.goto) : -1;
+      // 목적지가 없는 goto(오타·감상본에서 빠진 장면)는 **이야기를 끝내지 않는다** —
+      // 예전에는 선택 직후 가짜 엔딩 카드가 떠 작품이 거기서 끝난 것처럼 보였다.
+      if (nx < 0) nx = vi + 1;
+      if (nx >= data.scenes.length) { endPlayback(); return; }
       goTo(nx);
     }
     function nextIndex(sc) {
       if (sc.branch && sc.branch.length) {         // 조건 만족하는 첫 분기로(위에서부터)
         for (var i = 0; i < sc.branch.length; i++) {
           var b = sc.branch[i];
-          if (aff >= (b.min || 0)) { var j = idxOf(b.goto); if (j >= 0) return j; }
+          if (aff >= num(b.min, 0)) { var j = idxOf(b.goto); if (j >= 0) return j; }
         }
-        return -1;
+        // 아무 분기도 만족하지 못하면(문턱이 닿을 수 없게 높거나 목적지가 전부 빠졌으면)
+        // 선형 진행으로 이어간다. 여기서 -1 을 돌려주던 시절에는 엔딩 장면도 아닌 곳에서
+        // 엔딩 카드가 떴다 — 작가는 분기 하나를 잘못 적었을 뿐인데 작품이 끝나 버렸다.
       }
       return vi + 1 < data.scenes.length ? vi + 1 : -1;
     }
@@ -1029,7 +1129,7 @@
       if (awaiting) return;                    // 선택지 대기 중엔 선택해야 진행
       if (ended) { exit(); return; }
       if (step > 0 && revealing) { completeText(); return; }
-      var sc = data.scenes[vi];
+      var sc = curScene();
       if (!sc) return;
       clearTimeout(autoTimer);
       if (step > 0) {
@@ -1302,13 +1402,23 @@
         backlog = []; backlogKeys = new Set(); navStack = [];
         saveHist();
       }
-      if (typeof at === "number" && at >= 0 && at < data.scenes.length) {
-        vi = at; di = 0; navStack = [];
+      // 위치·호감도는 **정수·유한수만** 통과한다(intIn 주석: 손상된 저장이 뷰어를 멈춰 세웠다)
+      var want = intIn(at, data.scenes.length);
+      if (want >= 0) {
+        vi = want; di = 0; navStack = [];
       } else {
-        vi = (pos && pos.vi >= 0 && pos.vi < data.scenes.length) ? pos.vi : 0;
-        di = (pos && pos.di >= 0 && pos.di < dlen(data.scenes[vi])) ? pos.di : 0;
+        var pv = pos ? intIn(pos.vi, data.scenes.length) : -1;
+        vi = pv < 0 ? 0 : pv;
+        var pd = pos ? intIn(pos.di, dlen(data.scenes[vi])) : -1;
+        di = pd < 0 ? 0 : pd;
       }
-      aff = clampAff((pos && typeof pos.aff === "number") ? pos.aff : affStart());
+      affPicks = {};
+      var rawPicks = (pos && pos.picks && typeof pos.picks === "object") ? pos.picks : null;
+      if (rawPicks) {
+        Object.keys(rawPicks).forEach(function (k) { affPicks[k] = num(rawPicks[k], 0); });
+      }
+      aff = clampAff(num(pos && pos.aff, affStart()));
+      guardUntil = 0;
       updateAff(0);
       setAuto(false); setSkip(false);
       closePanels();
@@ -1355,6 +1465,8 @@
     function onTap() {
       wakeBar();
       closeMore();
+      // 선택지를 띄운/고른 손짓의 그림자 클릭 — 이야기를 한 줄 더 넘기지 않는다
+      if (pointerGuarded()) { swallowClick = false; return; }
       if (!swallowClick) tap();
       swallowClick = false;
     }
@@ -1372,6 +1484,7 @@
       swallowTimer = setTimeout(function () { swallowClick = false; }, 450);
       wakeBar();
       closeMore();
+      if (pointerGuarded()) return;          // 선택지가 막 떴거나 막 고른 직후의 손짓
       if (uiHidden()) { setUiHidden(false); return; }
       // 가로로 TAP_R 을 넘게 끌면 스와이프, 그 안이면 탭. 두 판정이 맞닿아 있어 무반응 구간이 없다.
       if (adx > TAP_R && adx > ady) { advance(dx < 0 ? 1 : -1); return; }

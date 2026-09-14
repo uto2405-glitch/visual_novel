@@ -362,11 +362,20 @@ def build_data(include_all: bool, max_edge: int, quality: int, cover_id: str | N
 
 
 def pick_cover(scenes: list, cover_id: str | None) -> int | None:
-    """표지 커버로 쓸 장면 인덱스. 이미 내장된 이미지를 재사용해 용량 증가가 없다."""
+    """표지 커버로 쓸 장면 인덱스. 이미 내장된 이미지를 재사용해 용량 증가가 없다.
+
+    ``--cover`` 로 지정한 장면을 못 쓰면 **말하고** 첫 컷으로 폴백한다. 예전에는 조용히
+    다른 컷을 표지로 삼아, 사용자는 오타(또는 아직 이미지가 없는 장면)를 눈치채지 못한 채
+    "왜 내가 고른 표지가 안 나오지" 만 반복했다.
+    """
     if cover_id:
         for i, s in enumerate(scenes):
             if s.get("id") == cover_id and s.get("img"):
                 return i
+        why = "감상본에 실리지 않았거나 이미지가 없습니다"
+        if any(s.get("id") == cover_id for s in scenes):
+            why = "이미지가 없습니다"
+        print(f"  ⚠ 표지로 지정한 {cover_id} 을(를) 쓸 수 없습니다 — {why}. 첫 컷으로 대신합니다.")
     for i, s in enumerate(scenes):
         if s.get("img"):
             return i
