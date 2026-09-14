@@ -1,11 +1,13 @@
 # MakeFun 능력 지도 — 쓰는 것 · 붙일 수 있는 것 · 못 쓰는 것
 
+> **현황(2026-09):** 기본 이미지 엔진은 로컬 **ComfyUI**(무료, `tools/comfyui_client.py`)다. MakeFun 은 `image_generator.engine: "makefun"` 또는 스튜디오의 [MakeFun 생성(유료)] 보조 버튼으로만 생성에 쓰이고, **업스케일·크레딧 조회는 여전히 MakeFun 전용**이다(→ [SCHEMA.md](SCHEMA.md) §1.3).
+
 이미지 공급자(MakeFun AI)가 제공하는 API 중 **이 저장소가 무엇을 쓰고, 무엇을 일부러 안 붙였고,
 왜 그랬는지**를 남긴 문서다. 목적은 하나 — **다음에 같은 조사를 반복하지 않는 것.**
 "이 기능 붙일 수 있나?" 라는 질문이 나오면 여기부터 본다.
 
 기준: 공급자 OpenAPI 명세에서 직접 확인(2026-08). 접속 설정은
-`project/manifest.json` 의 `image_generator` 한 블록이 전부다(→ [SCHEMA.md](SCHEMA.md) §1.3).
+`project/manifest.json` 의 `image_generator.makefun` 한 블록이 전부다(→ [SCHEMA.md](SCHEMA.md) §1.3).
 
 ---
 

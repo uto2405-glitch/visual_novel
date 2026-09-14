@@ -13,11 +13,26 @@
     }
   },
   "image_generator": {
-    "provider": "MakeFun AI",
-    "model": "a2e",
-    "api": {
-      "base_url": "https://makefun.ai",
-      "token_env": "MAKEFUN_API_TOKEN"
+    "provider": "ComfyUI",
+    "engine": "comfyui",
+    "comfyui": {
+      "api": {
+        "base_url": "http://127.0.0.1:8188"
+      },
+      "checkpoint": "waiIllustriousSDXL_v170.safetensors",
+      "steps": 30,
+      "negative_prompt": "",
+      "base_long_edge_px": 1248,
+      "hires_denoise": 0.4,
+      "hires_steps": 16,
+      "timeout_sec": 600
+    },
+    "makefun": {
+      "model": "a2e",
+      "api": {
+        "base_url": "https://makefun.ai",
+        "token_env": "MAKEFUN_API_TOKEN"
+      }
     }
   },
   "output": {

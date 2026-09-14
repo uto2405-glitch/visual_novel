@@ -5,7 +5,8 @@ LLM 오케스트레이터로 스토리를 씬/행동 비트/장면으로 분해�
 
 ## 현행 엔진 (2026-08 기준)
 - **오케스트레이터 = 로컬 LLM** — `c:\Users\USER\claude\local_llm` 의 llama.cpp 서버(OpenAI 호환, 기본 `http://127.0.0.1:8080/v1`). 스토리·장면 구성·이미지 프롬프트·인물 대화를 담당한다. 로컬이므로 키 불필요·비용 0·사적 대화가 외부로 나가지 않는다.
-- **이미지 생성 = MakeFun AI** (`tools/makefun_client.py`, 토큰은 `MAKEFUN_API_TOKEN` 환경변수). **유료 종량제**다.
+- **이미지 생성 = ComfyUI(로컬, 기본)** — `tools/comfyui_client.py`. 매니페스트 `image_generator.engine: "comfyui"`, 주소는 `comfyui.api.base_url`(환경변수 `COMFYUI_URL` 이 우선, 기본 `http://127.0.0.1:8188`). 무료·토큰 없음. 엔진 위의 공통 진입점은 `tools/image_gen.py`(웹·doctor 는 이것만 부른다).
+- **MakeFun AI 는 보조(유료 종량제)** — `tools/makefun_client.py`, 토큰은 `MAKEFUN_API_TOKEN` 환경변수. `engine: "makefun"` 이거나 스튜디오의 [MakeFun 생성(유료)] 보조 버튼을 눌렀을 때만 쓰이고, 업스케일·크레딧 조회는 MakeFun 전용이다.
 - **그록(xAI)은 예비 경로** — 수동 복붙(`make_grok_input.py`) 또는 API(`tools/grok_api.py`, `XAI_API_KEY`). 매니페스트 `orchestrator` 만 바꾸면 전환된다.
 
 ## 기본 흐름
@@ -43,7 +44,7 @@ LLM 오케스트레이터로 스토리를 씬/행동 비트/장면으로 분해�
 - 사용자 승인 전 제품 기능 구현 금지.
 - **API 키를 저장소의 어떤 파일에도 기록 금지** (.env 포함). 키는 환경변수 `XAI_API_KEY` 로만 주입한다.
 - **MakeFun 토큰(`MAKEFUN_API_TOKEN`)도 환경변수 전용.** 저장소의 어떤 파일(매니페스트·문서·스크립트·주석·테스트·로그)에도 값을 기록 금지. 매니페스트에는 값이 아니라 변수 이름(`token_env`)만 적는다. 콘솔·오류 메시지·커밋 메시지에도 값을 출력하지 않는다. 영구 등록은 `setx` 로 사용자 환경에만 (`docs/ENV_SETUP.md`).
-- **사용자의 명시적 허가 없이 이미지 생성 API 호출 금지.** MakeFun 은 유료 종량제라 호출 1회가 곧 과금이다. `tools/makefun_client.py` 실행, `/api/gen-image` 호출, 그 외 어떤 경로로도 에이전트가 스스로 이미지를 생성하지 않는다. 코드 작성·모의(mock) 서버 테스트까지만 하고, 실호출 검증은 사용자가 그 시점에 허가한 만큼만 한다.
+- **사용자의 명시적 허가 없이 이미지 생성 API 호출 금지.** MakeFun 은 유료 종량제라 호출 1회가 곧 과금이다. `tools/makefun_client.py` 실행, `/api/gen-image` 호출, 그 외 어떤 경로로도 에이전트가 스스로 이미지를 생성하지 않는다. 코드 작성·모의(mock) 서버 테스트까지만 하고, 실호출 검증은 사용자가 그 시점에 허가한 만큼만 한다. 로컬 ComfyUI(무료)는 이 금지의 대상이 아니다 — 켜져 있으면 실호출로 검증해도 된다.
 - **서드파티 CLI/에이전트 도구에 xAI 키 제공 금지.** 근거: 2026-07 Grok Build CLI 가 .env 의 키를 평문으로 xAI 서버에 전송한 사고. MakeFun 토큰도 동일하게 취급한다.
 - **SuperGrok OAuth 우회 경로 사용 금지.** 정상 구독자도 403 거부가 보고되는 비공식 표면이다. 수동 모드 또는 console.x.ai 정식 API 키만 사용한다.
 - 채점표/검사기를 수정해 PASS를 만드는 행위 금지.

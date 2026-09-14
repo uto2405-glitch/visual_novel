@@ -640,6 +640,32 @@ def record_generation_tasks(sid: str, tasks: Any, size: dict | None = None) -> d
     return {"scene_id": sid, "added": added, "count": len(tasks_now)}
 
 
+def record_external_generator(sid: str, generator: Any, model: Any = "") -> dict:
+    """실제로 이미지를 만든 생성기·모델을 ``prompt.external_generator`` / ``external_model`` 에 남긴다.
+
+    → {scene_id, external_generator, external_model}
+
+    **왜 여기 있나**: prompt 는 PROTECTED_FIELDS 다 — 생성 클라이언트(ComfyUI·MakeFun)가 장면
+    JSON 을 직접 열어 쓰면 정규화(_norm)·잠금·저장 방식이 두 벌이 된다. 기록 전용 필드
+    (SCHEMA §2.3)라도 통로는 하나여야 한다. 이 두 키만 바꾸고 다른 필드는 건드리지 않는다.
+
+    APPROVED 장면은 거절한다. 승인된 컷의 출처 기록을 되돌림 없이 바꾸면 "이 그림은 무엇으로
+    만들었나"가 거짓이 된다(승인 뒤에 다른 엔진으로 다시 굽는 일 자체가 revise 대상이다).
+    """
+    path = _require(sid)
+    gen = _text(generator, 80)
+    mdl = _text(model, 160)
+    if not gen:
+        raise VNError("생성기 이름이 비어 있습니다.")
+    with _LOCK:
+        sc = _load(path)
+        _deny_if_approved(sc, sid, "생성기 기록을 바꾸려면")
+        sc["prompt"]["external_generator"] = gen
+        sc["prompt"]["external_model"] = mdl
+        _save(path, sc)
+    return {"scene_id": sid, "external_generator": gen, "external_model": mdl}
+
+
 # ---------------------------------------------------------------- 승인·되돌림
 def approve(sid: str) -> dict:
     """사람 시사 통과 → APPROVED 잠금. 자동 검사 FAIL 이면 원상 복구하고 VNError.

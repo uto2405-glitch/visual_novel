@@ -13,13 +13,29 @@
     }
   },
   "image_generator": {
-    "provider": "MakeFun AI",
-    "model": "a2e",
-    "api": {
-      "base_url": "https://makefun.ai",
-      "token_env": "MAKEFUN_API_TOKEN"
+    "provider": "ComfyUI",
+    "engine": "comfyui",
+    "comfyui": {
+      "api": {
+        "base_url": "http://127.0.0.1:8188"
+      },
+      "checkpoint": "",
+      "steps": 30,
+      "negative_prompt": "",
+      "base_long_edge_px": 1248,
+      "hires_denoise": 0.4,
+      "hires_steps": 16,
+      "timeout_sec": 600,
+      "note": "checkpoint 를 비우면 ComfyUI 가 가진 첫 체크포인트를 쓴다. sampler·scheduler·cfg·clip_skip 를 적지 않으면 기본값이고 Illustrious/WAI 계열이면 프리셋이 자동 적용된다. negative_prompt 를 비우면 기본 부정 문구, false 면 끔. hires 확대는 base_long_edge_px 의 2배까지."
     },
-    "note": "토큰은 환경변수로만 주입한다. 이 파일에 값을 적지 않는다."
+    "makefun": {
+      "model": "a2e",
+      "api": {
+        "base_url": "https://makefun.ai",
+        "token_env": "MAKEFUN_API_TOKEN"
+      }
+    },
+    "note": "engine: comfyui(로컬·무료, 기본) / makefun(유료). 토큰은 환경변수로만 주입한다. 이 파일에 값을 적지 않는다."
   },
   "output": {
     "mode": "visual_novel_scene_cards",

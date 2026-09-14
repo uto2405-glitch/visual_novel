@@ -75,7 +75,8 @@ def check_pillow() -> None:
 # 없으면 파이프라인이 멈추는 파일. vn_core(공용 기반)·scene_ops(상태 전이)는 다른 도구가 의존한다.
 NEED_TOOLS = ["webapp.py", "studio.html", "vn_core.py", "scene_ops.py", "advance_scene.py",
               "check_protocol.py", "scene_lint.py", "vn_compose.py", "make_grok_input.py",
-              "local_llm.py", "makefun_client.py", "print_preflight.py", "print_export.py",
+              "local_llm.py", "makefun_client.py", "comfyui_client.py", "image_gen.py",
+              "gen_common.py", "print_preflight.py", "print_export.py",
               "export_viewer.py", "export_pwa.py", "backup_project.py", "secret_scan.py",
               "selftest.py"]
 # 없어도 되는 파일 — 있으면 그 경로가 쓸 수 있다는 뜻이라 상태만 알린다.
@@ -159,15 +160,43 @@ def _env_state(name: str) -> tuple[bool, int]:
     return bool(v), len(v)
 
 
+def _active_engine() -> str:
+    """기본 이미지 엔진 이름 — 판정은 image_gen 하나(못 읽으면 MakeFun 시절로 본다)."""
+    try:
+        import image_gen
+        return image_gen.active_engine()
+    except Exception:
+        return "makefun"
+
+
+def _shown(url: str) -> str:
+    """주소는 scheme://host:port 로만 — user:pw@ 같은 userinfo 는 진단 출력에 싣지 않는다."""
+    try:
+        return f"{urllib.parse.urlsplit(url).scheme}://{vn_core.host_port(url)}"
+    except ValueError:
+        return "(주소 형식 오류)"
+
+
 def check_env() -> None:
     """설정 여부와 길이만 본다 — 값은 어떤 경우에도 출력하지 않는다."""
     mf_set, mf_len = _env_state("MAKEFUN_API_TOKEN")
+    comfy_main = _active_engine() == "comfyui"
     if mf_set:
-        add("환경변수", "MAKEFUN_API_TOKEN(이미지 생성)", OK, f"설정됨 (길이 {mf_len}자, 값 비표시)")
+        add("환경변수", "MAKEFUN_API_TOKEN(MakeFun 이미지 생성)", OK,
+            f"설정됨 (길이 {mf_len}자, 값 비표시)" + (" · 보조 엔진(유료)" if comfy_main else ""))
+    elif comfy_main:
+        add("환경변수", "MAKEFUN_API_TOKEN(MakeFun 이미지 생성)", OK,
+            "미설정 — 기본 엔진이 ComfyUI 라 보조(유료) MakeFun 을 쓸 때만 필요합니다")
     else:
-        add("환경변수", "MAKEFUN_API_TOKEN(이미지 생성)", WARN,
+        add("환경변수", "MAKEFUN_API_TOKEN(MakeFun 이미지 생성)", WARN,
             "미설정 — 이미지 생성만 막히고 나머지 기능은 정상입니다",
             "docs/ENV_SETUP.md 의 setx 절차로 영구 등록하세요.")
+
+    curl = os.environ.get("COMFYUI_URL", "").strip()
+    if curl:
+        add("환경변수", "COMFYUI_URL", OK, f"{_shown(curl)} (매니페스트 comfyui.api.base_url 보다 우선)")
+    else:
+        add("환경변수", "COMFYUI_URL", OK, "미설정 — 매니페스트 comfyui.api.base_url 또는 기본값(127.0.0.1:8188)을 씁니다")
 
     xai_set, xai_len = _env_state("XAI_API_KEY")
     if xai_set:
@@ -178,8 +207,7 @@ def check_env() -> None:
 
     url = os.environ.get("LOCAL_LLM_URL", "").strip()
     if url:
-        p = urllib.parse.urlparse(url)
-        add("환경변수", "LOCAL_LLM_URL", OK, f"{p.scheme}://{p.netloc} (매니페스트 talk.base_url 보다 우선)")
+        add("환경변수", "LOCAL_LLM_URL", OK, f"{_shown(url)} (매니페스트 talk.base_url 보다 우선)")
     else:
         add("환경변수", "LOCAL_LLM_URL", OK, "미설정 — 매니페스트 talk.base_url 또는 기본값을 씁니다")
 
@@ -194,12 +222,54 @@ def check_local_llm() -> None:
     st = local_llm.status()
     if st.get("up"):
         models = ", ".join(m for m in st.get("models", []) if m) or "(모델명 미표시)"
-        add("로컬 LLM", "서버 응답", OK, f"{st['url']} · 모델 {models}")
+        add("로컬 LLM", "서버 응답", OK, f"{_shown(st['url'])} · 모델 {models}")
     else:
         add("로컬 LLM", "서버 응답", WARN,
-            f"{st.get('url')} 에 응답 없음 — 스토리·프롬프트·대화 탭이 막힙니다",
+            f"{_shown(str(st.get('url', '')))} 에 응답 없음 — 스토리·프롬프트·대화 탭이 막힙니다",
             "start_studio.ps1 로 함께 켜거나, "
             "powershell -File c:\\Users\\USER\\claude\\local_llm\\runtime\\serve.ps1 을 실행하세요.")
+
+
+# ------------------------------------------------------------------ 3b. 이미지 엔진
+def check_image_engine() -> None:
+    """기본 이미지 엔진이 지금 실제로 쓸 수 있는가 — 판정은 image_gen.health 하나(중복 구현 금지).
+
+    ComfyUI 는 로컬이라 실제로 물어본다(무료·3초 상한). MakeFun 은 토큰 유무만 본다 — 조회조차
+    토큰을 쓰는 실호출이라 진단 도구가 계정을 두드리면 안 된다.
+    """
+    try:
+        import image_gen
+        info = image_gen.engine_info()
+    except Exception as exc:
+        add("이미지 엔진", "모듈 로드", ERR, f"tools/image_gen.py 를 불러올 수 없습니다: {exc}")
+        return
+    engine, provider = info["engine"], info["provider"]
+    others = [image_gen.label(e) for e in info["engines"] if e != engine]
+    add("이미지 엔진", "기본 엔진", OK,
+        f"{image_gen.label(engine)} · {provider} · 모델 {info['model']}"
+        + (f" · 보조: {', '.join(others)}" if others else "")
+        + (" · 유료 종량제" if info["billable"] else " · 무료(로컬)"))
+    h = image_gen.health(engine)
+    if engine == "comfyui":
+        if h["ok"]:
+            add("이미지 엔진", "ComfyUI 응답", OK, h["detail"])
+        else:
+            add("이미지 엔진", "ComfyUI 응답", WARN, h["detail"] + " — 이미지 생성이 막힙니다",
+                "ComfyUI 를 켜거나 COMFYUI_URL / manifest image_generator.comfyui 를 확인하세요 "
+                "(python tools/comfyui_client.py --check --online).")
+        try:
+            cf = image_gen.client("comfyui")
+            plan = cf.size_plan()
+            warns = cf.size_warnings(plan)          # 공용 상한·hires 2배 상한에 깎이면 경고(A3 FAIL 예고)
+            add("이미지 엔진", "렌더 계획", WARN if warns else OK,
+                f"{plan['width']}x{plan['height']}"
+                + (f" (기본 캔버스 {plan['base_width']}x{plan['base_height']} → hires)" if plan["hires"] else " (단일 패스)")
+                + (" — " + warns[0] if warns else ""))
+        except Exception as exc:
+            add("이미지 엔진", "렌더 계획", WARN, f"계산 실패: {exc}")
+    else:
+        add("이미지 엔진", "MakeFun 토큰", OK if h["ok"] else WARN, h["detail"],
+            "" if h["ok"] else "docs/ENV_SETUP.md 의 setx 절차로 영구 등록하세요.")
 
 
 # ------------------------------------------------------------------ 4. 프로젝트 구조
@@ -256,22 +326,24 @@ def check_gen_size() -> None:
 
     문서는 "인화하려면 output.min_long_edge_px 를 1800/2250/3600 으로 올려라"고 안내하는데,
     image_generator.max_long_edge_px 를 함께 올리지 않으면 요청이 상한(기본 2048px)으로 깎인다.
-    **과금은 요청대로 되고** 결과는 인화 규격과 검사기 A3 양쪽에 미달한다.
-    판정은 makefun_client 한 곳에 있고(중복 구현 금지) doctor 는 그 결과를 전달만 한다.
+    MakeFun 은 **과금은 요청대로 되고** 결과는 인화 규격과 검사기 A3 양쪽에 미달한다.
+    판정은 기본 엔진의 클라이언트(size_plan/size_warnings) 한 곳에 있고 doctor 는 전달만 한다.
     """
     try:
-        import makefun_client as mkc
-        plan = mkc.size_plan()
-        warns = mkc.size_warnings(plan)
+        import image_gen
+        engine = image_gen.active_engine()
+        cli = image_gen.client(engine)
+        plan = cli.size_plan()
+        warns = cli.size_warnings(plan)
     except Exception as exc:
-        add("프로젝트", "생성 크기 상한", WARN, f"makefun_client 로 확인할 수 없습니다: {exc}",
-            "python tools/makefun_client.py --check 로 직접 확인하세요.")
+        add("프로젝트", "생성 크기 상한", WARN, f"이미지 클라이언트로 확인할 수 없습니다: {exc}",
+            "python tools/comfyui_client.py --check 또는 makefun_client.py --check 로 직접 확인하세요.")
         return
     detail = (f"요청 {plan['want']}px → 실제 {plan['long']}px "
               f"(상한 {plan['cap']}px{', 기본값' if plan['cap_is_default'] else ''})")
     if warns:
-        add("프로젝트", "생성 크기 상한", ERR,
-            detail + " — 요청이 조용히 깎인 채 과금됩니다",
+        billed = " — 요청이 조용히 깎인 채 과금됩니다" if engine == "makefun" else " — 요청이 조용히 깎입니다"
+        add("프로젝트", "생성 크기 상한", ERR, detail + billed,
             f"manifest image_generator.max_long_edge_px 를 {plan['want']} 이상으로 올리세요. "
             "그대로 두면 인화 규격과 검사기 A3(긴 변 ≥ min_long_edge_px) 양쪽에 미달합니다.")
     elif plan["cap_is_default"]:
@@ -463,6 +535,7 @@ def run_all() -> None:
     check_disk()
     check_env()
     check_local_llm()
+    check_image_engine()
     check_project()
     check_backups()
     check_secrets()

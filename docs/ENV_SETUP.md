@@ -13,11 +13,12 @@
 
 | 변수 | 쓰는 곳 | 없으면 | 필수? |
 |---|---|---|---|
-| `MAKEFUN_API_TOKEN` | `tools/makefun_client.py` — 이미지 생성 · 인화용 업스케일 · 파일 업로드 · 크레딧 조회 | 그 네 가지만 막힘(안내 메시지). 감상·검사·대화는 정상 | 이미지를 만들거나 키울 때만 |
+| `MAKEFUN_API_TOKEN` | `tools/makefun_client.py` — MakeFun 이미지 생성 · 인화용 업스케일 · 파일 업로드 · 크레딧 조회 | 그 네 가지만 막힘(안내 메시지). 기본 엔진 ComfyUI·감상·검사·대화는 정상 | MakeFun 으로 만들거나 키울 때만 |
 | `XAI_API_KEY` | `tools/xai_client.py` — 그록 API(예비 경로) | 그록 API 경로만 막힘. 로컬 LLM 이 기본이라 보통 불필요 | 아니오 |
 | `LOCAL_LLM_URL` | `tools/local_llm.py` — 로컬 LLM 주소 | 매니페스트 `talk.base_url` → 없으면 `http://127.0.0.1:8080/v1` | 아니오(주소를 바꿀 때만) |
+| `COMFYUI_URL` | `tools/comfyui_client.py` — 로컬 ComfyUI 주소 | 매니페스트 `image_generator.comfyui.api.base_url` → 없으면 `http://127.0.0.1:8188` | 아니오(주소를 바꿀 때만) |
 
-`LOCAL_LLM_URL` 은 비밀이 아니라 그냥 주소다. 나머지 둘은 **비밀값**이다.
+`LOCAL_LLM_URL` · `COMFYUI_URL` 은 비밀이 아니라 그냥 주소다. 나머지 둘은 **비밀값**이다.
 
 발급처
 - MakeFun: makefun.ai → Account → API Token

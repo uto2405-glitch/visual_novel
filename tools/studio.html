@@ -245,7 +245,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 </section>
 
 <section id="tab-scenes">
-<div class="eyebrow">2 · 장면 구성(로컬 LLM)  →  3 · 이미지 자동 생성(MakeFun)  →  4 · 선택·승인</div>
+<div class="eyebrow">2 · 장면 구성(로컬 LLM)  →  3 · 이미지 자동 생성(ComfyUI · 보조 MakeFun)  →  4 · 선택·승인</div>
 <div class="card"><div class="row">
 장면 수 <input type="number" id="composeCount" value="10" min="1" max="30" style="width:70px"
  aria-label="만들 장면 수">
@@ -253,7 +253,8 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <button class="btn" id="btnCompose">스토리라인 → 장면 구성</button>
 <span class="small" id="composeMsg" role="status"></span></div>
 <p class="small" style="margin-top:8px">장면 구성은 <b>로컬 LLM</b>이, 이미지는 각 장면의 <b>[🎨 이미지 생성]</b> 버튼이
-<b>MakeFun AI</b> 로 자동 생성해 등록까지 해줍니다. 파일을 직접 넣는 [폴더 스캔]·[📤 업로드] 경로도 그대로 씁니다.</p></div>
+내 PC 의 <b>ComfyUI</b>(무료) 로 자동 생성해 등록까지 해줍니다. <b>MakeFun</b>(유료)은 보조 버튼으로 남고,
+파일을 직접 넣는 [폴더 스캔]·[📤 업로드] 경로도 그대로 씁니다.</p></div>
 
 <details class="card" id="manualCompose" open>
 <summary class="small">⚡ 그록 수동 · 지시문 복사 → grok.com → JSON 붙여넣기 (로컬 LLM 느릴 때 추천)</summary>
@@ -291,6 +292,11 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <p class="small" style="margin-top:6px"><b>output/print/</b> 에 300DPI TIFF+JPEG 와 spec_sheet.json 이 생성됩니다.
 저해상도면 업스케일 경고가 뜹니다 — 그 장면 카드의 <b>[⬆ 인화용 업스케일]</b> 로 재생성 없이 키울 수 있습니다.</p>
 <div class="row" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+<button class="btn ghost" id="btnEngineCheck"
+ title="이미지 엔진 연결 상태 — ComfyUI 는 로컬 서버를 조회하고, MakeFun 은 토큰 설정 여부만 봅니다(과금 없음)">엔진 확인</button>
+<span class="small">지금 쓰는 <b>이미지 엔진</b>(ComfyUI 기본 · MakeFun 보조)이 응답하는지, 체크포인트가 몇 개인지 봅니다.</span>
+<span class="small" id="engineMsg" role="status"></span></div>
+<div class="row" style="margin-top:8px">
 <button class="btn ghost" id="btnCredits"
  title="MakeFun 서버에 조회합니다 — API 토큰을 쓰는 실제 호출입니다(이미지 과금은 없습니다)">크레딧 확인</button>
 <span class="small">이 조회도 <b>MakeFun API 토큰</b>을 사용합니다 — 자동으로는 절대 조회하지 않으니 필요할 때만 누르세요.

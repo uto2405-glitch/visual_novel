@@ -8,20 +8,23 @@
 | 역할 | 무엇 | 비용 | 어디 |
 |---|---|---|---|
 | **스토리 · 장면 구성 · 이미지 프롬프트 · 인물 대화** | **로컬 LLM** (llama.cpp, OpenAI 호환 `http://127.0.0.1:8080/v1`) | **0원** | 내 PC (`c:\Users\USER\claude\local_llm`) |
-| **이미지 생성** | **MakeFun AI** (`tools/makefun_client.py`) | **유료 종량제** | `MAKEFUN_API_TOKEN` 환경변수 |
+| **이미지 생성 (기본)** | **ComfyUI** — 내 PC 의 로컬 서버 (`tools/comfyui_client.py`) | **0원** | `http://127.0.0.1:8188` (`COMFYUI_URL` 로 변경) |
+| 이미지 생성 (보조) · 업스케일 · 크레딧 | **MakeFun AI** (`tools/makefun_client.py`) | **유료 종량제** | `MAKEFUN_API_TOKEN` 환경변수 |
 | 그록(xAI) | **예비 경로** — grok.com 수동 복붙 또는 API | 구독/종량제 | `XAI_API_KEY` (선택) |
 
 창작 텍스트와 인물 대화는 **내 PC 를 벗어나지 않는다.** 외부로 나가는 것은 이미지 생성 프롬프트와,
 **이미지 쪽 기능을 쓸 때의 이미지 파일**이다 — 캐릭터 레퍼런스(로컬 파일일 때)와 업스케일할
 원본 컷은 공급자 스토리지에 업로드된다(→ [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) §1).
-엔진 교체는 `project/manifest.json` 의 `orchestrator` / `image_generator` 만 바꾸면 된다.
+엔진 교체는 `project/manifest.json` 의 `orchestrator` / `image_generator` 만 바꾸면 된다
+(이미지는 `image_generator.engine` 을 `comfyui` ↔ `makefun` 으로 — 두 블록의 설정은 각자 남는다).
 
-> **이미지 생성은 호출 1회가 곧 과금이다.** 자동으로 돌리지 않는다 — 사람이 버튼을 누를 때만 생성한다.
+> **MakeFun 이미지 생성은 호출 1회가 곧 과금이다.** 자동으로 돌리지 않는다 — 사람이 버튼을 누를 때만 생성한다.
+> 기본 엔진 ComfyUI 는 내 PC 에서 돌아 무료다.
 
 ## 시작하기
 
 ```powershell
-# 0) 환경 점검 (읽기 전용, 30초)
+# 0) 환경 점검 (읽기 전용, 30초) — 이미지를 만들 거면 ComfyUI(기본 http://127.0.0.1:8188)를 먼저 켜 둔다
 python tools/doctor.py
 
 # 1) 로컬 LLM + 웹 스튜디오를 한 번에
@@ -47,7 +50,7 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 | 1 | 스토리라인 작성 | [스토리] 탭 — 로컬 LLM 과 대화 | 나 + 로컬 LLM |
 | 2 | VN 텍스트 + 장면 분해 | [장면] 탭 — [스토리라인 → 장면 구성] | 로컬 LLM |
 | 3 | 이미지 프롬프트 생성 | [장면] 탭 — 장면 카드의 프롬프트 버튼 | 로컬 LLM (앵커는 코드가 조립) |
-| 4 | 이미지 생성 | [장면] 탭 — MakeFun 생성(캐릭터 레퍼런스 자동 첨부) / 📤 업로드 / `images/raw/<장면ID>/` 폴더 스캔 | 나 + 이미지 AI |
+| 4 | 이미지 생성 | [장면] 탭 — [🎨 이미지 생성] = ComfyUI(로컬·무료) · 보조 [MakeFun 생성(유료)](캐릭터 레퍼런스 자동 첨부) / 📤 업로드 / `images/raw/<장면ID>/` 폴더 스캔 | 나 + 이미지 AI |
 | 5 | 선택 · 승인 | [장면] 탭 — 후보 선택 → 승인 도장 | 나 + 자동 검사기 |
 | 6 | 감상 | [뷰어] · [갤러리] · [대화] 탭 | 나 |
 | 7 | 내보내기 | 단일 HTML 감상본 · PWA · 인화 마스터 | 도구 |
@@ -107,7 +110,8 @@ python tools/check_protocol.py
 | 장면 생성 | `python tools/advance_scene.py new` |
 | 프롬프트 (수동) | `python tools/make_grok_input.py SCENE-001` → 붙여넣기 → `advance_scene.py set-prompt SCENE-001 --file out.txt` |
 | 프롬프트 (그록 API) | `python tools/grok_api.py SCENE-001` |
-| **이미지 생성 (유료)** | `python tools/makefun_client.py SCENE-001 --n 2` — **호출 1회 = 과금** |
+| **이미지 생성 (무료 · ComfyUI)** | `python tools/comfyui_client.py SCENE-001 --n 2` — `--seed` 로 재현 · `--check --online` 으로 연결·체크포인트 확인 |
+| **이미지 생성 (유료 · MakeFun)** | `python tools/makefun_client.py SCENE-001 --n 2` — **호출 1회 = 과금** |
 | **인화용 확대 (유료)** | `python tools/makefun_client.py --upscale SCENE-001` — 승인한 그림 그대로 픽셀만 키워 **새 후보로** 저장 |
 | 레퍼런스 URL 만들기 | `python tools/makefun_client.py --upload images/ref/시트.png` → 출력된 URL 을 `reference_images` 에 등록 |
 | 생성 설정 점검 / 크레딧 | `python tools/makefun_client.py --check` (무호출) · `--credits` (이력 조회, 생성 과금 없음) |
