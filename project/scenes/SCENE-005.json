@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings and 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, standing close watching the sunset on a riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, at sunset, orange and violet sky reflecting on the water",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two-shot, 1girl, 1boy, 2people, couple, both characters fully visible, facing each other, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, standing close at the promenade railing, glancing at each other in the glowing sunset light, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -40,20 +40,25 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-005/cf_06c82c_1.png",
       "images/raw/SCENE-005/cf_213a0e_2.png",
       "images/raw/SCENE-005/cf_2f4887_2.png",
       "images/raw/SCENE-005/cf_499ac1_1.png",
-      "images/raw/SCENE-005/cf_d5d324_1.png"
+      "images/raw/SCENE-005/cf_5e3c54_1.png",
+      "images/raw/SCENE-005/cf_d5d324_1.png",
+      "images/raw/SCENE-005/cf_f81ca9_2.png",
+      "images/raw/SCENE-005/cf_fdc825_2.png"
     ],
-    "selected_image": "images/raw/SCENE-005/cf_499ac1_1.png"
+    "selected_image": "images/raw/SCENE-005/cf_06c82c_1.png"
   },
   "review": {
     "auto": "PASS",
     "human": "PASS",
     "score": null,
     "notes": [
-      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성"
+      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
+      "[2026-09-15] REVISE → PROMPT: 구도 태그 도입 — 두 인물이 모두 나오도록 프롬프트 재생성"
     ]
   },
-  "version": 2
+  "version": 3
 }
