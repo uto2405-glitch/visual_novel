@@ -6551,6 +6551,52 @@ def u11c(b: Box):
                 (lock_dir / f"{sid}.lock").unlink()
 
 
+@test("unit", "U11d gen_jobs — 막 끝난 작업을 '다른 곳에서 생성 중' 이라 하지 않는다(해제 순서)")
+def u11d(b: Box):
+    """CF07 을 이따금 깨뜨리던 자리. release() 가 _OWNED 에서 먼저 내리고 잠금 파일을
+    나중에 지우면, 그 사이 한 순간 status() 가 **자기 pid 를 가리키며** "다른 곳에서
+    생성 중입니다" 라고 답한다. 화면(_settle·studio.js)은 그걸 보고 끝난 작업을 계속
+    도는 것으로 읽어, 사용자는 완료 문구를 영영 못 본다.
+
+    여기서는 그 창을 손으로 열어 본다 — 파일이 아직 있고 메모리는 끝났다고 하는 상태를
+    만들고, status() 가 무엇이라 답하는지 묻는다.
+    """
+    gj = need_mod(b, "gen_jobs")
+    lock_dir = Path(need_attr(gj, "LOCK_DIR", "프로세스 경계 잠금 폴더"))
+    sid = "SCENE-961"
+    gj.claim(sid, "생성")
+    try:
+        gj.note(sid, "ComfyUI 생성 중… 3초 경과")
+        lock = lock_dir / f"{sid}.lock"
+        ok(lock.exists(), "잠금 파일이 만들어지지 않음 — 이 검사가 볼 것이 없다")
+
+        # release() 가 하던 순서를 그대로 흉내 낸다: 메모리를 끝으로 바꾸고 소유만 내린다.
+        with gj._LOCK:
+            gj._JOBS[sid] = {"running": False, "message": "완료 — 후보 1장", "ts": time.time()}
+            token = gj._OWNED.pop(sid, "")
+        ok(lock.exists(), "흉내를 내려면 잠금 파일이 남아 있어야 한다")
+        st = gj.status(sid)
+        eq(st["running"], False,
+           f"막 끝난 작업이 아직 도는 것으로 보고됨 — {st.get('message', '')}")
+        hasnt(str(st.get("message", "")), "다른 곳",
+              "내 pid 가 적힌 잠금을 '다른 곳' 이라고 말한다")
+        has(str(st.get("message", "")), "완료", f"완료 문구가 사라짐 — {st}")
+        with contextlib.suppress(Exception):
+            gj._release_file(sid, token)
+
+        # 그리고 진짜 release() 를 지나면 파일도 소유 표시도 남지 않아야 한다
+        gj.claim(sid, "생성")
+        gj.release(sid, "완료 — 후보 2장")
+        ok(not lock.exists(), "release 뒤에도 잠금 파일이 남음(다음 생성이 막힌다)")
+        eq(gj.status(sid)["running"], False, "release 뒤에도 도는 것으로 보고됨")
+        has(gj.status(sid)["message"], "완료", "release 가 남긴 문구")
+    finally:
+        with contextlib.suppress(Exception):
+            gj.release(sid)
+        with contextlib.suppress(OSError):
+            (lock_dir / f"{sid}.lock").unlink()
+
+
 def str_consts(b: Box, mod: str) -> list[str]:
     """모듈의 **문자열 리터럴**(독스트링 제외). 설명문과 실제로 모델에 가는 문장을 가른다."""
     tree = tool_ast(b, mod)

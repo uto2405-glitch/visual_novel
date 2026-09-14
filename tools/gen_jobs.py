@@ -332,9 +332,17 @@ def release(sid: str, message: str = "", result: dict | None = None,
             _JOBS[sid]["error"] = str(error)
         if isinstance(result, dict):
             _JOBS[sid]["result"] = dict(result)   # 사본 — 호출부가 나중에 고쳐도 표시는 그대로
-        token = _OWNED.pop(sid, "")
+        token = _OWNED.get(sid, "")               # **아직 내리지 않는다** — 아래 설명
+    # 순서가 중요하다. 예전에는 _OWNED 에서 먼저 내리고 그 다음에 파일을 지웠는데, 그 사이
+    # 한 순간 "_JOBS 는 끝났다고 하고 _OWNED 는 비었는데 잠금 파일은 아직 있는" 상태가 된다.
+    # status() 는 그 상태를 '다른 프로세스가 굽는 중' 으로 읽어, 방금 끝난 작업을
+    # **내 pid 를 가리키며** "다른 곳에서 생성 중입니다" 라고 답했다(CF07 이 이따금 여기서 깨졌다).
+    # 파일을 먼저 지우고 소유 표시를 나중에 내리면 그 창이 아예 열리지 않는다 —
+    # 파일이 있는 동안에는 _OWNED 가 항상 sid 를 들고 있으므로 status() 가 메모리 쪽을 본다.
     if token:
         _release_file(sid, token)
+    with _LOCK:
+        _OWNED.pop(sid, None)
 
 
 def release_all(message: str = "") -> list[str]:
@@ -386,7 +394,11 @@ def status(sid: str) -> dict:
             # 회수 규칙과 같은 두 겹을 본다. 그러지 않으면 죽은 잠금을 두고 화면은
             # "다른 곳에서 생성 중" 이라 말하는데 [생성] 버튼은 통과하는 모순이 생긴다.
             info = _read_lock(path)
-            if not _is_dead_owner(info):
+            # '다른 곳' 은 말 그대로 다른 곳이어야 한다. 잠금에 적힌 주인이 **나 자신**이면
+            # 그건 이 프로세스가 이미 놓았거나 놓는 중인 잠금이다 — 메모리 표시(_JOBS)가
+            # 진실이고, 여기서 남의 일인 척하면 방금 끝난 작업이 영원히 도는 것처럼 보인다.
+            mine = info.get("host") == _HOST and info.get("pid") == os.getpid()
+            if not mine and not _is_dead_owner(info):
                 return {"running": True, "scene_id": sid,
                         "message": f"다른 곳에서 생성 중입니다({_owner(info)})."}
     out = {"running": running_now, "message": str(job.get("message", "")), "scene_id": sid}
