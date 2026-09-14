@@ -265,6 +265,15 @@ def _once(method: str, path: str, body: dict | None, timeout: int) -> dict:
         raise _Transient(f"MakeFun 연결 실패: {e.reason}", None, None, presend)
     except http.client.HTTPException as e:
         raise _not_http(f"{method} {url}", e) from e
+    except OSError as e:
+        # URLError(위 절)가 아닌 OSError 는 **요청을 보낸 뒤** 응답을 읽다가 끊긴 것이다
+        # (연결 리셋·응답 대기 시간 초과). urllib 은 h.request() 의 오류만 URLError 로
+        # 감싸므로 h.getresponse() 단계의 이것들은 그대로 새어 나왔다.
+        # 여기서도 **다시 보내지 않는다** — 서버가 이미 받아 처리했는지 알 수 없고,
+        # 생성 시작은 task 를 만드는 순간 과금이다.
+        raise VNError(f"{method} {url} 의 응답을 받지 못했습니다({type(e).__name__}: {e}). "
+                      "요청이 이미 처리됐을 수 있어(생성은 시작하는 순간 과금됩니다) 자동으로 "
+                      "다시 보내지 않습니다. --refetch 로 기록된 task 를 다시 받아올 수 있습니다.")
     try:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
@@ -435,6 +444,9 @@ def _put_once(url: str, data: bytes, content_type: str, timeout: int) -> int:
         raise _Transient(f"업로드 연결 실패: {e.reason}", None, None, True)
     except http.client.HTTPException as e:
         raise _not_http(f"업로드(PUT {_host_of(url)})", e) from e
+    except OSError as e:
+        # 같은 key 에 같은 바이트를 다시 올리는 것은 멱등이라 재시도로 돌린다(과금 없음).
+        raise _Transient(f"업로드 전송 중 끊김: {type(e).__name__}", None, None, False)
 
 
 def _put_bytes(url: str, data: bytes, content_type: str, quiet: bool = True) -> int:
@@ -917,6 +929,9 @@ def _fetch_bytes(url: str, timeout: int) -> bytes:
         raise _Transient(f"결과 다운로드 연결 실패: {e.reason}", None, None, True)
     except http.client.HTTPException as e:
         raise _not_http(f"결과 다운로드({_host_of(url)})", e) from e
+    except OSError as e:
+        # 이미 과금된 결과를 받는 중이다 — 끊겼다고 포기하면 돈만 날아간다. 재시도로 돌린다.
+        raise _Transient(f"결과 다운로드 중 끊김: {type(e).__name__}", None, None, False)
     if len(data) > DL_CAP:
         raise VNError("결과 이미지가 30MB 를 초과합니다.")
     return data

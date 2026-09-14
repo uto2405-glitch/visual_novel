@@ -3243,26 +3243,38 @@ def m14(b: Box):
     (이미 재시도하던 코드들 — 429·5xx·전송 전 실패 — 의 의미는 M02 가 그대로 지킨다.)
 
     소켓은 진짜로 연다(_rude_server = ComfyUI 검사 CF03 이 쓰는 그 헬퍼). 스텁으로는
-    전송 계층에서만 나는 이 예외를 재현할 수 없기 때문이다.
+    전송 계층에서만 나는 이 예외를 재현할 수 없기 때문이다. 본문이 있는 요청은 헤더와
+    본문이 **따로** 나가서(http.client._send_output), 무례한 서버가 먼저 끊으면 같은 자리에서
+    ConnectionResetError 가 되기도 한다 — 둘 다 같은 안내로 모였는지 함께 본다.
     """
     mk = b.mod("makefun_client")
     tok = "selftest-token-not-a-real-key"
     rude = b"garbage" + BAD_LINE_END
 
-    # (1) _once — VNError(재시도 대상 아님) · 두드린 주소 · 토큰은 안 샌다
+    def bad_reply(call, label, *, port_in_msg=True):
+        """무례한 서버를 상대로 call() 을 돌려 예외를 돌려준다 — 공통 주장까지 여기서."""
+        e = raises(call, RuntimeError, label + ": HTTP 아닌 응답이 그대로 새어 나감")
+        ok(isinstance(e, mk.VNError), f"{label}: VNError 가 아님 — {type(e).__name__}")
+        ok(not isinstance(e, mk._Transient),
+           f"{label}: 재시도 대상(_Transient)으로 올림 — 과금됐을 수 있는 요청을 다시 보낸다")
+        hasnt(str(e), "Traceback", f"{label}: traceback")
+        hasnt(str(e), tok, f"{label}: 안내문에 토큰이 섞임")
+        return e
+
+    # (1) 본문 없는 요청 — BadStatusLine 이 확실히 나는 자리. 안내가 무엇을 고치라고 하는가
     with _rude_server(rude) as port, env_var(mk.TOKEN_ENV, tok), \
             patched(mk, "base_url", lambda: f"http://127.0.0.1:{port}"):
-        e = raises(lambda: mk._once("POST", mk.P_T2I_START, {"prompt": "x"}, 5),
-                   RuntimeError, "HTTP 아닌 응답이 VNError 로 오지 않음(traceback 이 그대로 샌다)")
-    ok(isinstance(e, mk.VNError), f"VNError 가 아님 — {type(e).__name__}")
-    ok(not isinstance(e, mk._Transient),
-       f"재시도 대상(_Transient)으로 올림 — 과금됐을 수 있는 POST 를 다시 보낸다 ({type(e).__name__})")
+        e = bad_reply(lambda: mk._once("GET", mk.P_CREDITS, None, 5), "조회")
     has(str(e), str(port), "두드린 주소")
     has(str(e), "base_url", "무엇을 고쳐야 하는지")
-    hasnt(str(e), "Traceback", "traceback")
-    hasnt(str(e), tok, "안내문에 토큰이 섞임")
 
-    # (2) _call — 재시도 가치가 있는 오류였다면 여러 번 보낸다. 한 번이어야 한다.
+    # (2) 과금되는 자리 그대로 — POST start. 끊기는 지점이 어디든 재시도 대상이 아니어야 한다
+    with _rude_server(rude) as port2, env_var(mk.TOKEN_ENV, tok), \
+            patched(mk, "base_url", lambda: f"http://127.0.0.1:{port2}"):
+        e2 = bad_reply(lambda: mk._once("POST", mk.P_T2I_START, {"prompt": "x"}, 5), "생성 시작")
+    has(str(e2), str(port2), "두드린 주소")
+
+    # (3) _call — 재시도 가치가 있는 오류였다면 여러 번 보낸다. 한 번이어야 한다.
     #     (멱등 GET 으로 센다 — idempotent=False 는 _Transient 여도 한 번이라 구분이 안 된다.)
     calls = {"n": 0}
     real_once = mk._once
@@ -3271,30 +3283,26 @@ def m14(b: Box):
         calls["n"] += 1
         return real_once(method, path, body, timeout)
 
-    with _rude_server(rude) as port2, env_var(mk.TOKEN_ENV, tok), \
-            patched(mk, "base_url", lambda: f"http://127.0.0.1:{port2}"), \
+    with _rude_server(rude) as port3, env_var(mk.TOKEN_ENV, tok), \
+            patched(mk, "base_url", lambda: f"http://127.0.0.1:{port3}"), \
             patched(mk, "_backoff", lambda a, ra: 0.0), patched(mk, "_once", counting):
-        e2 = raises(lambda: mk._call("GET", mk.P_CREDITS, timeout=5, quiet=True),
+        e3 = raises(lambda: mk._call("GET", mk.P_CREDITS, timeout=5, quiet=True),
                     RuntimeError, "HTTP 아닌 응답")
     eq(calls["n"], 1, f"멱등 GET 인데도 재시도했다(재시도 한도 {mk.RETRY_MAX}) — "
                       "같은 경로를 POST 가 타면 이중 과금이다")
-    has(str(e2), str(port2), "두드린 주소")
-
-    # (3) 업로드(PUT)·결과 다운로드도 같은 구멍이었다 — 서명 쿼리는 안내문에 남기지 않는다
-    secret = "deadbeefsignature"
-    with _rude_server(rude) as port3:
-        up = f"http://127.0.0.1:{port3}/bucket/key.png?X-Amz-Signature={secret}"
-        e3 = raises(lambda: mk._put_once(up, b"x", "image/png", 5), RuntimeError, "업로드 PUT")
-    ok(isinstance(e3, mk.VNError) and not isinstance(e3, mk._Transient),
-       f"업로드가 재시도 대상으로 올라감 — {type(e3).__name__}")
     has(str(e3), str(port3), "두드린 주소")
-    hasnt(str(e3), secret, "안내문에 presigned 서명이 그대로 남음")
+
+    # (4) 업로드(PUT)·결과 다운로드도 같은 구멍이었다 — 서명 쿼리는 안내문에 남기지 않는다
+    secret = "deadbeefsignature"
     with _rude_server(rude) as port4:
-        e4 = raises(lambda: mk._fetch_bytes(f"http://127.0.0.1:{port4}/a.png?sig={secret}", 5),
-                    RuntimeError, "결과 다운로드")
-    ok(isinstance(e4, mk.VNError) and not isinstance(e4, mk._Transient),
-       f"다운로드가 재시도 대상으로 올라감 — {type(e4).__name__}")
-    hasnt(str(e4), secret, "안내문에 서명이 그대로 남음")
+        up = f"http://127.0.0.1:{port4}/bucket/key.png?X-Amz-Signature={secret}"
+        e4 = bad_reply(lambda: mk._put_once(up, b"", "image/png", 5), "업로드 PUT")
+    has(str(e4), str(port4), "두드린 주소")
+    hasnt(str(e4), secret, "안내문에 presigned 서명이 그대로 남음")
+    with _rude_server(rude) as port5:
+        e5 = bad_reply(lambda: mk._fetch_bytes(f"http://127.0.0.1:{port5}/a.png?sig={secret}", 5),
+                       "결과 다운로드")
+    hasnt(str(e5), secret, "안내문에 서명이 그대로 남음")
 
 
 # ============================================================ ComfyUI (모의)
