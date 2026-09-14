@@ -34,6 +34,14 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1
 powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 ```
 
+> **ComfyUI 가 아직 없다면**: github.com/comfyanonymous/ComfyUI 의 Windows 포터블을 받아 아무 폴더에 풀고,
+> 체크포인트 `waiIllustriousSDXL_v170.safetensors` 를 `models\checkpoints\` 에 넣는다(매니페스트 `image_generator.comfyui.checkpoint`).
+> 저장소 **옆**(`..\ComfyUI`)에 두면 `start_studio.ps1` 이 알아서 켜고, 다른 곳이면 `setx COMFYUI_HOME "D:\ComfyUI"` 한 번이면 된다.
+> 확인: `python tools/comfyui_client.py --check --online`
+>
+> 로컬 LLM(llama.cpp)을 저장소 밖 다른 경로에 설치했다면 `setx LOCAL_LLM_HOME "D:\llm\local_llm"`
+> 또는 `start_studio.ps1 -LlmRoot D:\llm\local_llm`. 아직 없으면 `-NoLlm` 으로 스튜디오만 켜도 된다.
+
 `-Lan` 은 `0.0.0.0` 에 바인딩하므로 같은 와이파이의 다른 기기도 보인다. 그래서 외부 기기
 접속에는 **6자리 PIN 이 기본으로 요구된다**(이 PC 의 `127.0.0.1` 접속은 면제). PIN 은 기동할
 때마다 새로 뽑혀 콘솔과 `logs/lan_pin.txt` 에 뜬다 — 자세한 건
@@ -56,6 +64,18 @@ python -m venv .venv
 `start_studio.ps1` 은 `.venv\Scripts\python.exe` 가 있으면 그쪽으로, 없으면 그냥 `python` 으로 스튜디오를
 띄우고 어느 쪽을 썼는지 기동 로그에 한 줄로 알린다. **없어도 감상·검사·생성은 전부 동작한다** — 선택사항이다.
 `.venv/` 는 git 제외 대상이라 기기마다 위 두 줄로 다시 만든다. 지금 상태는 `python tools/doctor.py` 가 알려 준다.
+
+### 방금 clone 했다면 — 그림은 따라오지 않는다
+`images/raw/` · `output/` · `backups/` · `logs/` 는 `.gitignore` 대상이다. **clone 에는 그림이 한 장도 없다.**
+그래서 새 클론에서 `python tools/check_protocol.py` 는 `RESULT: FAIL — 실패 72건`(A3 이미지 없음)이 정상이다 — 코드 문제가 아니다.
+
+- 내 작품을 옮겨 온 것이라면 → `python tools/backup_project.py list` 로 스냅샷을 보고
+  `restore --snapshot <스탬프>` 로 `images/` 를 되돌린다(→ [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md) §1·§3).
+  **이미지가 든 스냅샷**이어야 한다(`list` 가 "이미지 포함" 이라고 표시해 준다).
+- 백업이 없다면 → 장면을 되돌리고 다시 그린다(무료):
+  `python tools/advance_scene.py revise SCENE-001 IMAGE --note "원본 없음"` → `python tools/comfyui_client.py SCENE-001 --n 2`
+- 남의 저장소를 구경만 할 거라면 → 데모로 초록불부터 본다:
+  `copy examples\manifest.json project\manifest.json` · `copy examples\scenes\SCENE-001.json project\scenes\` → `check_protocol` 이 `RESULT: PASS`.
 
 ## 워크플로우
 
@@ -143,7 +163,7 @@ python tools/check_protocol.py
 | 백업 (이미지 포함) | `python tools/backup_project.py snapshot --with-images --dest D:/backup` |
 | 무결성 · 복원 | `python tools/backup_project.py verify` / `restore --dry-run` → `restore` |
 | 비밀값 스캔 | `python tools/secret_scan.py` |
-| 자가진단(회귀) | `python tools/selftest.py` — **전체 통과**를 확인한다 (서버 포트를 쓰므로 스튜디오는 끄고 실행) |
+| 자가진단(회귀) | `python tools/selftest.py` — **전체 통과**를 확인한다 (빈 포트를 알아서 잡으므로 스튜디오를 끄지 않아도 된다) |
 
 ## 검사와 승인
 
@@ -177,8 +197,14 @@ MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해�
 > **⚠ 값을 올릴 때는 두 개를 함께 올린다.** `output.min_long_edge_px` 만 2250·3600 으로 올리면
 > 생성 요청이 `image_generator.max_long_edge_px`(기본 **2048**)에서 잘려 나가고,
 > 올려 둔 기준 때문에 그 장면이 검사기 **A3 FAIL** 이 된다 — 돈은 쓰고 규격은 못 맞춘다.
-> 확인은 과금 없이: `python tools/makefun_client.py --check` → `생성 크기 … · 상한 …px`.
-> (→ [docs/SCHEMA.md](docs/SCHEMA.md) §1.3)
+> 확인은 과금 없이 **지금 쓰는 엔진**으로: `python tools/comfyui_client.py --check`
+> → `생성 크기 … · 상한 …px · hires 상한 …px`. (MakeFun 을 쓸 때만 `python tools/makefun_client.py --check`
+> — 토큰이 없으면 FAIL 한 줄이 먼저 뜨는데 그건 정상이고, 찍히는 크기도 MakeFun 것이라 기본 엔진과 다르다.)
+>
+> **ComfyUI 에는 올려야 할 값이 하나 더 있다.** hires 확대는 1차 캔버스의 2배까지라
+> 기본 `comfyui.base_long_edge_px: 1248` 에서는 **2496px 이 천장**이다 — 8×10(3600px)은 앞의 두 값을
+> 아무리 올려도 나오지 않는다. 규격별로 바꿀 키와 값은 `python tools/print_preflight.py` 가 그대로 찍어 준다.
+> (→ [docs/SCHEMA.md](docs/SCHEMA.md) §1.3·§1.4)
 
 **이미 승인한 컷은 다시 만들지 말고 키운다.** 재생성은 그림 자체가 달라져(구도·표정) 사람이
 승인한 컷이 사라지고 과금도 장수만큼 다시 든다. `--upscale` 은 **그 그림 그대로 픽셀만** 키워

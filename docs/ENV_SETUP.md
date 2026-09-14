@@ -17,6 +17,8 @@
 | `XAI_API_KEY` | `tools/xai_client.py` — 그록 API(예비 경로) | 그록 API 경로만 막힘. 로컬 LLM 이 기본이라 보통 불필요 | 아니오 |
 | `LOCAL_LLM_URL` | `tools/local_llm.py` — 로컬 LLM 주소 | 매니페스트 `talk.base_url` → 없으면 `http://127.0.0.1:8080/v1` | 아니오(주소를 바꿀 때만) |
 | `COMFYUI_URL` | `tools/comfyui_client.py` — 로컬 ComfyUI 주소 | 매니페스트 `image_generator.comfyui.api.base_url` → 없으면 `http://127.0.0.1:8188` | 아니오(주소를 바꿀 때만) |
+| `COMFYUI_HOME` | `start_studio.ps1` — ComfyUI **설치 폴더**(`main.py` 가 있는 곳) | 저장소 옆 `..\ComfyUI` 만 찾는다. 다른 곳에 설치했으면 자동 기동을 건너뛴다(직접 켜면 그대로 쓴다) | 아니오(저장소 옆에 없을 때만) |
+| `LOCAL_LLM_HOME` | `start_studio.ps1` — 로컬 LLM(llama.cpp) **설치 폴더**(`runtime\serve.ps1` 이 있는 곳) | `%USERPROFILE%\claude\local_llm` 을 찾는다. 없으면 LLM 기동만 건너뛰고 스튜디오는 그대로 뜬다 | 아니오(그 경로가 아닐 때만) |
 
 `LOCAL_LLM_URL` · `COMFYUI_URL` 은 비밀이 아니라 그냥 주소다. 나머지 둘은 **비밀값**이다.
 

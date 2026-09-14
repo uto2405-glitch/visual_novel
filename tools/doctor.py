@@ -465,8 +465,13 @@ def check_scenes(mf: dict | None = None) -> None:
             add("프로젝트", "scene_order 연속성", OK, f"1..{len(orders)} 연속")
 
     if missing_img:
+        # 예전 처방은 "백업에서 복원하거나 revise 하세요" 였다. 그런데 이 오류가 나는 대표적인
+        # 상황(갓 clone)에서는 backups/ 자체가 없고(=git 제외), 명령도 한 줄 적혀 있지 않았다.
         add("프로젝트", "선택 이미지 존재", ERR, "원본 없음: " + ", ".join(missing_img),
-            "images/ 를 백업에서 복원하거나 해당 장면을 revise 하세요.")
+            "백업이 있으면: python tools/backup_project.py list → restore --snapshot <스탬프> "
+            "(이미지 포함 스냅샷이어야 합니다) · 없으면 다시 그린다: "
+            "python tools/advance_scene.py revise <ID> IMAGE --note \"원본 없음\" → "
+            "python tools/comfyui_client.py <ID> --n 2 (무료). 새 clone 이면 정상입니다 — images/raw 는 git 제외.")
     else:
         add("프로젝트", "선택 이미지 존재", OK, "선택된 이미지 원본이 모두 있습니다")
 

@@ -226,9 +226,14 @@ python tools/backup_project.py migrate --dry-run     # 옛 사본을 backups/leg
    ```
    python tools/doctor.py                    # 전 항목 OK 인지
    python tools/check_protocol.py            # RESULT: PASS
+                                             # (이미지를 아직 안 되돌렸다면 A3 FAIL 이 정상이다 —
+                                             #  --with-images 스냅샷이 없으면 여기서 앨범은 돌아오지 않는다.
+                                             #  외부 백업에서 images/ 를 직접 복사하거나,
+                                             #  장면을 되돌려 다시 그린다: advance_scene revise <ID> IMAGE
+                                             #  → comfyui_client <ID> --n 2, 무료)
    python tools/backup_project.py verify     # 무결성
    python tools/secret_scan.py               # 비밀값 없음
-   python tools/selftest.py                  # 파이프라인 회귀 (포트를 쓰므로 서버는 꺼두고)
+   python tools/selftest.py                  # 파이프라인 회귀 (빈 포트를 알아서 잡는다 — 서버를 끄지 않아도 된다)
    ```
 9. **첫 기동**
    ```

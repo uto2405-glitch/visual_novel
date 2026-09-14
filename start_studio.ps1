@@ -19,14 +19,20 @@ param(
     [int]$Port = 8765,            # 웹 스튜디오 포트
     [switch]$NoLlm,               # 로컬 LLM 은 건드리지 않음
     [switch]$NoComfy,             # 이미지 엔진(ComfyUI)은 건드리지 않음
-    [switch]$NoBrowser            # 브라우저 자동 열기 안 함
+    [switch]$NoBrowser,           # 브라우저 자동 열기 안 함
+    [string]$LlmRoot = ""         # 로컬 LLM(llama.cpp) 설치 폴더 · 환경변수 LOCAL_LLM_HOME 로도 지정
 )
 
 $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $repo = $PSScriptRoot
-$llmRoot = "c:\Users\USER\claude\local_llm"
+# 로컬 LLM 설치 위치. 예전에는 여기에 개발 PC 의 경로가 그대로 박혀 있어서, 다른 기기에서는
+# 어떤 값을 넣어도 찾지 못했다(스토리·장면·프롬프트·대화 네 탭이 전부 그 서버에 달려 있다).
+# 순서: -LlmRoot > 환경변수 LOCAL_LLM_HOME > 이 사용자의 홈 아래 claude\local_llm.
+$llmRoot = if ($LlmRoot) { $LlmRoot }
+           elseif ($env:LOCAL_LLM_HOME) { $env:LOCAL_LLM_HOME }
+           else { Join-Path $env:USERPROFILE "claude\local_llm" }
 $serve = Join-Path $llmRoot "runtime\serve.ps1"
 $llmPort = 8080
 
@@ -140,6 +146,8 @@ if ($NoLlm) {
     } elseif (-not (Test-Path $serve)) {
         Write-Output "[2/3] 로컬 LLM: serve.ps1 을 찾을 수 없어 건너뜀 ($serve)"
         Write-Step "스토리·프롬프트·대화 탭은 서버가 켜질 때까지 동작하지 않습니다."
+        Write-Step "다른 곳에 설치했다면: -LlmRoot 'D:\llm\local_llm' 또는 setx LOCAL_LLM_HOME \"D:\llm\local_llm\""
+        Write-Step "아직 설치 전이면 -NoLlm 으로 스튜디오만 켜세요 — 이미지 생성·감상·검사는 그대로 됩니다."
     } else {
         Write-Output "[2/3] 로컬 LLM 기동 중..."
         if ($Model) {

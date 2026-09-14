@@ -392,7 +392,13 @@ def report(target: int, scene_filter: str | None, include_all: bool, engine=None
         size = image_size(p)
         print(f"[{sid}] {Path(sel).name}", end="  ")
         if size is None:
-            print("→ 크기 판독 불가 (수동 확인 필요)")
+            # image_size 는 '깨진 헤더' 와 '파일이 없다' 를 똑같이 None 으로 돌려준다.
+            # 그 둘을 뭉뚱그리면, 새 clone 을 연 사람이 멀쩡한 PNG 를 찾아 헤매다가
+            # 있지도 않은 그림을 업스케일하라는 말까지 듣게 된다.
+            if not p.exists():
+                print("→ 원본 파일 없음 (images/ 를 복원하거나 그 장면을 revise 하세요)")
+            else:
+                print("→ 크기 판독 불가 (수동 확인 필요)")
             worst = max(worst, 2)
             print()
             continue

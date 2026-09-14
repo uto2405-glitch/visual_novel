@@ -648,6 +648,9 @@ function scThumbs(sc,msg){
   const img=el("img",sel?"sel":null);
   img.src="/img/"+r.replace(/^images\//,"")+"?w=224";
   img.alt="";img.loading="lazy";img.decoding="async";
+  // 파일이 없으면 깨진 아이콘 대신 이유를 쓴다. 서버는 이미 알고 있고(/api/state 가 image_url:null),
+  // 화면만 모르는 척하면 사람은 '프로그램이 고장났다'고 읽는다 — 사실은 원본이 없을 뿐이다.
+  img.onerror=()=>{const d=el("div","empty","원본 없음");img.replaceWith(d)};
   b.appendChild(img);
   if(!locked)b.onclick=async()=>{msg.textContent="선택 중…";
    draftOf(sc.scene_id).note="";   // "새 후보를 고르세요" 안내는 고른 순간 할 일을 다했다
@@ -950,7 +953,7 @@ function galCard(sc,i){
  if(sc.image_url){const im=el("img");
   im.src=sc.image_url+"?w=380";        // 표시 폭 150~190px · 축소본으로 충분
   im.alt=sc.purpose||sc.scene_id;im.loading="lazy";im.decoding="async";main.appendChild(im)}
- else main.appendChild(el("div","empty",sc.purpose||sc.scene_id));
+ else main.appendChild(el("div","empty","(원본 없음) "+(sc.purpose||sc.scene_id)));
  const cap=el("div","cap",(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id));
  cap.setAttribute("aria-hidden","true");   // 이미지 alt 와 같은 내용이라 두 번 읽히지 않게
  main.appendChild(cap);

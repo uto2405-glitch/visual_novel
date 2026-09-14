@@ -1,10 +1,10 @@
-# AI Webtoon Production Protocol (v4)
+# AI Webtoon Production Protocol (v5.x)
 
 ## 목적
 LLM 오케스트레이터로 스토리를 씬/행동 비트/장면으로 분해하고, 외부 상용 이미지 AI용 프롬프트를 생성한 뒤 최종 이미지를 비주얼 노벨형 디지털 감상물과 실제 사진 출력물로 구성한다.
 
-## 현행 엔진 (2026-08 기준)
-- **오케스트레이터 = 로컬 LLM** — `c:\Users\USER\claude\local_llm` 의 llama.cpp 서버(OpenAI 호환, 기본 `http://127.0.0.1:8080/v1`). 스토리·장면 구성·이미지 프롬프트·인물 대화를 담당한다. 로컬이므로 키 불필요·비용 0·사적 대화가 외부로 나가지 않는다.
+## 현행 엔진 (2026-09 기준)
+- **오케스트레이터 = 로컬 LLM** — llama.cpp 서버(설치 폴더는 `LOCAL_LLM_HOME`, 기본 `%USERPROFILE%\claude\local_llm`)의 llama.cpp 서버(OpenAI 호환, 기본 `http://127.0.0.1:8080/v1`). 스토리·장면 구성·이미지 프롬프트·인물 대화를 담당한다. 로컬이므로 키 불필요·비용 0·사적 대화가 외부로 나가지 않는다.
 - **이미지 생성 = ComfyUI(로컬, 기본)** — `tools/comfyui_client.py`. 매니페스트 `image_generator.engine: "comfyui"`, 주소는 `comfyui.api.base_url`(환경변수 `COMFYUI_URL` 이 우선, 기본 `http://127.0.0.1:8188`). 무료·토큰 없음. 엔진 위의 공통 진입점은 `tools/image_gen.py`(웹·doctor 는 이것만 부른다).
 - **MakeFun AI 는 보조(유료 종량제)** — `tools/makefun_client.py`, 토큰은 `MAKEFUN_API_TOKEN` 환경변수. `engine: "makefun"` 이거나 스튜디오의 [MakeFun 생성(유료)] 보조 버튼을 눌렀을 때만 쓰이고, 업스케일·크레딧 조회는 MakeFun 전용이다.
 - **그록(xAI)은 예비 경로** — 수동 복붙(`make_grok_input.py`) 또는 API(`tools/grok_api.py`, `XAI_API_KEY`). 매니페스트 `orchestrator` 만 바꾸면 전환된다.
