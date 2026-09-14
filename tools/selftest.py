@@ -4809,6 +4809,373 @@ console.log(JSON.stringify({
     eq(r["alone"]["present"], False, "엔진이 하나뿐인데 보조 버튼이 붙는다")
 
 
+
+def _vnr_func(src: str, name: str) -> str:
+    """vn_runtime.js 에서 함수 하나를 통째로 떼어 낸다(들여쓰기가 같은 줄의 닫는 괄호까지).
+
+    이름을 못 찾으면 조용히 통과하지 않고 실패한다 — 이름을 바꿨다면 이 검사도 함께 고칠 자리다.
+    """
+    m = re.search(rf"^([ \t]*)function {re.escape(name)}\s*\(", src, re.M)
+    if not m:
+        raise Failed(f"vn_runtime.js 에서 {name}() 정의를 찾지 못했습니다 "
+                     "— 이름을 바꿨다면 이 검사도 고치세요")
+    indent, lines = m.group(1), src[m.start():].splitlines()
+    out = [lines[0]]
+    for line in lines[1:]:
+        out.append(line)
+        if line.startswith(indent + "}"):
+            break
+    return "\n".join(out)
+
+
+@test("js", "J06 재생 엔진의 안전장치가 소스에 남아 있다(손짓 가드·컷 토큰·정수 검증·분기 폴백)")
+def j06(b: Box):
+    """브라우저에서만 드러났던 결함들을 소스 수준에서 잠근다.
+
+    J07 이 실제로 굴려 보지만, **이미지 타이머·onerror** 처럼 DOM 대역으로 재현하기 어려운
+    자리가 있다. 거기서 되돌아간 회귀는 "대사는 흐르는데 그림이 한 장도 없는 검은 무대" 로
+    나타났다 — 장면이 페이드(0.54초)보다 빨리 바뀌면 앞 컷의 정리 타이머가 새 컷을 치우고,
+    새 컷의 타이머가 남은 앞 컷을 치웠기 때문이다(스킵은 0.045초마다 넘어간다).
+    """
+    p = b.p("tools/vn_runtime.js")
+    if not p.exists():
+        raise Gap("tools/vn_runtime.js 아직 없음 — 공용 재생 엔진 이관 대기")
+    src = p.read_text(encoding="utf-8")
+
+    # ① 지금 무대에 있어야 할 컷을 가리키는 토큰 하나로, 늦게 도착한 일들을 전부 심판한다
+    ri = _vnr_func(src, "renderImg")
+    ok(ri.count("curImg") >= 3,
+       "renderImg 이 '지금 컷' 토큰을 쓰지 않는다 — 빠른 장면 전환에서 무대가 비어 버린다")
+    eq(ri.count("im !== curImg"), 2,
+       "늦게 도착한 onload·onerror 두 곳 모두를 막고 있지 않다")
+    ok(re.search(r"setTimeout\(function \(\) \{ if \(im === curImg\) clearImgs\(im\);", ri),
+       "정리 타이머가 '내가 아직 현재 컷인가' 를 묻지 않는다(새 컷을 지운다)")
+
+    # ② 선택지를 띄운 손짓이 선택까지 하지 않게 하는 가드
+    for fn, why in (("showChoices", "선택지를 띄우면서 가드를 걸지 않는다"),
+                    ("pick", "선택 직후 가드를 걸지 않는다 — 따라오는 클릭이 다음 장면의 첫 줄을 삼킨다")):
+        has(_vnr_func(src, fn), "guardPointer()", why)
+    for fn in ("onTap", "onTouchEnd"):
+        has(_vnr_func(src, fn), "pointerGuarded()",
+            f"{fn} 이 손짓 가드를 보지 않는다")
+    has(_vnr_func(src, "showChoices"), "pointerGuarded()",
+        "선택지 버튼이 손짓 가드를 보지 않는다 — 탭 한 번이 분기를 정해 버린다")
+
+    # ③ 저장 위치는 정수만 통과한다
+    st = _vnr_func(src, "start")
+    for needle in ("intIn(pos.vi", "intIn(pos.di"):
+        has(st, needle, "저장된 위치를 정수로 검증하지 않는다(손상된 저장이 뷰어를 멈춰 세운다)")
+    ok(re.search(r"num\(pos && pos\.aff", st),
+       "저장된 호감도를 수로 검증하지 않는다(NaN 이 눈금에 그대로 뜬다)")
+
+    # ④ 갈 곳을 못 찾았다고 이야기를 끝내지 않는다
+    nx = _vnr_func(src, "nextIndex")
+    eq(nx.count("return -1"), 0,
+       "만족되는 분기가 없을 때 -1 을 돌려준다 — 엔딩 장면도 아닌 곳에서 엔딩 카드가 뜬다")
+    pk = _vnr_func(src, "pick")
+    ok("nx = vi + 1" in pk,
+       "없는 goto 를 만나면 선형 진행으로 잇지 않는다 — 선택 직후 가짜 엔딩이 뜬다")
+    has(pk, "affPicks", "한 장면에서 고른 값을 장부에 적지 않는다(되돌아가 다시 고르면 쌓인다)")
+
+    # ⑤ 수는 한 곳에서만 판정한다
+    ns = _vnr_func(src, "normScene")
+    for needle in ("num(c.affection", "num(b.min"):
+        has(ns, needle, '선택지·분기의 수를 정규화하지 않는다("8" 이 문자열 덧셈이 된다)')
+
+    # ⑥ 전체화면 거부가 사용자 콘솔에 남지 않는다
+    has(_vnr_func(src, "quietly"), ".then(",
+       "전체화면 요청의 거부(Promise)를 삼키지 않는다 — Uncaught (in promise) 가 찍힌다")
+    has(_vnr_func(src, "toggleFull"), "quietly(", "toggleFull 이 그 방어를 쓰지 않는다")
+
+
+# 최소 DOM 대역 — 브라우저 없이 tools/vn_runtime.js **원본 그대로** 를 올리기 위한 것.
+# 화면을 흉내 내지 않는다(레이아웃·그리기 없음): 엔진이 실제로 만지는 것만 있다.
+# 여기 걸리는 회귀는 스튜디오 뷰어와 감상본 양쪽에서 동시에 터지는 것들이다.
+VNR_DOM_STUB = r"""
+"use strict";
+/* 최소 DOM 대역 — 브라우저 없이 재생 엔진을 그대로 올리기 위한 것.
+   화면을 흉내 내지 않는다(레이아웃·그리기 없음): 엔진이 실제로 만지는 것만 있다. */
+function El(tag) {
+  this.tagName = String(tag || "div").toUpperCase();
+  this.kids = []; this.parentNode = null; this.className = ""; this.attrs = {}; this.on = {};
+  this.hidden = false; this.inert = false; this.disabled = false;
+  this.scrollTop = 0; this.scrollHeight = 0; this.offsetWidth = 10; this.offsetHeight = 10;
+  this.txt = "";
+  this.style = { setProperty: function () {} };
+  var self = this;
+  this.classList = {
+    add: function () { for (var i = 0; i < arguments.length; i++) self.cls(arguments[i], true); },
+    remove: function () { for (var i = 0; i < arguments.length; i++) self.cls(arguments[i], false); },
+    toggle: function (c, on) { self.cls(c, on === undefined ? !self.classList.contains(c) : !!on); },
+    contains: function (c) { return self.className.split(/\s+/).indexOf(c) >= 0; }
+  };
+}
+El.prototype.cls = function (c, on) {
+  var l = this.className.split(/\s+/).filter(function (x) { return x && x !== c; });
+  if (on) l.push(c);
+  this.className = l.join(" ");
+};
+Object.defineProperty(El.prototype, "textContent", {
+  get: function () {
+    return this.kids.length ? this.kids.map(function (k) { return k.textContent; }).join("") : this.txt;
+  },
+  set: function (v) { this.kids = []; this.txt = String(v == null ? "" : v); }
+});
+Object.defineProperty(El.prototype, "children", {
+  get: function () { return this.kids.slice(); }
+});
+Object.defineProperty(El.prototype, "firstElementChild", {
+  get: function () { return this.kids[0] || null; }
+});
+El.prototype.appendChild = function (n) { n.parentNode = this; this.kids.push(n); return n; };
+El.prototype.removeChild = function (n) {
+  var i = this.kids.indexOf(n);
+  if (i >= 0) { this.kids.splice(i, 1); n.parentNode = null; }
+  return n;
+};
+El.prototype.remove = function () { if (this.parentNode) this.parentNode.removeChild(this); };
+El.prototype.replaceChildren = function () {
+  this.kids.forEach(function (k) { k.parentNode = null; });
+  this.kids = []; this.txt = "";
+  for (var i = 0; i < arguments.length; i++) this.appendChild(arguments[i]);
+};
+El.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); };
+El.prototype.getAttribute = function (k) {
+  return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null;
+};
+El.prototype.addEventListener = function (t, fn) { (this.on[t] = this.on[t] || []).push(fn); };
+El.prototype.removeEventListener = function (t, fn) {
+  var a = this.on[t] || [], i = a.indexOf(fn);
+  if (i >= 0) a.splice(i, 1);
+};
+El.prototype.fire = function (t, ev) {
+  (this.on[t] || []).slice().forEach(function (fn) { fn(ev || {}); });
+};
+El.prototype.click = function () { this.fire("click", { detail: 0, target: this }); };   // 키보드처럼
+El.prototype.pointerClick = function () { this.fire("click", { detail: 1, target: this }); };  // 손가락처럼
+El.prototype.focus = function () { DOC.activeElement = this; };
+El.prototype.contains = function (n) {
+  return n === this || this.kids.some(function (k) { return k.contains(n); });
+};
+El.prototype.getBoundingClientRect = function () {
+  return { top: 0, left: 0, width: 10, height: 10, right: 10, bottom: 10 };
+};
+El.prototype.all = function (out) {
+  out = out || [];
+  this.kids.forEach(function (k) { out.push(k); k.all(out); });
+  return out;
+};
+/* 아주 작은 선택자 매처 — 엔진이 쓰는 형태(tag · .class · tag.class · 쉼표 목록)만 본다 */
+function vnrMatch(node, sel) {
+  return String(sel).split(",").some(function (one) {
+    var m = /^\s*([a-zA-Z]*)((?:\.[\w-]+)*)\s*$/.exec(one);
+    if (!m || (!m[1] && !m[2])) return false;
+    if (m[1] && node.tagName !== m[1].toUpperCase()) return false;
+    return (m[2] || "").split(".").filter(Boolean)
+      .every(function (c) { return node.classList.contains(c); });
+  });
+}
+El.prototype.querySelectorAll = function (sel) {
+  return this.all().filter(function (n) { return vnrMatch(n, sel); });
+};
+El.prototype.querySelector = function (sel) { return this.querySelectorAll(sel)[0] || null; };
+
+var DOC = {
+  activeElement: null, visibilityState: "visible", fullscreenElement: null, on: {},
+  createElement: function (t) { return new El(t); },
+  createTextNode: function (t) { var n = new El("#text"); n.textContent = t; return n; },
+  getElementById: function () { return null; },
+  addEventListener: function (t, fn) { (DOC.on[t] = DOC.on[t] || []).push(fn); },
+  removeEventListener: function (t, fn) {
+    var a = DOC.on[t] || [], i = a.indexOf(fn);
+    if (i >= 0) a.splice(i, 1);
+  },
+  fire: function (t, ev) { (DOC.on[t] || []).slice().forEach(function (fn) { fn(ev || {}); }); }
+};
+DOC.documentElement = new El("html");
+DOC.head = new El("head");
+DOC.body = new El("body");
+
+var STORE = {};
+var WIN = {
+  document: DOC,
+  localStorage: {
+    getItem: function (k) { return Object.prototype.hasOwnProperty.call(STORE, k) ? STORE[k] : null; },
+    setItem: function (k, v) { STORE[k] = String(v); },
+    removeItem: function (k) { delete STORE[k]; }
+  },
+  matchMedia: function () { return { matches: false }; },
+  setTimeout: setTimeout, clearTimeout: clearTimeout,
+  setInterval: setInterval, clearInterval: clearInterval,
+  requestAnimationFrame: function (cb) { return setTimeout(cb, 0); },
+  Image: function () { this.decoding = ""; this.src = ""; },
+  navigator: {}
+};
+WIN.window = WIN;
+global.window = WIN;
+global.document = DOC;
+"""
+
+VNR_DRIVER = r"""
+/* 재생 엔진을 실제로 굴려 본다: 호감도 장부 · 분기 폴백 · 손상된 저장 · 손짓 가드.
+   마지막 줄에 JSON 한 줄만 낸다(파이썬 쪽이 그것만 읽는다). */
+var OUT = {};
+function vnrScenes() {
+  return [
+    { id: "A", order: 1, purpose: "a", img: "",
+      lines: [{ n: "", c: null, t: "a1", p: "bottom" }, { n: "", c: null, t: "a2", p: "bottom" }] },
+    { id: "B", order: 2, purpose: "b", img: "", lines: [{ n: "", c: null, t: "b1", p: "bottom" }],
+      choices: [{ text: "up", affection: 8, goto: "C" },
+                { text: "down", affection: -4, goto: "C" },
+                { text: "str", affection: "5", goto: "C" }] },   // 손으로 고친 장면의 문자열 값
+    { id: "C", order: 3, purpose: "c", img: "", lines: [{ n: "", c: null, t: "c1", p: "bottom" }],
+      branch: [{ min: 35, goto: "D" }, { min: 0, goto: "E" }] },
+    { id: "D", order: 4, purpose: "good", img: "", lines: [{ n: "", c: null, t: "d1", p: "bottom" }],
+      ending: true, ending_label: "GOOD" },
+    { id: "E", order: 5, purpose: "soft", img: "", lines: [{ n: "", c: null, t: "e1", p: "bottom" }],
+      ending: true, ending_label: "SOFT" }
+  ];
+}
+var VDATA = { title: "T", scenes: vnrScenes(), dating: { max: 100, start_affection: 30 }, episodes: [] };
+STORE["k:settings"] = JSON.stringify({ textSpeed: 0, autoDelay: 1500, fs: 17, skipAll: false, cinema: false });
+var P = WIN.VNRuntime.mount({ data: VDATA, root: DOC.body, storageKey: "k" });
+var ST = DOC.body.kids[DOC.body.kids.length - 1];
+function picks() { return ST.querySelector(".vnr-choices").kids; }
+function affNow() {
+  var m = /(-?\d+)\s*\/\s*(\d+)/.exec(ST.querySelector(".vnr-aff").textContent);
+  return m ? +m[1] : null;
+}
+function endOpen() { return !ST.querySelector(".vnr-end").hidden; }
+function endName() { return ST.querySelector(".vnr-nm").textContent; }
+function body() { return ST.querySelector(".vnr-text").textContent; }
+function press(k) { DOC.fire("keydown", { key: k, target: ST, preventDefault: function () {} }); }
+function toChoices() { P.start(false, 1); press("ArrowRight"); }
+// 처음부터 다시 시작하지 않고 **되돌아가** 같은 선택지를 다시 연다(호감도가 유지된 채로)
+function reChoose() { press("ArrowLeft"); press("ArrowRight"); }
+// 저장이 아예 쓰이지 않은 경우(=재생이 멈춘 경우)에도 검사가 죽지 않고 결과로 말하게 한다
+// 선택지가 이미 사라졌으면(=가드가 없던 시절엔 첫 손짓이 골라 버렸다) 조용히 넘어간다
+function vnrTap(i) { var b = picks()[i]; if (b) b.pointerClick(); }
+function vnrPos() { try { return JSON.parse(STORE["k:pos:T"] || "{}") || {}; } catch (e) { return {}; } }
+
+// 1. 호감도 장부 — 다시 고르면 바뀌는 것이지 쌓이는 것이 아니다
+toChoices();
+OUT.choicesShown = !ST.querySelector(".vnr-choices").hidden;
+OUT.affStart = affNow();
+picks()[0].click();
+OUT.aff1 = affNow();
+OUT.after1 = P.index();
+reChoose(); picks()[0].click();            // 같은 선택을 한 번 더 — 쌓이면 안 된다
+OUT.affRepeat = affNow();
+reChoose(); picks()[1].click();            // 결정을 -4 로 바꾼다
+OUT.affSwitch = affNow();
+reChoose(); picks()[2].click();            // 문자열 "5" 로 바꾼다
+OUT.affString = affNow();
+
+// 2. 분기가 장부의 값으로 갈린다(양쪽 다)
+toChoices(); picks()[0].click(); press("ArrowRight");
+OUT.branchHigh = P.data().scenes[P.index()].id;
+press("ArrowRight");
+OUT.endHigh = endOpen() ? endName() : "";
+toChoices(); picks()[1].click(); press("ArrowRight");
+OUT.branchLow = P.data().scenes[P.index()].id;
+press("ArrowRight");
+OUT.endLow = endOpen() ? endName() : "";
+
+// 3. 없는 goto·만족되는 분기 0 은 **이야기를 끝내지 않는다**(가짜 엔딩 금지)
+var D2 = { title: "T", scenes: vnrScenes(), dating: VDATA.dating, episodes: [] };
+D2.scenes[1].choices = [{ text: "nowhere", affection: 2, goto: "NOPE" }];
+D2.scenes[2].branch = [{ min: 900, goto: "D" }];
+P.setData(D2);
+toChoices(); picks()[0].click();
+OUT.danglingGoto = { id: P.data().scenes[P.index()].id, end: endOpen() };
+press("ArrowRight");
+OUT.deadBranch = { id: P.data().scenes[P.index()].id, end: endOpen() };
+
+// 4. 손상되거나 손댄 저장 위치에서도 반드시 읽을 수 있는 화면이 남는다
+P.setData(VDATA);
+OUT.corrupt = [{ vi: "3", di: "1", aff: 30 }, { vi: 2.7, di: 1.3, aff: 12.5 },
+               { vi: null, di: undefined, aff: "x" }, { vi: 99, di: 99, aff: 1e9 },
+               { vi: -1, di: -1, aff: -50 }].map(function (bad) {
+  STORE["k:pos:T"] = JSON.stringify(bad);
+  P.start(true);
+  var at = P.index();
+  press("ArrowRight");
+  return { vi: at, int: Number.isInteger(at) && at >= 0 && at < 5,
+           moved: P.index() !== at || vnrPos().di > 0,
+           aff: affNow(), affOk: affNow() >= 0 && affNow() <= 100, text: body() };
+});
+STORE["k:pos:T"] = "not json at all";
+P.start(true);
+OUT.junkSave = { vi: P.index(), text: body() };
+
+// 5. 선택지를 띄운 그 손짓이 선택까지 하지 않는다(폰 탭 하나로 분기가 정해지던 자리)
+toChoices();
+vnrTap(0);
+OUT.guardBlocks = { hidden: ST.querySelector(".vnr-choices").hidden, vi: P.index(), aff: affNow() };
+setTimeout(function () {
+  vnrTap(0);                                       // 가드가 풀린 뒤에는 그대로 눌린다
+  OUT.guardReleases = { hidden: ST.querySelector(".vnr-choices").hidden, vi: P.index(), aff: affNow() };
+  // 6. 장부는 이어보기에도 살아남는다(다시 걸어도 같은 값)
+  toChoices(); picks()[0].click();
+  OUT.savedPicks = vnrPos().picks || null;
+  P.start(true);                           // 이어보기
+  OUT.resumedAff = affNow();
+  reChoose(); picks()[0].click();          // 이어본 뒤 되돌아가 같은 선택을 또 골라도
+  OUT.resumedRepeat = affNow();
+  console.log(JSON.stringify(OUT));
+  process.exit(0);
+}, 420);
+"""
+
+
+@test("js", "J07 재생 엔진 실행 — 호감도 장부·분기 폴백·손상된 저장 복구(브라우저 없이)")
+def j07(b: Box):
+    """분기 재생은 이 저장소에서 **눈으로만** 확인되던 마지막 자리였다. 그 사이에 네 가지가
+    조용히 어긋나 있었다:
+      · [장면]으로 되돌아가 같은 선택지를 다시 고르면 호감도가 **쌓였다**(어떤 시작값에서도
+        눈금 최대까지 올려 원하는 엔딩을 열 수 있었다).
+      · 선택지를 **띄운 그 손짓**이 선택까지 했다 — 폰에서는 탭 한 번으로, 엄지 위치가 분기를 정했다.
+      · 없는 goto·만족되는 분기 0 이 **가짜 엔딩 카드**를 띄워 작품이 거기서 끝난 것처럼 보였다.
+      · 손상된 저장 위치("3"·2.7·null)가 그대로 통과해 **아무 키도 듣지 않는 뷰어**가 됐다.
+    """
+    p = b.p("tools/vn_runtime.js")
+    if not p.exists():
+        raise Gap("tools/vn_runtime.js 아직 없음 — 공용 재생 엔진 이관 대기")
+    code = "\n;\n".join([VNR_DOM_STUB, p.read_text(encoding="utf-8"), VNR_DRIVER])
+    r = _node_json(b, code, "vn_engine")
+
+    eq(r["choicesShown"], True, "장면 끝에서 선택지가 뜨지 않는다")
+    eq(r["affStart"], 30, "시작 호감도가 매니페스트 눈금(start_affection)과 다름")
+    eq(r["aff1"], 38, "선택지의 호감도(+8)가 반영되지 않음")
+    eq(r["after1"], 2, "선택 뒤 goto 목적지로 가지 않음")
+    eq(r["affRepeat"], 38,
+       "되돌아가 같은 선택을 다시 골랐더니 호감도가 쌓인다 — 눈금을 채워 엔딩을 고를 수 있다")
+    eq(r["affSwitch"], 26, "결정을 바꿨는데 앞 선택의 값이 남아 있다")
+    eq(r["affString"], 35,
+       '선택지의 affection 이 문자열 "5" 일 때 수로 더해지지 않는다(예전엔 눈금 최대로 튀었다)')
+    eq(r["branchHigh"], "D", "호감도 38 인데 min 35 분기로 가지 않음")
+    eq(r["branchLow"], "E", "호감도 26 인데 min 35 분기로 갔음")
+    eq(r["endHigh"], "GOOD", "엔딩 카드 이름(ending_label)")
+    eq(r["endLow"], "SOFT", "엔딩 카드 이름(ending_label)")
+    eq(r["danglingGoto"], {"id": "C", "end": False},
+       "목적지가 없는 goto 가 이야기를 끝낸다 — 작가의 오타 하나로 작품이 거기서 끝난다")
+    eq(r["deadBranch"], {"id": "D", "end": False},
+       "만족되는 분기가 하나도 없을 때 가짜 엔딩 카드가 뜬다")
+    for i, c in enumerate(r["corrupt"]):
+        ok(c["int"], f"손상된 저장 {i}: 장면 번호가 정수가 아니다 — {c}")
+        ok(c["affOk"], f"손상된 저장 {i}: 호감도가 눈금을 벗어났다 — {c}")
+        ok(c["moved"], f"손상된 저장 {i}: 진행 키가 듣지 않는다(빠져나올 길이 없다) — {c}")
+        ok(c["text"], f"손상된 저장 {i}: 대사창이 비었다 — {c}")
+    ok(r["junkSave"]["text"], f"JSON 이 아닌 저장값에서 화면이 비었다 — {r['junkSave']}")
+    eq(r["guardBlocks"], {"hidden": False, "vi": 1, "aff": 30},
+       "선택지를 띄운 그 손짓이 선택까지 해 버린다(폰에서 탭 한 번이면 분기가 정해진다)")
+    eq(r["guardReleases"], {"hidden": True, "vi": 2, "aff": 38},
+       "가드가 풀린 뒤에도 선택지를 고를 수 없다 — 화면이 먹통이 된다")
+    eq(r["savedPicks"], {"B": 8}, "선택 장부가 저장되지 않아 이어보기 뒤 다시 쌓인다")
+    eq(r["resumedAff"], 38, "이어보기 뒤 호감도가 어긋난다")
+    eq(r["resumedRepeat"], 38, "이어보기 뒤 되돌아가 다시 고르면 호감도가 쌓인다")
+
+
 # ============================================================ ux (폰 손짓 · 가독성)
 # 화면에서만 드러나는 회귀도 소스로 잠글 수 있는 것들이 있다: 손짓 리스너가 어디 붙었는지,
 # 글자색이 배경과 몇 대 몇인지. 둘 다 "폰에서 써 보면 아는" 종류라 자동 검사가 없으면
