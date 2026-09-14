@@ -530,6 +530,28 @@ def size_plan(long_edge: int | None = None) -> dict:
             "cap_is_default": "max_long_edge_px" not in _cfg()}
 
 
+def size_recipe(long_px: int) -> dict:
+    """긴 변 long_px 를 이 엔진으로 뽑으려면 매니페스트에서 무엇을 얼마로 바꿔야 하는가.
+
+    두 클라이언트의 공용 계약이다(comfyui_client.size_recipe 와 같은 키) — 인화 도구와 doctor 가
+    엔진을 모르는 채로 "무엇을 올려라" 를 그대로 옮겨 적을 수 있어야 한다. MakeFun 에는 hires
+    2배 상한이 없으므로 조치는 두 값뿐이고 hires_note 는 항상 빈 문자열이다.
+    """
+    want = max(SIZE_MIN_PX, int(long_px))
+    edits: list[tuple[str, int]] = []
+    out = load_json_safe(MANIFEST, {}).get("output", {})
+    try:
+        cur_min = int((out or {}).get("min_long_edge_px", DEFAULT_LONG_EDGE) or DEFAULT_LONG_EDGE)
+    except (TypeError, ValueError):
+        cur_min = DEFAULT_LONG_EDGE
+    if cur_min < want:
+        edits.append(("output.min_long_edge_px", want))
+    if _cap_px() // 8 * 8 < want:               # 상한은 8의 배수로 내려서 자른다(2250 → 2248)
+        edits.append(("image_generator.max_long_edge_px", gen_common.align_up(want)))
+    return {"want": want, "reachable": not edits, "edits": edits, "hires_note": "",
+            "feasible": want <= SIZE_HARD_MAX_PX, "engine": "makefun"}
+
+
 def _size_from_manifest(long_edge: int | None = None) -> tuple[int, int]:
     """출력 규격(기본 2:3 세로)과 manifest.output.min_long_edge_px 에 맞는 생성 크기."""
     plan = size_plan(long_edge)

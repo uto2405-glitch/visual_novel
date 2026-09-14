@@ -145,6 +145,21 @@
 4×6 엽서 1800px, 5×7 2250px, 8×10 3600px.
 **올릴 때는 `image_generator.max_long_edge_px`(기본 2048)도 함께 올린다.** 그러지 않으면
 생성 요청이 2048 로 깎이고, 올려 둔 기준 때문에 오히려 A3 가 FAIL 한다(§1.3 경고 참조).
+
+**ComfyUI 에는 올릴 값이 하나 더 있다.** hires 확대는 1차 캔버스의 2배까지라(§1.3
+`base_long_edge_px`) 기본 1248px 에서는 **2496px 이 천장**이다 — 8×10(3600px)은 앞의 두 값을
+아무리 올려도 나오지 않는다. 기본 엔진별로 필요한 값은 이렇다(2:3 · 300DPI):
+
+| 목표 | `output.min_long_edge_px` | `image_generator.max_long_edge_px` | `…comfyui.base_long_edge_px` |
+|---|---|---|---|
+| 4×6 엽서 (1800px) | 1800 | (기본 2048 로 충분) | (기본 1248 로 충분) |
+| 5×7 (2250px) | 2250 | **2256** (8의 배수) | (기본 1248 로 충분 — 2496 천장 안) |
+| 8×10 (3600px) | 3600 | 3600 | **1800** — 이 값을 안 올리면 2496px 에서 잘린다 |
+
+1차 캔버스를 올리면 렌더가 느려지고 12GB VRAM 에서는 2차 KSampler 가 OOM 날 수 있으며,
+SDXL 은 1MP 근처를 벗어날수록 인물이 갈라진다. 값을 지어내지 말고 도구에 물어본다 —
+`python tools/print_preflight.py` 가 규격마다 **바꿀 키와 값을 그대로 찍어 준다**
+(판정은 클라이언트의 `size_recipe` 하나가 하고 인화 도구·doctor 는 옮겨 적기만 한다).
 → [PRINT_ORDER_GUIDE.md](PRINT_ORDER_GUIDE.md)
 
 ### 1.5 `dating` · `episodes` · `talk`

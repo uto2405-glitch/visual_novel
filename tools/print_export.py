@@ -305,6 +305,43 @@ def _safe_stem(scene_id) -> str:
     return safe_slug(scene_id, "SCENE")
 
 
+def _rel(p: Path) -> str:
+    """스펙시트에 적을 경로 — 저장소 안이면 상대 경로, 밖이면 절대 경로.
+
+    예전에는 무조건 ROOT 기준 상대 경로로 바꿔서, 출력 폴더를 저장소 밖으로 돌려놓고 부르면
+    (테스트·임시 폴더로 굽기) 마지막 한 줄에서 ValueError 로 죽었다 — 파일은 이미 다 구워
+    놓은 뒤라 사용자는 "실패" 를 보고도 산출물이 왜 있는지 알 수 없었다.
+    """
+    try:
+        return p.relative_to(ROOT).as_posix()
+    except ValueError:
+        return p.as_posix()
+
+
+def _crop_note(spec: dict) -> str:
+    """크롭이 **어느 변에서** 얼마나 잘렸는지 — 총량만 말하면 머리가 잘린 걸 알 수 없다.
+
+    8×10(4:5)에 2:3 원본을 채우면 16.7% 가 잘리는데, 그 절반씩이 위·아래다. 이 작품처럼 얼굴이
+    프레임 위쪽에 있는 컷은 center 크롭이 정수리를 깎는다 — 수치를 나눠 보여야 --anchor top 을
+    떠올릴 수 있다.
+    """
+    pct = float(spec.get("crop_pct") or 0)
+    if pct <= 0.05:
+        return ""
+    sw, sh = spec.get("src_px") or (0, 0)
+    tw, th = spec.get("out_px") or (0, 0)
+    if not (sw and sh and tw and th):
+        return ""
+    src_ar, out_ar = sw / sh, tw / th
+    axis, edges = ("위·아래", ("top", "bottom")) if src_ar < out_ar else ("좌·우", ("left", "right"))
+    anchor = str(spec.get("anchor") or "center")
+    half = round(pct / 2, 1)
+    if anchor in edges:                        # 한쪽으로 붙이면 반대편만 잘린다
+        other = edges[1] if anchor == edges[0] else edges[0]
+        return f"({axis} 중 {other} 쪽에서만 {round(pct, 1)}%)"
+    return f"({axis} 각 {half}%)"
+
+
 def _order_prefix(order) -> str:
     """업로드 정렬용 3자리 접두사(78). 정수가 아니면 접두사 없이 기존 파일명 유지."""
     try:
@@ -382,7 +419,7 @@ def export_one(scene_id: str, src_path: Path, short_in, long_in, dpi, bleed, anc
             "mode": "fit" if fit else "cover", "pad_pct": pad_pct,
             "bg": "#%02x%02x%02x" % bgc if fit else None,
             "marks": marked, "icc": bool(icc), "upscale": used, "order": _order_prefix(order)[:-1] or None,
-            "tiff": tiff.relative_to(ROOT).as_posix(), "jpg": jpg.relative_to(ROOT).as_posix()}
+            "tiff": _rel(tiff), "jpg": _rel(jpg)}
 
 
 def collect(scene_filter, include_all):
@@ -507,7 +544,7 @@ def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
         if spec["mode"] == "fit":
             geo = f"여백 {spec['pad_pct']}%"
         else:
-            geo = f"크롭 {spec['crop_pct']}%"
+            geo = f"크롭 {spec['crop_pct']}%{_crop_note(spec)}"
         warn = "  ⚠업스케일(원본<목표)" if spec["upscaled"] else ""
         if spec["upscaled"] and spec["upscale"] in ("step", "esrgan"):
             warn += f"[{spec['upscale']}]"
@@ -531,9 +568,11 @@ def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
             "icc": "sRGB" if srgb_icc_bytes() else None,
             "only_ids": sorted(wanted) if wanted is not None else None,
             "count": len(specs), "scenes": specs})
-    return {"count": len(specs), "dir": dest.relative_to(ROOT).as_posix() if specs else None,
+    return {"count": len(specs), "dir": _rel(dest) if specs else None,
             "upscaled": sum(1 for s in specs if s["upscaled"]), "skipped": skipped,
             "missing": missing, "specs": specs, "stale": stale,
+            "crop_max": max((float(s["crop_pct"] or 0) for s in specs), default=0.0),
+            "anchor": anchor,
             "mode": "fit" if str(mode).lower() == "fit" else "cover",
             "marks": bool(marks and bleed > 0), "icc": bool(srgb_icc_bytes())}
 
@@ -567,6 +606,31 @@ def main() -> int:
                     help="파일명 앞 scene_order 접두사(001_)를 붙이지 않음")
     ap.add_argument("--list-sizes", action="store_true", help="규격 프리셋 목록만 출력")
     args = ap.parse_args()
+
+    def _regen_recipe(short_in: float, long_in: float, dpi: int) -> list[str]:
+        """"이 규격을 진짜로 채우려면 무엇을 얼마로 올려야 하나" — 값까지 적힌 조치.
+
+        **CLI 진입점 안에 둔다.** image_gen 은 이 도구보다 위층이고 makefun_client 를 거쳐
+        print_preflight 로 도는 지연 고리가 있어, 라이브러리 경로에서 부르면 계층·순환 검사에
+        걸린다(selftest L01·L02). '이 도구를 직접 실행한 사람' 경로에서만 필요한 안내다.
+        """
+        try:
+            import image_gen
+            import print_preflight as pf
+            need = pf.needed_px_for(short_in, long_in, dpi)
+            if not need:
+                return []
+            engine = image_gen.active_engine()
+            eng = (image_gen.label(engine), image_gen.client(engine))
+            lines = pf.recipe_lines(need[1], eng, indent="       ")
+            if not lines:
+                return []
+            return [f"     재생성으로 채우려면 — 원본이 최소 {need[0]}×{need[1]}px 이어야 합니다 "
+                    f"(엔진 {eng[0]}):"] + lines + [
+                "       확인(과금 없음): python tools/print_preflight.py  ·  python tools/doctor.py"]
+        except Exception:               # 생성기를 쓰지 않는 설치·매니페스트 손상 — 굽기는 이미 끝났다
+            return ["     재생성 전 확인: python tools/print_preflight.py (엔진별 조치를 값까지 알려줍니다)"]
+
     if args.list_sizes:
         _print_sizes()
         return 0
@@ -605,14 +669,20 @@ def main() -> int:
                              "ICC 미임베드(littleCMS 없음) — 인화소에 sRGB 로 알려주세요"))
         if s["marks"]:
             print("  재단선 포함 — 재단 후 마크는 남지 않습니다.")
+        if s["crop_max"] > 5 and s["mode"] == "cover" and args.anchor == "center":
+            # 잘린 총량만 알려 주면 "어디가" 잘렸는지는 파일을 열어 봐야 안다. 이 작품처럼 얼굴이
+            # 프레임 위쪽에 있는 컷은 center 크롭이 정수리를 깎는다 — 굽는 자리에서 말해야 한다.
+            print(f"  ⚠ 최대 {s['crop_max']}% 가 잘렸습니다(center 기준 위·아래 절반씩). "
+                  "얼굴이 프레임 위쪽인 컷은 --anchor top, 잘림이 싫으면 --mode fit 로 다시 구우세요.")
         if s["upscaled"]:
             print(f"  ⚠ {s['upscaled']}장은 업스케일됨 — 인화 화질 저하 가능. "
                   "--upscale step/auto 로 개선하거나 더 큰 해상도로 재생성 권장.")
-            # "더 크게 재생성" 은 매니페스트 두 값이 함께 올라가야 실제로 커진다.
-            # 요청 크기만 올리면 생성기 상한에 깎여 과금만 되고 결과는 그대로다.
-            print("     재생성 전 확인: output.min_long_edge_px(요청 크기)와 "
-                  "image_generator.max_long_edge_px(생성기 상한)를 함께 올렸는지 "
-                  "—  python tools/makefun_client.py --check")
+            # "더 크게 재생성" 은 엔진마다 올릴 값이 다르다. 예전 이 자리는 엔진과 무관하게
+            # MakeFun(유료) 의 상한 두 개만 말해서, ComfyUI 를 쓰는 사용자는 있지도 않은 키를
+            # 찾다가 hires 2배 상한을 끝내 못 보고 같은 크기를 다시 렌더했다.
+            # 조치 계산은 엔진 클라이언트가, 표현은 print_preflight 가 한다 — 여기서는 옮긴다.
+            for line in _regen_recipe(short_in, long_in, args.dpi):
+                print(line)
         if s["skipped"]:
             print(f"  {s['skipped']}장은 --skip-upscale 로 제외됨.")
     else:

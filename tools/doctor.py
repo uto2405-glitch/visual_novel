@@ -343,14 +343,54 @@ def check_gen_size() -> None:
               f"(상한 {plan['cap']}px{', 기본값' if plan['cap_is_default'] else ''})")
     if warns:
         billed = " — 요청이 조용히 깎인 채 과금됩니다" if engine == "makefun" else " — 요청이 조용히 깎입니다"
+        # 조치는 **클라이언트가 만든 문장을 그대로** 쓴다. 예전에는 여기서 따로 지어 냈는데,
+        # 그 문장이 두 경우에 사용자를 제자리로 돌려보냈다:
+        #   * 상한이 8의 배수가 아닐 때("2250 이상으로" → 이미 2250 → 실제 2248 → A3 계속 FAIL)
+        #   * ComfyUI 의 hires 2배 상한에 걸렸을 때(막은 건 base_long_edge_px 인데 엉뚱하게
+        #     max_long_edge_px 를 올리라고 했다 — 올려도 결과가 그대로다)
+        # 상한을 아는 곳은 클라이언트 하나다(size_warnings). doctor 는 전달만 한다.
         add("프로젝트", "생성 크기 상한", ERR, detail + billed,
-            f"manifest image_generator.max_long_edge_px 를 {plan['want']} 이상으로 올리세요. "
-            "그대로 두면 인화 규격과 검사기 A3(긴 변 ≥ min_long_edge_px) 양쪽에 미달합니다.")
+            warns[0] + " 그대로 두면 인화 규격과 검사기 A3(긴 변 ≥ min_long_edge_px) 양쪽에 미달합니다.")
     elif plan["cap_is_default"]:
         add("프로젝트", "생성 크기 상한", OK,
             detail + " — 인화용으로 min_long_edge_px 를 올릴 때 max_long_edge_px 도 함께 올리세요")
     else:
         add("프로젝트", "생성 크기 상한", OK, detail)
+    check_print_reach(cli, plan)
+
+
+def check_print_reach(cli, plan: dict) -> None:
+    """지금 설정으로 **실물 인화가 어디까지 되는지** 와, 한 단계 위로 가는 조치.
+
+    인화는 이 제품의 절반인데 doctor 는 화면 기준(A3)만 봐 왔다. 832×1248px 은 A3 도 통과하고
+    감상도 멀쩡하지만 300DPI 로는 긴 변 4.16인치 — **엽서(4×6)에도 못 미친다.** 그 사실을
+    굽기 직전(print_export)에야 알면 이미 마스터를 다 구운 뒤다.
+
+    규격 판정은 print_preflight, 상한 조치는 엔진 클라이언트가 한다 — 여기서는 둘을 잇는다.
+    """
+    try:
+        import print_preflight as pf
+        long_px = max(int(plan.get("width", 0)), int(plan.get("height", 0)))
+        if long_px <= 0:
+            return
+        got = pf.preflight_image(long_px, long_px, pf.DPI_GOOD)
+        best = got["max_size_at_target"]
+        inch = round(long_px / pf.DPI_GOOD, 2)
+    except Exception as exc:
+        add("프로젝트", "인화 가능 규격", WARN, f"판정할 수 없습니다: {exc}",
+            "python tools/print_preflight.py 로 직접 확인하세요.")
+        return
+    detail = f"{long_px}px → {pf.DPI_GOOD}DPI 에서 긴 변 {inch}인치 · 최대 {best or '엽서(4×6) 미만'}"
+    if best:
+        add("프로젝트", "인화 가능 규격", OK, detail)
+        return
+    fix = "화면 감상만 할 작품이면 문제가 아닙니다. 실물 인화를 하려면 "
+    recipe = pf.recipe_lines(pf.needed_px(pf.PRINT_SIZES[0][0])[1],
+                             (getattr(cli, "__name__", ""), cli), indent="")
+    add("프로젝트", "인화 가능 규격", WARN, detail,
+        fix + ("엽서(4×6)부터: " + " · ".join(recipe) if recipe else
+               "python tools/print_preflight.py 를 보세요.")
+        + "  (규격별 조치: python tools/print_preflight.py)")
 
 
 def check_scenes(mf: dict | None = None) -> None:

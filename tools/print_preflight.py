@@ -5,6 +5,11 @@
       긴 변이 약 3.4인치(엽서보다 작다). 검사기 A3 는 화면 기준 최소 해상도만 보므로, 실물 인화
       적합성은 이 도구가 따로 판정한다. (SCORECARD/검사기는 건드리지 않는 별도 게이트)
 
+판정에서 끝내지 않는다 — 모자랄 때 **규격마다 매니페스트의 어느 키를 얼마로 바꿔야 하는지**
+값까지 찍는다. 그 조치는 활성 엔진의 클라이언트(size_recipe)가 만든다: 상한은 8의 배수로 내려
+잘리고(2250 → 2248), ComfyUI 는 hires 가 1차 캔버스의 2배까지라 8×10(3600px)은 상한만 올려서는
+닿지 않는다. 이 규칙을 여기서 다시 구현하면 상한이 하나 더 생길 때 이 파일만 옛 답을 말한다.
+
 사용법:
   python tools/print_preflight.py                 # 승인/선택된 모든 장면
   python tools/print_preflight.py --scene SCENE-001
@@ -227,14 +232,23 @@ def preflight_image(px_w: int, px_h: int, target: int = DPI_GOOD) -> dict:
             "printable": best is not None}
 
 
+def needed_px_for(short_in: float, long_in: float, target: int = DPI_GOOD):
+    """임의 규격(인치)을 target DPI 로 채우려면 2:3 원본에 필요한 (짧은변, 긴변) 픽셀.
+
+    프리셋 밖 규격(print_export 의 자유 규격·mm 규격)도 같은 산수를 써야 두 도구가 다른 수를
+    말하지 않는다 — needed_px 는 이 함수의 프리셋 조회판이다.
+    """
+    if short_in <= 0 or long_in <= 0:
+        return None
+    # 2:3 이미지가 채우려면 짧은 변이 구속 → short_in*dpi, 긴 변은 그 3/2
+    return round(short_in * target), round(max(long_in, short_in * 1.5) * target)
+
+
 def needed_px(name: str, target: int = DPI_GOOD):
     """규격 name 을 target DPI(2:3 기준)로 인화하려면 필요한 (짧은변, 긴변) 픽셀."""
     for n, s_in, l_in in PRINT_SIZES:
         if n == name:
-            # 2:3 이미지가 채우려면 짧은 변이 구속 → short_in*dpi, 긴 변은 그 3/2
-            short_px = round(s_in * target)
-            long_px = round(max(l_in, s_in * 1.5) * target)
-            return short_px, long_px
+            return needed_px_for(s_in, l_in, target)
     return None
 
 
@@ -271,32 +285,81 @@ def _row_line(r: dict) -> str:
     return f"{mark}{_pad(r['size'], 18)}{_pad(mm, 14)}{r['dpi']:>4}DPI  {r['grade']}{crop}"
 
 
-def generator_cap_note() -> list[str]:
-    """생성기 상한 안내 — 이 도구의 "더 크게 생성하세요" 조언이 함정으로 끝나지 않게 한다.
+def _check_cmd(client) -> str:
+    """그 엔진의 무과금 확인 명령 — 모듈 이름이 곧 파일 이름이다(둘을 따로 적으면 갈린다)."""
+    name = getattr(client, "__name__", "") or "comfyui_client"
+    return f"python tools/{name}.py --check"
 
-    min_long_edge_px 만 올리면 요청이 image_generator.max_long_edge_px(기본 2048px)로 깎인
-    채 과금된다. 상한 판정은 makefun_client 한 곳에 있고(중복 구현 금지) 여기서는 전달만 한다.
+
+def engine_note(engine=None) -> list[str]:
+    """활성 엔진이 **지금 설정으로 실제로 내는 크기**와 상한 경고.
+
+    예전 이 자리는 makefun_client 만 물었다 — 기본 엔진이 ComfyUI 로 바뀐 뒤로는 **쓰지도 않는
+    엔진의 상한**을 보고 "경고 없음" 이라고 말했고, ComfyUI 의 hires 2배 상한(1248 → 2496px)은
+    한 번도 화면에 뜨지 않았다. 그래서 8×10(3600px)을 노린 사용자는 매니페스트 두 값을 올리고
+    다시 렌더한 뒤에야 2496px 을 보게 됐다.
+
+    엔진 선택 규칙은 image_gen 한 곳에 있고 여기서는 **main() 이 건네준 것**을 전달만 한다
+    (라이브러리 경로에서 image_gen 을 부르면 print_preflight ↔ makefun_client ↔ image_gen
+    지연 고리가 생긴다 — selftest L02).
 
     실패는 두 가지로 나눈다 — 섞으면 "왜 경고가 안 뜨지?"를 추적할 수 없다.
-      * 모듈이 없다: 생성기를 쓰지 않는 설치다. 조용히 넘어간다(인화 판정은 그대로 돌아간다).
-      * 있는데 못 읽었다(매니페스트 손상·계산 오류): 상한을 **확인하지 못했다는 사실**을
-        보고한다. 삼키면 상한이 안전한 것처럼 보인 채로 과금되는 생성으로 이어진다.
+      * 엔진을 못 정했다: 생성기를 쓰지 않는 설치다. 조용히 넘어간다(인화 판정은 그대로 돈다).
+      * 정했는데 못 읽었다(매니페스트 손상·계산 오류): 상한을 **확인하지 못했다는 사실**을
+        보고한다. 삼키면 상한이 안전한 것처럼 보인 채로 재생성(유료 엔진이면 과금)으로 이어진다.
     """
+    if not engine:
+        return []
+    label, client = engine
     try:
-        import makefun_client as mkc
-    except ImportError:
-        return []                      # 생성기 모듈 없음 — 이 설치에서는 상한 자체가 없다
-    except Exception as exc:           # 모듈은 있는데 적재가 깨졌다 — 침묵하면 안 되는 고장
-        return [f"※ 생성기 상한을 확인하지 못했습니다 — makefun_client 적재 실패 "
-                f"({type(exc).__name__}: {exc}). 확인: python tools/makefun_client.py --check"]
-    try:
-        return ["※ " + m for m in mkc.size_warnings()]
+        plan = client.size_plan()
+        warns = list(client.size_warnings(plan))
     except Exception as exc:           # 매니페스트 손상·값 형식 오류 등
         return [f"※ 생성기 상한을 확인하지 못했습니다 — 상한 계산 실패 "
-                f"({type(exc).__name__}: {exc}). 확인: python tools/makefun_client.py --check"]
+                f"({type(exc).__name__}: {exc}). 확인: {_check_cmd(client)}"]
+    long_px = max(int(plan.get("width", 0)), int(plan.get("height", 0)))
+    out = [f"엔진 {label} 는 지금 {plan.get('width')}×{plan.get('height')}px 로 그립니다 "
+           f"(요청 {plan.get('want')}px · 상한 {plan.get('cap')}px"
+           + (f" · hires 상한 {plan['hires_cap']}px" if plan.get("hires_cap") else "") + ")"]
+    if long_px:
+        pf = preflight_image(long_px, long_px, DPI_GOOD)   # 긴 변만 보면 되므로 정사각으로 재도 같다
+        out.append(f"  → 그 크기는 {DPI_GOOD}DPI 로 긴 변 {round(long_px / DPI_GOOD, 2)}인치 "
+                   f"(최대 {pf['max_size_at_target'] or '엽서 미만'})")
+    return out + ["※ " + m for m in warns]
 
 
-def report(target: int, scene_filter: str | None, include_all: bool) -> int:
+# 하위호환 별칭 — 예전 이름으로 부르던 자리가 남아 있어도 깨지지 않는다.
+generator_cap_note = engine_note
+
+
+def recipe_lines(long_px: int, engine=None, indent: str = "      ") -> list[str]:
+    """목표 긴 변을 내려면 매니페스트를 어떻게 고치는지 — 값까지 적힌 실행 가능한 조치.
+
+    조치 계산은 엔진 클라이언트(size_recipe)가 한다. 여기서 규칙을 다시 구현하면 상한이 하나
+    더 생길 때(ComfyUI 의 hires 2배처럼) 이 파일만 조용히 옛날 답을 계속 말한다.
+    """
+    if not engine:
+        return []
+    _label, client = engine
+    fn = getattr(client, "size_recipe", None)
+    if fn is None:
+        return []
+    try:
+        r = fn(long_px)
+    except Exception as exc:
+        return [f"{indent}(조치를 계산하지 못했습니다: {type(exc).__name__}: {exc})"]
+    if r.get("reachable"):
+        return [f"{indent}지금 설정 그대로 나옵니다 — 고칠 값 없음"]
+    lines = [f"{indent}{path} = {val}" for path, val in r.get("edits") or []]
+    if not r.get("feasible"):
+        lines.append(f"{indent}※ 이 엔진의 하드 상한을 넘습니다 — 생성으로는 닿지 않습니다"
+                     " (승인 뒤 업스케일 경로로만 가능).")
+    if r.get("hires_note"):
+        lines.append(f"{indent}※ {r['hires_note']}")
+    return lines
+
+
+def report(target: int, scene_filter: str | None, include_all: bool, engine=None) -> int:
     if not MANIFEST.exists():
         raise VNError("project/manifest.json 이 없습니다.")
     mf = load_json_safe(MANIFEST, {})
@@ -311,8 +374,9 @@ def report(target: int, scene_filter: str | None, include_all: bool) -> int:
     print("=" * 60)
     if cur_in is not None:
         note = "엽서도 빠듯" if cur_in < 4 else ("최대 " + str(cur_in) + "인치")
-        print(f"매니페스트 min_long_edge_px={min_edge} → {target}DPI 에서 긴 변 {cur_in}인치 ({note})")
-    for line in generator_cap_note():
+        print(f"매니페스트 min_long_edge_px={min_edge} → {target}DPI 에서 긴 변 {cur_in}인치 ({note})"
+              " — '최소 요청' 값이라 실제 렌더는 더 클 수 있습니다")
+    for line in engine_note(engine):
         print(line)
     print()
 
@@ -348,14 +412,23 @@ def report(target: int, scene_filter: str | None, include_all: bool) -> int:
         print("판정 완료: 모든 대상 장면이 최소 한 규격 이상 인화 가능(≥목표DPI).")
     else:
         print("판정 완료: 일부 장면이 목표DPI 를 못 채웁니다 — 업스케일 또는 재생성 권장.")
+        label = engine[0] if engine else None
+        print(f"규격별 — 새로 생성해서 채우려면 매니페스트를 이렇게 고칩니다"
+              + (f" (엔진 {label})" if label else "") + ":")
         for name, _s, _l in PRINT_SIZES[:3]:
             need = needed_px(name, target)
-            if need:
-                print(f"  · {name} @{target}DPI 인화하려면 최소 약 {need[0]}×{need[1]}px 로 생성하세요.")
-        print("  · 매니페스트는 두 값을 함께 올려야 합니다 — output.min_long_edge_px(요청 크기)와 "
-              "image_generator.max_long_edge_px(생성기 상한).")
-        print("    상한만 낮으면 요청이 조용히 깎인 채 과금됩니다. 확인: "
-              "python tools/makefun_client.py --check")
+            if not need:
+                continue
+            print(f"  · {name} @{target}DPI — 최소 {need[0]}×{need[1]}px")
+            for line in recipe_lines(need[1], engine) or ["      (엔진을 확인할 수 없어 조치를 계산하지 못했습니다)"]:
+                print(line)
+        if engine:
+            print(f"  고친 뒤 과금 없이 확인: {_check_cmd(engine[1])}  ·  python tools/doctor.py")
+        else:
+            print("  · 매니페스트는 두 값을 함께 올려야 합니다 — output.min_long_edge_px(요청 크기)와 "
+                  "image_generator.max_long_edge_px(생성기 상한).")
+        print("  ※ 이미 승인한 컷을 재생성하면 그림 자체가 바뀝니다(구도·표정·손). 같은 그림의 "
+              "픽셀만 키우려면 python tools/print_export.py --upscale step 로 굽습니다.")
     print("주의: 예술적 발색·톤은 사람 시사(SCORECARD C)로 최종 판정합니다.")
     return 0
 
@@ -366,8 +439,24 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="상태 무관, selected_image 있는 전부")
     ap.add_argument("--dpi", type=int, default=DPI_GOOD, help="목표 DPI (기본 300)")
     args = ap.parse_args()
+
+    def resolve_engine():
+        """활성 이미지 엔진 (라벨, 클라이언트 모듈) — **CLI 진입점 안에서만** 정한다.
+
+        image_gen 은 이 도구보다 위층이고 makefun_client 를 거쳐 여기로 돌아오는 지연 고리를
+        만든다. 그 고리는 '이 도구를 직접 실행한 사람' 경로에서만 생기므로(모듈 import 로는
+        실행되지 않는다) main() 안에 둔다 — 라이브러리로 쓰는 webapp 경로는 여기를 지나지 않는다.
+        엔진 선택 규칙 자체는 image_gen 하나가 갖는다(여기서 다시 구현하지 않는다).
+        """
+        try:
+            import image_gen
+            engine = image_gen.active_engine()
+            return image_gen.label(engine), image_gen.client(engine)
+        except Exception:
+            return None                # 생성기를 쓰지 않는 설치 — 인화 판정은 그대로 돈다
+
     try:
-        return report(args.dpi, args.scene, args.all)
+        return report(args.dpi, args.scene, args.all, resolve_engine())
     except VNError as exc:          # VNError 는 RuntimeError 파생 — 기존 처리 경로와 동일하다
         print(f"오류: {exc}")
         return 1

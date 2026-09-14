@@ -426,6 +426,51 @@ def size_warnings(plan: dict | None = None, long_edge: int | None = None) -> lis
             f"{need} 이상(8의 배수)으로 올리세요.{a3}"]
 
 
+def size_recipe(long_px: int) -> dict:
+    """긴 변 long_px 를 이 엔진으로 실제로 뽑으려면 매니페스트에서 **무엇을 얼마로** 바꿔야 하는가.
+
+    인화 도구(print_preflight·print_export)와 doctor 가 "더 크게 생성하세요" 라고 말할 때,
+    지금까지는 **어느 값을 얼마로** 올려야 하는지를 부르는 쪽이 각자 추측해서 적었다. 그 추측이
+    두 군데서 틀렸다:
+      * 공용 상한만 올리면 된다고 적었지만 ComfyUI 에는 hires 2배 상한이 하나 더 있다
+        (1248 기본 캔버스로는 2496px 이 천장이라 8×10(3600px)은 **상한을 올려도 안 나온다**).
+      * 8의 배수 절삭을 잊고 요청값 그대로 권했다(2250 → 실제 2248 → A3 계속 FAIL).
+    상한 지식은 이 파일 하나에 있으므로 조치 목록도 여기서 만든다 — 부르는 쪽은 옮겨 적기만 한다.
+
+    돌려주는 dict:
+      want        목표 긴 변(px)
+      reachable   **지금 설정 그대로** 그 픽셀이 나오는가(= edits 가 비었는가)
+      edits       [(매니페스트 경로, 넣을 값)] — 위에서부터 그대로 적으면 된다(빈 목록이면 조치 불필요)
+      hires_note  기본 캔버스를 올려야 할 때의 이유(없으면 "")
+      feasible    조치를 다 해도 하드 상한(4096) 안에 들어오는가
+    """
+    want = max(SIZE_MIN_PX, int(long_px))
+    plan = size_plan(want)                      # source="--long-edge" — A3 문구가 섞이지 않는다
+    edits: list[tuple[str, int]] = []
+    out = load_json_safe(MANIFEST, {}).get("output", {})
+    try:
+        cur_min = int((out or {}).get("min_long_edge_px", DEFAULT_LONG_EDGE) or DEFAULT_LONG_EDGE)
+    except (TypeError, ValueError):
+        cur_min = DEFAULT_LONG_EDGE
+    if cur_min < want:                          # 요청 크기이자 검사기 A3 의 기준
+        edits.append(("output.min_long_edge_px", want))
+    if _cap_px() // 8 * 8 < want:               # 상한은 8의 배수로 **내려서** 자른다
+        edits.append(("image_generator.max_long_edge_px", gen_common.align_up(want)))
+    base_long = max(int(plan["base_width"]), int(plan["base_height"]))
+    hires_note = ""
+    if base_long * HIRES_MAX_SCALE < want:      # 상한을 올려도 hires 가 못 따라간다
+        need_base = gen_common.align_up(-(-want // int(HIRES_MAX_SCALE)))
+        edits.append(("image_generator.comfyui.base_long_edge_px", need_base))
+        # 천장은 '공용 상한에 깎이기 전' 값으로 말한다 — 상한 상향은 위에 따로 적혀 있고,
+        # 깎인 값(2048)을 "1248 의 2배" 라고 부르면 산수가 안 맞아 신뢰를 잃는다.
+        hires_note = (f"hires 는 1차 캔버스 {base_long}px 의 {HIRES_MAX_SCALE:g}배"
+                      f"({int(base_long * HIRES_MAX_SCALE)}px)까지입니다 — 1차 캔버스를 {need_base}px 로 "
+                      f"올려야 {want}px 에 닿습니다(렌더가 느려지고 12GB VRAM 에서는 OOM 위험, "
+                      "SDXL 은 1MP 근처를 벗어날수록 인물이 갈라집니다).")
+    return {"want": want, "reachable": not edits, "edits": edits, "hires_note": hires_note,
+            "feasible": want <= SIZE_HARD_MAX_PX, "engine": "comfyui"}
+
+
 # --- 프롬프트 · 그래프 ---------------------------------------------------------
 
 def _with_prefix(text: str, prefix: str) -> str:
