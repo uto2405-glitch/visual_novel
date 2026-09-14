@@ -36,6 +36,7 @@ import re
 import subprocess
 import sys
 import threading
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -94,7 +95,16 @@ _CONSOLE_GUARDED = False
 
 
 def console_guard() -> None:
-    """비 UTF-8 콘솔(cp437·cp949 등)에서 한글 출력이 크래시하지 않게 한다.
+    """비 UTF-8 출력에서 한글이 깨지거나 크래시하지 않게 한다.
+
+    두 경우를 다르게 다룬다 — **어디로 나가는가**가 다르기 때문이다.
+
+    * **진짜 콘솔(tty)** — 코드페이지는 창이 정한다(cp437·cp949). 우리가 UTF-8 로 바꾸면
+      오히려 그 창에서 글자가 깨지므로 인코딩은 그대로 두고 ``errors="replace"`` 만 건다.
+    * **파일·파이프(리다이렉트)** — 받는 쪽은 이 저장소의 다른 파일과 마찬가지로 UTF-8 로
+      읽는다. 로캘 인코딩(한국어 윈도우면 cp949)으로 쓰면 ``start_studio.ps1 > log.txt`` 처럼
+      PowerShell(UTF-8)과 파이썬이 같은 파일에 섞여 한쪽이 '?? ??Ʃ??? ????' 로 보인다.
+      그래서 UTF-8 로 맞춘다.
 
     여러 번 불러도 안전하다(첫 호출 이후에는 아무 일도 하지 않는다).
     """
@@ -105,8 +115,17 @@ def console_guard() -> None:
     for stream in (sys.stdout, sys.stderr):
         try:
             enc = (getattr(stream, "encoding", "") or "").lower()
-            if enc not in ("utf-8", "utf8"):
+            if enc in ("utf-8", "utf8"):
+                continue
+            tty = True                      # 판단이 안 되면 콘솔로 본다(코드페이지를 함부로 안 바꾼다)
+            try:
+                tty = bool(stream.isatty())
+            except Exception:
+                pass
+            if tty:
                 stream.reconfigure(errors="replace")   # type: ignore[union-attr]
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")   # type: ignore[union-attr]
         except Exception:
             pass          # 파이프·pythonw 등 reconfigure 가 없는 스트림은 그냥 둔다
 
@@ -438,3 +457,21 @@ def safe_slug(s: Any, default: str = "", maxlen: int = 120) -> str:
     """
     out = "".join(c for c in str(s or "") if c.isalnum() or c in "-_")[:maxlen]
     return out or default
+
+
+def host_port(url: Any) -> str:
+    """URL 의 ``host[:port]`` 만 — userinfo(``user:pw@``)·경로·쿼리는 버린다. 화면·진단 출력 전용.
+
+    ``urlparse(url).netloc`` 은 userinfo 를 포함한다 — basic-auth 리버스 프록시 뒤의 ComfyUI 주소를
+    그대로 보이면 비밀번호가 /api/state·doctor 출력으로 나간다. 주소가 아니면 빈 문자열.
+    """
+    try:
+        p = urllib.parse.urlsplit(str(url or "").strip())
+        host, port = p.hostname or "", p.port
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    if ":" in host:                      # IPv6 — hostname 은 괄호를 벗겨 주므로 되살린다
+        host = f"[{host}]"
+    return f"{host}:{port}" if port else host
