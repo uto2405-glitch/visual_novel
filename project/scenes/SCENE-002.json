@@ -40,14 +40,18 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-002/cf_1a864f_2.png",
       "images/raw/SCENE-002/cf_1d859d_2.png",
       "images/raw/SCENE-002/cf_3d694b_2.png",
       "images/raw/SCENE-002/cf_484ca4_2.png",
+      "images/raw/SCENE-002/cf_893704_1.png",
+      "images/raw/SCENE-002/cf_9a2f05_1.png",
       "images/raw/SCENE-002/cf_b2b6ae_1.png",
       "images/raw/SCENE-002/cf_c14c15_1.png",
-      "images/raw/SCENE-002/cf_c1efd3_1.png"
+      "images/raw/SCENE-002/cf_c1efd3_1.png",
+      "images/raw/SCENE-002/cf_d38924_2.png"
     ],
-    "selected_image": "images/raw/SCENE-002/cf_484ca4_2.png"
+    "selected_image": "images/raw/SCENE-002/cf_893704_1.png"
   },
   "review": {
     "auto": "PASS",
@@ -55,8 +59,9 @@
     "score": null,
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
-      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
+      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 머리색 네거티브 이전 렌더(금발 1.035) 재렌더"
     ]
   },
-  "version": 3
+  "version": 4
 }

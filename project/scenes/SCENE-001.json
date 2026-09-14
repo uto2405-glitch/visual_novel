@@ -40,12 +40,14 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-001/cf_281e4c_1.png",
       "images/raw/SCENE-001/cf_314370_1.png",
+      "images/raw/SCENE-001/cf_aa71d6_2.png",
       "images/raw/SCENE-001/cf_bee157_1.png",
       "images/raw/SCENE-001/cf_e8ab70_2.png",
       "images/raw/SCENE-001/cf_fc363d_2.png"
     ],
-    "selected_image": "images/raw/SCENE-001/cf_fc363d_2.png"
+    "selected_image": "images/raw/SCENE-001/cf_281e4c_1.png"
   },
   "review": {
     "auto": "PASS",
@@ -53,8 +55,9 @@
     "score": null,
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
-      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
+      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 여는 컷이 샴페인 금발(0.781) — 승인 시드로 재렌더. 셔츠 별무늬 혼입도 확인 대상"
     ]
   },
-  "version": 3
+  "version": 4
 }

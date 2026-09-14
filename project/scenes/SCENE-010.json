@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, walking side by side one step apart along the riverside path, both looking ahead in silence, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, full body, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, walking side by side one step apart along the riverside path, both looking ahead in silence, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -51,17 +51,20 @@
   "assets": {
     "raw_images": [
       "images/raw/SCENE-010/cf_8fe49f_2.png",
-      "images/raw/SCENE-010/cf_c7e3a0_1.png"
+      "images/raw/SCENE-010/cf_ad6ee9_1.png",
+      "images/raw/SCENE-010/cf_c7e3a0_1.png",
+      "images/raw/SCENE-010/cf_f4ed8d_2.png"
     ],
-    "selected_image": "images/raw/SCENE-010/cf_c7e3a0_1.png"
+    "selected_image": "images/raw/SCENE-010/cf_f4ed8d_2.png"
   },
   "review": {
     "auto": "PASS",
     "human": "PASS",
     "score": null,
     "notes": [
-      "[2026-09-15] REVISE → IMAGE: 상태 계약 UI 확인용 되돌림(독립 검증)"
+      "[2026-09-15] REVISE → IMAGE: 상태 계약 UI 확인용 되돌림(독립 검증)",
+      "[2026-09-15] REVISE → PROMPT: A1: wide 선언인데 클로즈업으로 렌더됨(머리 330px) — SHOT_DISTANCE 반영해 프롬프트 갱신 후 재렌더"
     ]
   },
-  "version": 2
+  "version": 3
 }

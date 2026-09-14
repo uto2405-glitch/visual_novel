@@ -44,14 +44,16 @@
       "images/raw/SCENE-004/cf_06179c_1.png",
       "images/raw/SCENE-004/cf_0f3dbc_1.png",
       "images/raw/SCENE-004/cf_12ef56_2.png",
+      "images/raw/SCENE-004/cf_1f9391_2.png",
       "images/raw/SCENE-004/cf_29c006_1.png",
       "images/raw/SCENE-004/cf_2fb0ff_2.png",
       "images/raw/SCENE-004/cf_676171_2.png",
       "images/raw/SCENE-004/cf_7f3720_1.png",
       "images/raw/SCENE-004/cf_ef5277_2.png",
-      "images/raw/SCENE-004/cf_fb036d_1.png"
+      "images/raw/SCENE-004/cf_fb036d_1.png",
+      "images/raw/SCENE-004/cf_fe19ba_1.png"
     ],
-    "selected_image": "images/raw/SCENE-004/cf_2fb0ff_2.png"
+    "selected_image": "images/raw/SCENE-004/cf_fe19ba_1.png"
   },
   "review": {
     "auto": "PASS",
@@ -60,8 +62,9 @@
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
       "[2026-09-15] REVISE → PROMPT: 구도 태그 도입 — 두 인물이 모두 나오도록 프롬프트 재생성",
-      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
+      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 머리색 네거티브 이전 렌더(플래티넘 0.757) 승인 시드로 재렌더"
     ]
   },
-  "version": 4
+  "version": 5
 }

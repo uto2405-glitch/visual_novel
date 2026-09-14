@@ -40,12 +40,14 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-006/cf_22216d_1.png",
+      "images/raw/SCENE-006/cf_45e7ff_2.png",
       "images/raw/SCENE-006/cf_772ae1_2.png",
       "images/raw/SCENE-006/cf_8b0019_2.png",
       "images/raw/SCENE-006/cf_cf0792_1.png",
       "images/raw/SCENE-006/cf_dab999_1.png"
     ],
-    "selected_image": "images/raw/SCENE-006/cf_772ae1_2.png"
+    "selected_image": "images/raw/SCENE-006/cf_22216d_1.png"
   },
   "review": {
     "auto": "PASS",
@@ -53,8 +55,9 @@
     "score": null,
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
-      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
+      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 클로즈업인데 샴페인(0.757) — 같은 클로즈업 SCENE-011(0.238)과 3.2배 차이. 승인 시드로 재렌더"
     ]
   },
-  "version": 3
+  "version": 4
 }

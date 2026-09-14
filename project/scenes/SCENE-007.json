@@ -40,14 +40,16 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-007/cf_21d703_1.png",
       "images/raw/SCENE-007/cf_21df67_1.png",
+      "images/raw/SCENE-007/cf_9c061a_2.png",
       "images/raw/SCENE-007/cf_9ec97c_2.png",
       "images/raw/SCENE-007/cf_a799ab_2.png",
       "images/raw/SCENE-007/cf_d92ca8_2.png",
       "images/raw/SCENE-007/cf_ded252_1.png",
       "images/raw/SCENE-007/cf_e67af3_1.png"
     ],
-    "selected_image": "images/raw/SCENE-007/cf_21df67_1.png"
+    "selected_image": "images/raw/SCENE-007/cf_21d703_1.png"
   },
   "review": {
     "auto": "PASS",
@@ -55,10 +57,11 @@
     "score": null,
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
-      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
+      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 같은 화 같은 장소 SCENE-008(0.230)과 연달아 붙는데 0.856 — 승인 시드로 재렌더"
     ]
   },
-  "version": 3,
+  "version": 4,
   "print": {
     "crop_anchor": "center"
   }
