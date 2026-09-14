@@ -658,7 +658,7 @@ def r_credits(b):
 
 
 def r_gen_status(b):
-    """생성·업스케일 진행 조회 — {running, message, result?}.
+    """생성·업스케일 진행 조회 — {running, message, result?, error?}.
 
     result 는 끝난 작업이 남긴 것(저장 파일 이름·경고)이다. 백그라운드 작업은 요청이 이미
     끝난 뒤에 결과가 나오므로, 확대본 파일 이름을 화면에 알려 줄 통로가 여기뿐이다.

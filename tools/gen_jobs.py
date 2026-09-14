@@ -26,13 +26,13 @@
 
 공개 API
   claim(sid, label="생성")         생성 선점 — 이미 진행 중이면 VNError
-  release(sid, message="", result=None)  선점 해제(진행 표시 종료 + 잠금 파일 삭제)
+  release(sid, message="", result=None, error="")  선점 해제(진행 표시 종료 + 잠금 파일 삭제)
   release_all(message="")         이 프로세스가 잡은 잠금 전부 해제(서버 종료 경로)
   claimed(sid, label="생성")       with 문용 — 성공/실패 어느 쪽이든 반드시 해제
   note(sid, message, running=True) 진행 문구 갱신(+ 잠금 만료 시계 연장)
   run(sid, fn, label, register=True)  동기 실행틀(수신 → 후보 등록 → 자동 검사 → 해제)
   start(sid, fn, label, ...)      기본은 백그라운드, sync=True 면 동기
-  status(sid)                     {running, message, scene_id, result?} — 다른 프로세스의 잠금도 본다
+  status(sid)                     {running, message, scene_id, result?, error?} — 다른 프로세스의 잠금도 본다
   running()                       **이 프로세스에서** 아직 끝나지 않은 장면 목록
 
 진행 문구는 메모리에만 있다(프로세스 수명). 진행 중에 프로세스가 꺼지면 문구는 사라지지만,
@@ -208,17 +208,24 @@ def note(sid: str, message: str, running: bool = True) -> None:
         _touch_lock(sid)
 
 
-def release(sid: str, message: str = "", result: dict | None = None) -> None:
+def release(sid: str, message: str = "", result: dict | None = None,
+            error: str = "") -> None:
     """선점 해제 — 진행 표시를 끝내고 잠금 파일을 지운다(문구를 주면 마지막 상태로 남긴다).
 
     result 는 끝난 작업이 남긴 구조화된 결과(저장 파일 이름 등)다. 문구는 사람이 읽는
     한 줄이고, 이쪽은 화면이 파싱 없이 쓸 수 있는 형태로 :func:`status` 에 함께 실린다.
+
+    error 는 **실패했다는 사실 자체**다. 예전에는 실패가 문구 안에("실패: …") 만 남아서,
+    화면(studio.js pollGenUntilDone)이 보는 error 키가 영영 오지 않았다 — 토큰 없는
+    업스케일이 "확대본을 저장했습니다" 로 끝났다. 문구는 사람이 읽고 이 키는 기계가 읽는다.
     """
     with _LOCK:
         prev = _JOBS.get(sid) or {}
         _JOBS[sid] = {"running": False,
                       "message": str(message or prev.get("message", "") or "완료"),
                       "ts": time.time()}
+        if error:
+            _JOBS[sid]["error"] = str(error)
         if isinstance(result, dict):
             _JOBS[sid]["result"] = dict(result)   # 사본 — 호출부가 나중에 고쳐도 표시는 그대로
         token = _OWNED.pop(sid, "")
@@ -250,14 +257,14 @@ def claimed(sid: str, label: str = "생성"):
     try:
         yield
     except BaseException as exc:
-        release(sid, f"{label} 실패: {exc}")
+        release(sid, f"{label} 실패: {exc}", error=str(exc))
         raise
     else:
         release(sid, f"{label} 완료")
 
 
 def status(sid: str) -> dict:
-    """생성 진행 조회 — {running, message, scene_id}.
+    """생성 진행 조회 — {running, message, scene_id, error?}.
 
     이 프로세스에 표시가 없으면 잠금 파일도 본다 — 서버 밖(CLI)에서 굽고 있는 장면을
     스튜디오가 '대기 중' 으로 잘못 보여 주고 사용자가 한 번 더 누르는 일이 없게.
@@ -275,6 +282,9 @@ def status(sid: str) -> dict:
             return {"running": True, "scene_id": sid,
                     "message": f"다른 곳에서 생성 중입니다({_owner(_read_lock(path))})."}
     out = {"running": running_now, "message": str(job.get("message", "")), "scene_id": sid}
+    err = str(job.get("error", "") or "")
+    if err and not running_now:
+        out["error"] = err                 # 실패는 문구가 아니라 이 키로 말한다(화면이 보는 자리)
     if isinstance(job.get("result"), dict):
         out["result"] = job["result"]      # 끝난 작업이 남긴 것(저장 파일 이름·경고)
     return out
@@ -327,7 +337,7 @@ def run(sid: str, fn, label: str, *, register: bool = True) -> dict:
         return reg
     except Exception as exc:
         log.warning("%s 실패 %s: %s", label, sid, exc)
-        release(sid, f"실패: {exc}")
+        release(sid, f"실패: {exc}", error=str(exc))
         raise
 
 
@@ -347,7 +357,7 @@ def start(sid: str, fn, label: str, *, sync: bool = False, message: str = "",
     try:
         threading.Thread(target=_bg, daemon=True).start()
     except RuntimeError:      # 스레드를 못 만들었다 — 잡아 둔 선점을 그대로 두면 영구 잠금
-        release(sid, "생성을 시작하지 못했습니다.")
+        release(sid, "생성을 시작하지 못했습니다.", error="생성을 시작하지 못했습니다.")
         raise
     return {"started": True, "running": True, "scene_id": sid,
             "message": message or f"{label} 중…", "generated": [], "auto": "진행 중",

@@ -39,9 +39,13 @@ nav button.on{color:var(--ink);border-left-color:var(--jade);background:var(--pa
 nav button+.navlabel{margin-top:10px;border-top:1px solid var(--line);padding-top:14px}
 section{flex:1;padding:20px;max-width:1100px;display:none}
 section.on{display:block}
-.eyebrow{font-size:11px;letter-spacing:.18em;color:var(--jade);margin-bottom:10px}
-textarea,input[type=text],input[type=number]{width:100%;background:var(--panel);color:var(--ink);
+/* 절 제목은 <h2> 다(예전에는 전부 <div> 라 제목 이동이 갈 곳이 없었다) — 보이는 모습은 그대로 */
+.eyebrow{font-size:11px;letter-spacing:.18em;color:var(--jade);margin-bottom:10px;font-weight:600}
+textarea,input[type=text],input[type=number],select{width:100%;background:var(--panel);color:var(--ink);
 border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit}
+/* select 는 위 규칙에서 폭만 되돌린다 — 전역 *{padding:0} 이 UA 안쪽 여백을 지워
+   16px 글자가 21px 상자에 눌려 있었다(폰에서 글자가 위아래로 잘렸다). */
+select{width:auto;min-height:40px}
 textarea:focus,input:focus,button:focus-visible{outline:2px solid var(--jade);outline-offset:1px}
 .btn{background:var(--jade-d);color:var(--ink);border:1px solid var(--jade);border-radius:8px;
 padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}
@@ -49,6 +53,11 @@ padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}
 /* 도장 느낌(이중 테두리·인장 링)은 --seal 로 유지하고, 읽어야 하는 글자만 --seal-ink 로 */
 .btn.seal{background:none;color:var(--seal-ink);border:2px solid var(--seal);border-radius:10px;
 box-shadow:inset 0 0 0 2px var(--bg),inset 0 0 0 3px var(--seal);font-weight:800}
+/* 눌리지 않는 버튼은 눌리지 않아 보여야 한다 — 토큰 없는 [MakeFun 생성(유료)] 도,
+   20~90초짜리 작업 동안 잠긴 버튼도 활성 버튼과 픽셀 단위로 같았다(폰은 툴팁도 못 본다).
+   글자색은 그대로 두고 투명도만 낮춘다 — 대비 규약(X02)은 색으로 판정한다. */
+.btn:disabled,button:disabled{opacity:.45;cursor:not-allowed}
+.btn:disabled{filter:saturate(.35)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .grid{display:grid;grid-template-columns:1fr 340px;gap:18px}
 @media(max-width:860px){.grid{grid-template-columns:1fr}}
@@ -87,6 +96,9 @@ padding:9px 11px;margin-bottom:12px}
 pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;
 white-space:pre-wrap;color:var(--sub);font-size:12.5px}
 .small{color:var(--sub);font-size:12px}
+/* 장면 12개 × 카드 450~680px = 8000px 넘는 목록이다 — 좁히는 수단(화·상태 필터)이
+   스크롤에서 사라지면 폰에서는 목록을 좁힐 방법이 없다. */
+#scFilterBar{position:sticky;top:0;z-index:3;background:var(--bg);padding:8px 0}
 details{margin-top:6px}
 summary{cursor:pointer}
 /* 재생 화면은 공용 엔진(tools/vn_runtime.js)이 자기 DOM·CSS 로 통째로 그린다.
@@ -149,6 +161,10 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
  .btn{padding:11px 15px}
  input[type=text],input[type=number],textarea,select{font-size:16px}  /* iOS 확대 방지 */
  .thumbs img{width:84px;height:63px}
+ /* 엄지로 누를 수 있는 크기 — 체크박스 13px·<summary> 19px 는 손가락보다 작았다 */
+ input[type=checkbox]{width:22px;height:22px}
+ label.small{display:inline-flex;align-items:center;gap:8px;min-height:44px}
+ summary{padding:13px 0}
  .vnbtn{padding:9px 12px;font-size:12.5px}
 }
 @media(max-width:720px) and (orientation:landscape){#chatlog{height:62vh}}
@@ -217,8 +233,8 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <button data-tab="talk">대화</button>
 </nav>
 
-<section id="tab-story" class="on">
-<div class="eyebrow">1 · 로컬 LLM 과 스토리 만들기</div>
+<section aria-labelledby="h-story" id="tab-story" class="on">
+<h2 class="eyebrow" id="h-story">1 · 로컬 LLM 과 스토리 만들기</h2>
 <div class="grid"><div>
 <p class="small" style="margin-bottom:6px">내 PC 의 로컬 LLM 과 대화하며 이야기를 만듭니다 (무료 · 원고가 밖으로 안 나감).
 좋은 아이디어가 나오면 오른쪽 스토리라인에 정리하세요.</p>
@@ -234,7 +250,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div class="row" style="margin-top:8px">
 <button class="btn ghost" id="btnPull">마지막 답변 붙이기</button>
 <button class="btn" id="btnSaveStory">스토리라인 저장</button></div>
-<p class="small" id="storyMsg" style="margin-top:6px"></p>
+<p class="small" id="storyMsg" role="status" style="margin-top:6px"></p>
 <details style="margin-top:12px">
 <summary class="small">외부 챗 AI 프롬프트 틀 (예비) — 로컬 LLM 대신 grok.com 등에 붙여넣을 때</summary>
 <div class="row" style="margin-top:8px">
@@ -248,8 +264,8 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 </div></div>
 </section>
 
-<section id="tab-scenes">
-<div class="eyebrow">2 · 장면 구성(로컬 LLM)  →  3 · 이미지 자동 생성(ComfyUI · 보조 MakeFun)  →  4 · 선택·승인</div>
+<section aria-labelledby="h-scenes" id="tab-scenes">
+<h2 class="eyebrow" id="h-scenes">2 · 장면 구성(로컬 LLM)  →  3 · 이미지 자동 생성(ComfyUI · 보조 MakeFun)  →  4 · 선택·승인</h2>
 <div class="card"><div class="row">
 장면 수 <input type="number" id="composeCount" value="10" min="1" max="30" style="width:70px"
  aria-label="만들 장면 수">
@@ -260,7 +276,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 내 PC 의 <b>ComfyUI</b>(무료) 로 자동 생성해 등록까지 해줍니다. <b>MakeFun</b>(유료)은 보조 버튼으로 남고,
 파일을 직접 넣는 [폴더 스캔]·[📤 업로드] 경로도 그대로 씁니다.</p></div>
 
-<details class="card" id="manualCompose" open>
+<details class="card" id="manualCompose">
 <summary class="small">⚡ 그록 수동 · 지시문 복사 → grok.com → JSON 붙여넣기 (로컬 LLM 느릴 때 추천)</summary>
 <p class="small" style="margin:8px 0">그록이 더 빠르고 똑똑합니다: [지시문 생성]을 복사해 grok.com(SuperGrok 구독, 비용 0)에 붙여넣고,
 응답 JSON 을 아래에 붙여넣으면 끝. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
@@ -327,11 +343,14 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div id="sceneList"></div>
 </section>
 
-<section id="tab-viewer">
-<div class="eyebrow">5 · 비주얼 노벨 감상</div>
-<p class="small" style="margin-bottom:10px">진행 <b>클릭/Space/→</b> · 이전 <b>←</b> · 자동 <b>A</b> · 스킵 <b>Ctrl</b> · 장면이동 <b>C</b> · 기록 <b>L</b> · 설정 <b>S</b> · 화면보기 <b>H</b> · 전체화면 <b>F</b> · 종료 <b>Esc</b>.
-타자기 출력 중 클릭하면 즉시 완성, 기록에서 지난 대사를 눌러 그 지점으로 이동, 모바일은 좌우 스와이프.
+<section aria-labelledby="h-viewer" id="tab-viewer">
+<h2 class="eyebrow" id="h-viewer">5 · 비주얼 노벨 감상</h2>
+<p class="small" style="margin-bottom:10px">화면을 탭(클릭)하면 진행, <b>좌우로 밀면</b> 앞뒤로 이동합니다.
+타자기 출력 중 탭하면 즉시 완성, [기록]에서 지난 대사를 눌러 그 지점으로 이동.
 위치는 자동 저장되어 [이어보기]로 재개됩니다. 이미지가 없는 장면은 설명이 나레이션으로 표시됩니다.</p>
+<details style="margin-bottom:10px"><summary class="small">키보드 단축키 (PC)</summary>
+<p class="small">진행 <b>클릭/Space/→</b> · 이전 <b>←</b> · 자동 <b>A</b> · 스킵 <b>Ctrl</b> · 장면이동 <b>C</b> ·
+기록 <b>L</b> · 설정 <b>S</b> · 화면보기 <b>H</b> · 전체화면 <b>F</b> · 종료 <b>Esc</b>.</p></details>
 <p class="small" style="margin-bottom:10px">여기 보이는 화면은 <b>감상본(내보낸 HTML)과 같은 재생 엔진</b>입니다 —
 연출·단축키·설정이 그대로 이어집니다. 화가 2개 이상이면 [설정] 안에서 <b>화 이동</b>을 쓸 수 있고,
 엔딩으로 표시한 장면은 <b>ending_label</b>(비어 있으면 장면 목적문)이 엔딩 카드의 이름이 됩니다.</p>
@@ -375,8 +394,8 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 </details>
 </section>
 
-<section id="tab-talk">
-<div class="eyebrow">인물과 대화 · 미연시 모드</div>
+<section aria-labelledby="h-talk" id="tab-talk">
+<h2 class="eyebrow" id="h-talk">인물과 대화 · 미연시 모드</h2>
 <p class="small" style="margin-bottom:8px">작품의 인물과 실제 연애 시뮬레이션처럼 대화합니다. 로컬 LLM(내 PC) — 대화가 밖으로 나가지 않습니다.
 <span id="talkStatus" class="chip">확인 중…</span></p>
 <div id="vnTalk" style="position:relative;border-radius:14px;overflow:hidden;background:#141021;
@@ -408,8 +427,8 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 대화는 서버에 저장되어 다음에 이어집니다. 서버: <b>local_llm/runtime/serve.ps1</b></p>
 </section>
 
-<section id="tab-gallery">
-<div class="eyebrow">회상 · CG 갤러리</div>
+<section aria-labelledby="h-gallery" id="tab-gallery">
+<h2 class="eyebrow" id="h-gallery">회상 · CG 갤러리</h2>
 <p class="small" style="margin-bottom:10px">승인된 장면을 모아 봅니다. 썸네일을 누르면 <b>크게 보기</b>,
 <b>▶</b> 버튼(또는 더블클릭)이면 <b>그 장면부터 감상</b>,
 ★ 로 명장면을 모으면 그대로 <b>인화 후보</b>가 됩니다.</p>
@@ -422,8 +441,8 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <div id="galGrid" class="galgrid"></div>
 </section>
 
-<section id="tab-check">
-<div class="eyebrow">자동 검사 (SCORECARD A1~A8)</div>
+<section aria-labelledby="h-check" id="tab-check">
+<h2 class="eyebrow" id="h-check">자동 검사 (SCORECARD A1~A8)</h2>
 <div class="row">
 <button class="btn" id="btnCheck">전체 검사 실행</button>
 <button class="btn ghost" id="btnLint">연출·분기 린터</button></div>

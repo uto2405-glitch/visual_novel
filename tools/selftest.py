@@ -5394,6 +5394,201 @@ def j07(b: Box):
     eq(r["resumedRepeat"], 38, "이어보기 뒤 되돌아가 다시 고르면 호감도가 쌓인다")
 
 
+_J08_HARNESS = """
+let S={image:{engine:"comfyui",engines:["comfyui"],mf_token:false}};
+let paidConfirm=0,apiPaths=[],apiReply={count:0,auto:"PASS"};
+const scDraft=new Map();
+function el(tag,cls,txt){return {tag:tag,cls:cls||"",textContent:(txt==null?"":String(txt)),
+ title:"",disabled:false,hidden:false,onclick:null,rows:0,readOnly:false,value:"",
+ style:{},attrs:{},kids:[],
+ appendChild:function(n){this.kids.push(n);return n},
+ setAttribute:function(k,v){this.attrs[k]=v},removeAttribute:function(k){delete this.attrs[k]}}}
+function charName(id){return id}
+function copyTo(){}
+function confirm(){paidConfirm++;return true}
+function refresh(){return Promise.resolve()}
+function pollGen(){return function(){}}
+function pollGenUntilDone(){return Promise.resolve({done:true})}
+async function api(path){apiPaths.push(path);return apiReply}
+function scBtnGenPrompt(){return el("button","btn","GENPROMPT")}
+function scBtnGenImage(){return el("button","btn","GENIMAGE")}
+function scBtnGenImageAlt(){return null}
+function scAddUpload(act){act.appendChild(el("button","btn ghost","UPLOAD"))}
+__FUNCS__
+function buttons(node,out){out=out||[];
+ for(const k of (node.kids||[])){
+  if(k.tag==="button")out.push({t:k.textContent,d:!!k.disabled,click:!!k.onclick,title:k.title});
+  buttons(k,out)}
+ return out}
+function scene(status,sel,prompt){return {scene_id:"SCENE-001",scene_order:1,status:status,
+ purpose:"강변을 걷는다",prompt:(prompt===undefined?"anchor text":prompt),
+ dialogue:[{speaker_id:"CHAR-001",text:"안녕"}],
+ raw_images:["images/raw/SCENE-001/a.png","images/raw/SCENE-001/b.png"],
+ selected_image:sel?"images/raw/SCENE-001/a.png":""}}
+function actionsOf(status,sel){scDraft.clear();
+ const r=scActions(scene(status,sel));return buttons(r.act).map(x=>x.t)}
+function thumbsOf(status){scDraft.clear();
+ const msg=el("span"),th=scThumbs(scene(status,true),msg);
+ const bs=buttons(th);
+ return {n:bs.length,disabled:bs.filter(x=>x.d).length,clickable:bs.filter(x=>x.click).length,
+         hint:(th.kids.filter(k=>k.cls==="pickhint")[0]||{textContent:""}).textContent}}
+function upscaleOf(tok){S.image.mf_token=tok;paidConfirm=0;
+ const b=scBtnUpscale(scene("APPROVED",true),{printable:false},el("span"));
+ const before={disabled:!!b.disabled,title:b.title};   // 누르면 핸들러가 스스로 잠근다
+ if(b.onclick&&!b.disabled)b.onclick();
+ return {disabled:before.disabled,title:before.title,confirmed:paidConfirm}}
+function copyBtns(prompt){scDraft.clear();
+ return buttons(scPromptBlock(scene("SCENE_PLAN",false,prompt))).map(x=>x.t)}
+(async function(){
+ const out={
+  plan:actionsOf("SCENE_PLAN",false),image:actionsOf("IMAGE",true),
+  review:actionsOf("REVIEW_HUMAN",true),approved:actionsOf("APPROVED",true),
+  thApproved:thumbsOf("APPROVED"),thReview:thumbsOf("REVIEW_HUMAN"),
+  upNoToken:upscaleOf(false),upToken:upscaleOf(true),
+  copyWith:copyBtns("anchor text"),copyWithout:copyBtns("")};
+ // 폴더 스캔: 서버가 '하지 않았다' 고 말한 사유(note)가 화면에 남고, 카드를 다시 그려도 살아남는가
+ scDraft.clear();
+ apiReply={count:0,auto:"-",note:"APPROVED 장면은 재스캔하지 않습니다. 되돌리려면 revise 를 사용하세요."};
+ const sc=scene("APPROVED",true),msg=el("span");
+ const scan=scBtnScan(sc,msg);
+ await scan.onclick();
+ out.scanMsg=msg.textContent;
+ out.scanSurvives=scActions(sc).msg.textContent;   // 카드를 다시 그린 뒤에도 남아 있는가
+ console.log(JSON.stringify(out));
+})();
+"""
+
+
+@test("js", "J08 장면 카드는 서버가 거절할 일을 권하지 않는다 · 결과 한 줄이 카드 재생성보다 오래 산다")
+def j08(b: Box):
+    """화면이 사실과 다른 말을 하던 자리들의 잠금장치(브라우저 없이 함수를 실제로 굴린다).
+
+      · 승인 도장이 **APPROVED 카드에도** 붙어 있었다 — 서버는 REVIEW_HUMAN 에서만 승인한다.
+      · 승인된 컷의 후보 썸네일 47개가 전부 눌리는 버튼이었고, 거절 문구는 폰에서 실행할 수
+        없는 셸 명령이었다.
+      · 유료 [⬆ 인화용 업스케일]이 토큰 없이도 과금 확인창을 띄우고 나서 실패했다
+        (보조 생성 버튼은 이미 같은 가드를 갖고 있었다 — J05).
+      · 프롬프트가 없는 장면의 [프롬프트 복사]가 **빈 문자열**을 복사하고 "복사됨 ✓" 라고 했다.
+      · 성공 문구가 만들어진 지 0.2초 만에 refresh 로 덮여 사라졌다 — 폰에서도 화면 낭독에서도
+        '아무 일도 없었던 것' 과 구분되지 않았다. 서버가 보낸 '하지 않은 이유'(note)도 버려졌다.
+    """
+    src = b.p("tools/studio.js")
+    if not src.exists():
+        raise Gap("tools/studio.js 아직 없음 — 스튜디오 스크립트 분리 대기")
+    funcs = _js_funcs(src.read_text(encoding="utf-8"),
+                      "mfToken", "draftOf", "say", "scPromptBlock", "scBtnScan",
+                      "scBtnApprove", "scBtnUpscale", "scActions", "scThumbs")
+    r = _node_json(b, _J08_HARNESS.replace("__FUNCS__", funcs), "studio_card")
+
+    seal = "승인 도장 찍기"
+    ok(seal in r["review"], f"시사 단계인데 승인 도장이 없다 — {r['review']}")
+    for st in ("plan", "image", "approved"):
+        ok(seal not in r[st], f"{st} 단계에 승인 도장이 붙는다(서버가 거절할 버튼) — {r[st]}")
+
+    th_a, th_r = r["thApproved"], r["thReview"]
+    eq((th_a["n"], th_a["disabled"], th_a["clickable"]), (2, 2, 0),
+       f"승인된 컷의 후보 썸네일이 아직 눌린다(서버는 revise 를 요구한다) — {th_a}")
+    has(th_a["hint"], "revise", "왜 고를 수 없는지 카드가 말하지 않음")
+    eq((th_r["n"], th_r["disabled"], th_r["clickable"]), (2, 0, 2),
+       f"고를 수 있어야 하는 단계에서 썸네일이 막혔다 — {th_r}")
+
+    no, yes = r["upNoToken"], r["upToken"]
+    ok(no["disabled"], f"토큰이 없는데 유료 업스케일이 눌린다 — {no}")
+    eq(no["confirmed"], 0, f"토큰 없이 과금 확인창을 띄운다 — {no}")
+    has(no["title"], "MAKEFUN_API_TOKEN", "왜 눌리지 않는지 말하지 않음")
+    ok(not yes["disabled"], f"토큰이 있는데 업스케일이 막혔다 — {yes}")
+    eq(yes["confirmed"], 1, f"유료 작업인데 확인을 묻지 않는다 — {yes}")
+
+    copy = "프롬프트 복사"
+    ok(copy in r["copyWith"], f"프롬프트가 있는데 복사 버튼이 없다 — {r['copyWith']}")
+    ok(copy not in r["copyWithout"],
+       f"프롬프트가 없는 장면에서 빈 문자열을 복사하고 성공이라 말한다 — {r['copyWithout']}")
+
+    has(r["scanMsg"], "revise", f"서버가 보낸 '하지 않은 이유' 를 버렸다 — {r['scanMsg']!r}")
+    eq(r["scanSurvives"], r["scanMsg"],
+       "결과 한 줄이 카드 재생성에서 사라진다(성공이 '아무 일 없음' 으로 보인다)")
+
+
+_J09_HARNESS = """
+const TAB_KEY="vn:studio:tab";
+let curTab="",scStale=false,galStale=false,S={};
+let nScenes=0,nGallery=0,partial=false;
+const localStorage={setItem:function(){},getItem:function(){return ""}};
+const stub={value:"",open:false,src:"",style:{},
+ classList:{add:function(){},remove:function(){},toggle:function(){}}};
+function $(){return stub}
+const document={querySelectorAll:function(){return []}};
+function el(){return stub}
+function api(){return Promise.resolve({scenes:[],chat:[]})}
+function renderChips(){}
+function syncFav(){}
+function syncResume(){}
+function renderChat(){}
+function renderLan(){}
+function renderDl(){}
+function talkStatus(){}
+function loadChatHistory(){}
+function setHash(){}
+function renderScene(){return partial}
+function renderScenes(){nScenes++}
+function renderGallery(){nGallery++}
+__FUNCS__
+function count(){return {scenes:nScenes,gallery:nGallery}}
+function zero(){nScenes=0;nGallery=0}
+(async function(){
+ const out={};
+ curTab="viewer";zero();await refresh();out.hiddenRefresh=count();
+ zero();selectTab("scenes");out.enterScenes=count();
+ zero();selectTab("scenes");out.enterAgain=count();
+ curTab="scenes";zero();await refresh();out.visibleRefresh=count();
+ curTab="gallery";zero();await refresh();out.galleryRefresh=count();
+ curTab="viewer";partial=true;zero();await refresh({scene:"SCENE-001"});
+ out.partialHidden=count();
+ zero();selectTab("scenes");out.partialThenEnter=count();
+ out.sized=[imgSized("/img/raw/S/a.png",1000),imgSized("/img/raw/S/a.png?w=224",1000)];
+ stub.src="";vnSetCG("/img/raw/S/cg.png");out.cg=stub.src;
+ console.log(JSON.stringify(out));
+})();
+"""
+
+
+@test("js", "J09 폰 데이터 — 보이지 않는 탭은 그리지 않고, 이미지는 보이는 크기만큼만 받는다")
+def j09(b: Box):
+    """폰 실측에서 **행동 한 번에 82.5MB** 가 흘렀다. 원인은 둘이었고 둘 다 화면에 보이지 않았다:
+
+      · `refresh()` 가 display:none 인 장면·갤러리 탭까지 다시 그렸다 — 숨은 <img> 도 브라우저는
+        내려받는다. 첫 승인 한 번에 보이지도 않는 썸네일 61장이 따라왔다.
+      · 대화 배경 CG·백로그 사진·라이트박스가 **원본 PNG**(장당 1.3MB)를 요청했다. 서버는
+        `?w=` 로 줄여 줄 수 있고 썸네일은 이미 그렇게 받고 있었다.
+
+    두 번째를 고쳐도 첫 번째가 남으면 숨은 탭이 계속 따라오고, 반대도 마찬가지다 — 둘 다 잠근다.
+    """
+    src = b.p("tools/studio.js")
+    if not src.exists():
+        raise Gap("tools/studio.js 아직 없음 — 스튜디오 스크립트 분리 대기")
+    funcs = _js_funcs(src.read_text(encoding="utf-8"),
+                      "hasQuery", "imgSized", "vnSetCG", "refresh", "selectTab")
+    r = _node_json(b, _J09_HARNESS.replace("__FUNCS__", funcs), "studio_bytes")
+
+    eq(r["hiddenRefresh"], {"scenes": 0, "gallery": 0},
+       "보이지 않는 탭을 refresh 가 다시 그린다(숨은 썸네일 82.5MB 가 폰으로 흐른다)")
+    eq(r["partialHidden"], {"scenes": 0, "gallery": 0},
+       "카드 하나만 고치는 경로에서도 숨은 갤러리를 다시 그린다")
+    eq(r["enterScenes"], {"scenes": 1, "gallery": 0},
+       "탭에 들어왔는데 뒤처진 목록을 갚지 않는다(빈 화면이 된다)")
+    eq(r["enterAgain"], {"scenes": 0, "gallery": 0},
+       "이미 최신인 탭을 다시 들어올 때마다 통째로 다시 그린다")
+    eq(r["partialThenEnter"], {"scenes": 1, "gallery": 0},
+       "숨은 동안 부분 갱신만 받은 목록이 뒤처진 채로 남는다")
+    eq(r["visibleRefresh"], {"scenes": 1, "gallery": 0},
+       "보이는 탭을 refresh 가 그리지 않는다(화면이 멈춘다)")
+    eq(r["galleryRefresh"], {"scenes": 0, "gallery": 1},
+       "갤러리 탭에서 갤러리가 갱신되지 않는다")
+
+    eq(r["sized"], ["/img/raw/S/a.png?w=1000", "/img/raw/S/a.png?w=224"],
+       "축소본 요청 규칙이 깨졌다(원본을 받거나 부르는 쪽이 정한 폭을 덮어쓴다)")
+    has(r["cg"], "?w=", "대화 배경 CG 가 원본(1.3MB)을 그대로 받는다")
+
 # ============================================================ ux (폰 손짓 · 가독성)
 # 화면에서만 드러나는 회귀도 소스로 잠글 수 있는 것들이 있다: 손짓 리스너가 어디 붙었는지,
 # 글자색이 배경과 몇 대 몇인지. 둘 다 "폰에서 써 보면 아는" 종류라 자동 검사가 없으면
@@ -6016,6 +6211,28 @@ def u08(b: Box):
     with claim_scene(cli_sid, "생성") as got:     # 네트워크 없음 — 표시만 잡았다 푼다
         eq(bool(got), True, "정상 상황인데 선점하지 못함")
     ok(cli_sid not in jobs.running(), "블록을 나갔는데 표시가 남음(영구 잠금)")
+
+    # 실패는 **문구가 아니라 error 키**로 말한다. 예전에는 "실패: …" 라는 사람용 한 줄만
+    # 남았고, 화면(studio.js pollGenUntilDone)은 error 키를 보므로 실패한 작업이 '완료' 로
+    # 보고됐다 — 토큰 없는 업스케일이 "확대본을 저장했습니다" 로 끝났다(유료 경로에서는
+    # 사용자가 한 번 더 눌러 두 번 결제하게 만드는 거짓말이다).
+    fail_sid = "SCENE-904"
+
+    def boom():
+        raise err("MAKEFUN_API_TOKEN 환경변수가 없습니다")
+
+    gj.claim(fail_sid)
+    raises(lambda: gj.run(fail_sid, boom, "업스케일", register=False), err,
+           "실패가 호출부로 전파되지 않음")
+    st = gj.status(fail_sid)
+    eq(st["running"], False, "실패한 작업이 아직 도는 것으로 보고됨")
+    has(str(st.get("error", "")), "MAKEFUN_API_TOKEN",
+        f"실패가 error 키로 오지 않음 — 화면은 이것을 완료로 읽는다: {st}")
+    has(st["message"], "실패", "사람이 읽는 문구에서 실패가 사라짐")
+    gj.claim(fail_sid)
+    gj.release(fail_sid, "완료 — 업스케일 1장")
+    ok("error" not in gj.status(fail_sid),
+       f"성공한 작업에 error 키가 남음(멀쩡한 결과가 실패로 보인다) — {gj.status(fail_sid)}")
 
 
 @test("unit", "U09 scene_ops.update_fields — 화이트리스트 병합 · 보호 필드는 거부(우회 차단)")

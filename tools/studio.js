@@ -42,6 +42,10 @@ function busy(node,label){
   if(text!=null)node.textContent=text;
   return Math.round((Date.now()-t0)/1000)}}}
 const took=s=>" · "+s+"초 걸림";
+// 이미지는 보이는 크기만큼만 받는다 — 폰에서 원본 PNG 한 장이 1.3MB 다.
+// 이미 ?w= 가 붙어 있으면 그대로 둔다(부르는 쪽이 자기 폭을 아는 경우).
+function hasQuery(u){return String(u||"").indexOf("?")>=0}
+function imgSized(u,w){return hasQuery(u)?String(u):String(u||"")+"?w="+w}
 // ---- 오버레이 3종(세로 스크롤·라이트박스·재인증 안내)의 공용 규칙 ----
 // 재생 엔진은 무대에 포커스 가둠(trapTab)과 배경 inert 를 갖췄는데 스튜디오 오버레이에는
 // 둘 다 없어 Tab 이 뒤 화면으로 샜다(라이트박스는 aria-modal 선언만 해 놓은 상태였다).
@@ -85,9 +89,18 @@ async function api(path,body){
  if(r.status===401&&d&&d.auth_required){showAuthGate();throw new Error("PIN 인증이 필요합니다.")}
  if(!r.ok)throw new Error((d&&d.error)||("오류 "+r.status));
  return d}
+// 칩은 '설정돼 있다' 가 아니라 '지금 응답한다' 를 말해야 한다 — 두 엔진이 모두 꺼져 있는데
+// 초록이면 사용자는 버튼부터 누르고 20~90초를 기다린다(폰에서 유일한 상태 표시가 이 칩이다).
+// null = 아직 모른다. 모르는 동안에는 단정하지 않는다(초록도 빨강도 아닌 기본 칩).
+let llmUp=null,engUp=null;
+async function probeEngines(){
+ try{const d=await api("/api/talk-status",{});llmUp=!!(d&&d.up)}catch(e){llmUp=null}
+ try{const d=await api("/api/image-engine",{});engUp=!!(d&&d.ok)}catch(e){engUp=null}
+ renderChips()}
 function renderChips(){
  $("chipTitle").textContent=S.title||"제목 미정";
- if(S.orch_local){$("chipKey").textContent="스토리: 로컬 LLM";$("chipKey").className="chip ok"}
+ if(S.orch_local){$("chipKey").textContent="스토리: 로컬 LLM"+(llmUp===false?" 꺼짐":"");
+  $("chipKey").className="chip"+(llmUp===false?" bad":(llmUp?" ok":""))}
  else{$("chipKey").textContent="API 키 "+(S.key_set?"연결됨":"미설정");
   $("chipKey").className="chip "+(S.key_set?"ok":"bad")}
  imageChip()}
@@ -105,7 +118,8 @@ function mfToken(){const im=S.image;
  return (im&&typeof im.mf_token==="boolean")?im.mf_token:!!S.mf_token}
 function imageChip(){const c=$("chipModel"),im=S.image;
  if(im&&im.engine==="comfyui"){
-  c.textContent="이미지: ComfyUI"+(im.url?" · "+im.url:"");c.className="chip ok";return}
+  c.textContent="이미지: ComfyUI"+(im.url?" · "+im.url:"")+(engUp===false?" 연결 안 됨":"");
+  c.className="chip"+(engUp===false?" bad":(engUp?" ok":""));return}
  const tok=mfToken();
  c.textContent="이미지: MakeFun "+(tok?"연결됨":"토큰 미설정");
  c.className="chip "+(tok?"ok":"bad")}
@@ -121,8 +135,16 @@ async function refresh(opts){
  renderChips();
  if(!$("storyline").value)$("storyline").value=S.storyline||"";
  syncFav();syncResume();
- if(o.scene&&renderScene(o.scene)){renderGallery();return}
- renderChat();renderScenes();renderGallery();renderLan()}
+ if(o.scene&&renderScene(o.scene)){
+  if(curTab==="gallery")renderGallery();else galStale=true;
+  return}
+ renderChat();renderLan();
+ // 보이지 않는 탭은 다시 그리지 않는다 — display:none 안의 <img> 도 브라우저는 내려받는다.
+ // 폰 실측: refresh() 한 번이 장면·갤러리 썸네일 86MB 를 끌어왔고 그 탭은 화면에 없었다.
+ // 대신 '다시 그려야 한다' 는 표시만 남겨 그 탭에 들어올 때 한 번 그린다(selectTab).
+ if(curTab==="scenes")renderScenes();else scStale=true;
+ if(curTab==="gallery")renderGallery();else galStale=true}
+let scStale=false,galStale=false;   // 숨은 탭이 뒤처져 있는가(selectTab 이 갚는다)
 function renderChat(){const box=$("chatlog");box.replaceChildren();
  // /api/state 는 챗로그를 싣지 않는다(폰 전송량) — 없을 수 있으므로 반드시 가드.
  for(const m of (S.chat||[]))box.appendChild(el("div","msg "+m.role,m.content));
@@ -140,13 +162,19 @@ async function send(){const t=$("chatInput").value.trim();if(!t)return;
  $("chatInput").value="";S.chat.push({role:"user",content:t});renderChat();
  try{const d=await api("/api/chat",{messages:S.chat});
   S.chat.push({role:"assistant",content:d.reply});renderChat()}
- catch(e){alert(e.message+"\n\nAPI 크레딧이 없으면: 아래 [그록 프롬프트 틀]을 복사해 grok.com 에서 직접 대화하고, 결과를 스토리라인 칸에 붙여넣으세요.")}}
+ catch(e){S.chat.pop();renderChat();          // 보내지지 않은 말은 대화에 남기지 않는다
+  $("chatInput").value=t;                     // 쓴 것을 돌려준다(다시 치지 않게)
+  $("storyMsg").textContent="보내지 못했습니다 — "+e.message
+   +" (대신 아래 [그록 프롬프트 틀]을 복사해 grok.com 에서 대화하고 결과를 스토리라인 칸에 붙여넣으세요.)"}}
 $("btnSend").onclick=send;
 $("chatInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}});
 $("btnPull").onclick=()=>{const last=[...S.chat].reverse().find(m=>m.role==="assistant");
  if(last)$("storyline").value=($("storyline").value+"\n\n"+last.content).trim()};
-$("btnSaveStory").onclick=async()=>{await api("/api/storyline",{text:$("storyline").value});
- $("storyMsg").textContent="저장됨 — 장면 탭에서 구성할 수 있습니다."};
+$("btnSaveStory").onclick=async()=>{const m=$("storyMsg");m.textContent="저장 중…";
+ // 실패하면 "저장됨" 이 끝내 나타나지 않을 뿐이었다 — 사용자는 저장된 줄 알았다.
+ try{await api("/api/storyline",{text:$("storyline").value});
+  m.textContent="저장됨 — 장면 탭에서 구성할 수 있습니다."}
+ catch(e){m.textContent="저장 실패: "+e.message+" — 내용을 복사해 두세요."}};
 
 // ---- 그록 프롬프트 틀 (한글) — 전체판은 templates/grok-prompts-ko.md ----
 const FRAMES={
@@ -371,7 +399,12 @@ async function pollGenUntilDone(sid,msg){
   catch(e){return {error:(e&&e.message)||"진행 상태를 확인할 수 없습니다"}}
   if(s&&s.message)msg.textContent=s.message;
   if(!s)return {done:true};                    // 구버전 서버(빈 응답) → 기존처럼 완료로 간주
-  if(s.running===false)return s.error?{error:String(s.error)}:{done:true}}
+  if(s.running===false){
+   if(s.error)return {error:String(s.error)};
+   // 구서버는 실패를 문구에만 남겼다("실패: …"). 그것을 완료로 읽으면 화면이 거짓말을 한다
+   // — 토큰 없는 업스케일이 "확대본을 저장했습니다" 로 끝난 적이 있다.
+   const m=String(s.message||"");
+   return /^실패: /.test(m)?{error:m.slice(4)}:{done:true}}}
  return {timeout:true}}
 
 // ================= 장면 카드 =================
@@ -381,10 +414,14 @@ async function pollGenUntilDone(sid,msg){
 // 카드가 다시 그려져도 사용자가 입력하던 것은 살아남아야 한다(그록 응답 붙여넣기, 펼침 상태).
 // note 는 유료 작업(업스케일)의 결과 한 줄이다 — 성공하면 곧바로 refresh 가 카드를 갈아끼우므로
 // 여기 두지 않으면 "새 후보가 생겼다"는 안내가 만들어지자마자 지워진다.
-const scDraft=new Map();   // scene_id → {gen, set, open, note}
+const scDraft=new Map();   // scene_id → {gen, set, open, note, msg}
 function draftOf(sid){let d=scDraft.get(sid);
- if(!d){d={gen:"",set:"",open:null,note:""};scDraft.set(sid,d)}
+ if(!d){d={gen:"",set:"",open:null,note:"",msg:""};scDraft.set(sid,d)}
  return d}
+// 결과 한 줄(msg)도 카드 재생성보다 오래 살아야 한다. 성공하면 곧바로 refresh 가 카드를
+// 갈아끼우므로, 예전에는 "승인됨"·"후보 n장" 이 만들어진 지 0.2초 만에 덮여 사라졌다 —
+// 폰에서도 화면 낭독에서도 '아무 일도 없었던 것' 과 구분되지 않았다.
+function say(sid,msg,text){draftOf(sid).msg=text;if(msg)msg.textContent=text}
 
 function scHeader(sc){const head=el("div","row");
  head.appendChild(el("b",null,sc.scene_order+". "+sc.scene_id));
@@ -399,9 +436,12 @@ function scPromptBlock(sc){
  ta.setAttribute("aria-label",sc.scene_id+" 이미지 프롬프트");
  det.appendChild(ta);
  const detRow=el("div","row");detRow.style.marginTop="6px";
- const btnCopy=el("button","btn ghost","프롬프트 복사");
- btnCopy.onclick=()=>copyTo(btnCopy,sc.prompt||"","프롬프트 복사");
- detRow.appendChild(btnCopy);
+ // 프롬프트가 없으면 복사할 것도 없다 — 예전에는 빈 문자열을 복사하고 "복사됨 ✓" 라고
+ // 말했다(행동 줄의 [🖼 프롬프트 복사]는 이미 숨기고 있어 같은 카드가 서로 다른 말을 했다).
+ if(sc.prompt){const btnCopy=el("button","btn ghost","프롬프트 복사");
+  btnCopy.onclick=()=>copyTo(btnCopy,sc.prompt,"프롬프트 복사");
+  detRow.appendChild(btnCopy)}
+ else detRow.appendChild(el("span","small","아직 프롬프트가 없습니다"));
  detRow.appendChild(el("span","small","폴더: images/raw/"+sc.scene_id+"/"));
  det.appendChild(detRow);
  return det}
@@ -410,7 +450,9 @@ function scPromptBlock(sc){
 function scManualGrok(sc){
  const dr=draftOf(sc.scene_id);
  const mp=el("details");mp.style.marginTop="6px";
- mp.open=(dr.open==null)?!sc.prompt:dr.open;   // 프롬프트 없는 장면은 처음부터 펼쳐 둔다
+ // 폰에서는 카드마다 빈 textarea 두 개(700px)를 펼치는 쪽이 방해가 된다 — 접어 두고,
+ // 사용자가 편 상태는 그대로 기억한다(dr.open).
+ mp.open=(dr.open==null)?false:dr.open;
  mp.addEventListener("toggle",()=>{dr.open=mp.open});
  mp.appendChild(el("summary","small","⚡ 그록 수동 · 지시문 복사 → grok.com → 결과 붙여넣기 (로컬 LLM 느릴 때)"));
  const genRow=el("div","row");genRow.style.marginTop="6px";
@@ -454,7 +496,7 @@ function scBtnGenPrompt(sc,msg){
  b.title="로컬 LLM 이 이 장면의 이미지 프롬프트를 만듭니다";
  b.onclick=async()=>{b.disabled=true;msg.textContent="로컬 LLM 프롬프트 생성 중…";
   try{const d=await api("/api/gen-prompt",{scene_id:sc.scene_id});
-   msg.textContent=d.checker_pass?"프롬프트 생성 · 검사 통과":"생성됨 · 경고: "+d.fails;
+   say(sc.scene_id,msg,d.checker_pass?"프롬프트 생성 · 검사 통과":"생성됨 · 경고: "+d.fails);
    await refresh({scene:sc.scene_id})}
   catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
  return b}
@@ -471,8 +513,9 @@ async function runGenImage(sc,msg,b,engine){
     if(r&&r.error){msg.textContent="실패: "+r.error;b.disabled=false;return}
     if(r&&r.timeout){msg.textContent="시간 초과 — 아직 생성 중일 수 있습니다. 잠시 뒤 [폴더 스캔]으로 확인하세요.";
      b.disabled=false;return}
-    msg.textContent=lab+" 생성 완료 — 후보를 확인하세요";await refresh({scene:sc.scene_id});return}
-   stop();msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;
+    say(sc.scene_id,msg,lab+" 생성 완료 — 후보를 확인하세요");
+    await refresh({scene:sc.scene_id});return}
+   stop();say(sc.scene_id,msg,"생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto);
    await refresh({scene:sc.scene_id})}
   catch(e){stop();msg.textContent="실패: "+e.message;b.disabled=false}}
 function scBtnGenImage(sc,msg){
@@ -504,7 +547,9 @@ function scBtnScan(sc,msg){
  const b=el("button","btn ghost","폴더 스캔");
  b.onclick=async()=>{b.disabled=true;msg.textContent="폴더 확인 중…";
   try{const d=await api("/api/register-images",{scene_id:sc.scene_id});
-   msg.textContent="후보 "+d.count+"장 · 자동검사 "+d.auto;await refresh({scene:sc.scene_id})}
+   // APPROVED 장면의 재스캔은 서버가 일부러 하지 않는다 — 그 사유(d.note)가 결과다.
+   say(sc.scene_id,msg,d.note||("후보 "+d.count+"장 · 자동검사 "+d.auto));
+   await refresh({scene:sc.scene_id})}
   catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
  return b}
 
@@ -519,7 +564,7 @@ function scAddUpload(act,sc,msg){
   rd.onerror=()=>{msg.textContent="실패: 파일을 읽을 수 없습니다"};
   rd.onload=async()=>{try{const d=await api("/api/upload-image",
     {scene_id:sc.scene_id,filename:f.name,data_b64:String(rd.result)});
-    msg.textContent="업로드+검사 "+d.auto+" (후보 "+d.count+"장)";
+    say(sc.scene_id,msg,"업로드+검사 "+d.auto+" (후보 "+d.count+"장)");
     await refresh({scene:sc.scene_id})}
    catch(e){msg.textContent="실패: "+e.message}};
   rd.readAsDataURL(f)};
@@ -529,7 +574,7 @@ function scBtnApprove(sc,msg){
  const b=el("button","btn seal","승인 도장 찍기");
  b.onclick=async()=>{b.disabled=true;msg.textContent="승인 중…";
   try{await api("/api/approve",{scene_id:sc.scene_id});
-   msg.textContent="승인됨 — 갤러리에 모입니다";await refresh({scene:sc.scene_id})}
+   say(sc.scene_id,msg,"승인됨 — 갤러리에 모입니다");await refresh({scene:sc.scene_id})}
   catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
  return b}
 
@@ -562,6 +607,7 @@ function scRefNote(){
 function scActions(sc){
  const act=el("div","row");act.style.marginTop="8px";
  const msg=el("span","small");msg.setAttribute("role","status");
+ const dr0=draftOf(sc.scene_id);if(dr0.msg)msg.textContent=dr0.msg;   // 지난 결과 한 줄을 되살린다
  const gen=sc.status!=="APPROVED"&&!!sc.prompt;
  if(sc.status!=="APPROVED"&&!sc.prompt)act.appendChild(scBtnGenPrompt(sc,msg));
  if(gen){act.appendChild(scBtnGenImage(sc,msg));
@@ -572,7 +618,9 @@ function scActions(sc){
   act.appendChild(bcp)}
  act.appendChild(scBtnScan(sc,msg));
  if(sc.status!=="APPROVED")scAddUpload(act,sc,msg);
- if(sc.selected_image)act.appendChild(scBtnApprove(sc,msg));
+ // 승인은 REVIEW_HUMAN 에서만 된다(scene_ops.approve) — 그 밖의 단계에 도장을 내밀면
+ // 서버가 거절할 버튼을 보여 주는 셈이다(IMAGE 단계에서 이미 고친 것과 같은 규칙).
+ if(sc.status==="REVIEW_HUMAN"&&sc.selected_image)act.appendChild(scBtnApprove(sc,msg));
  act.appendChild(msg);
  return {act,msg,gen}}
 
@@ -581,6 +629,11 @@ function scActions(sc){
 function scThumbs(sc,msg){
  const th=el("div","thumbs");
  const raws=sc.raw_images||[];
+ // 승인된 컷은 선택을 바꿀 수 없다(scene_ops — 먼저 revise). 예전에는 썸네일 47개가 전부
+ // 눌리는 버튼이었고, 서버는 폰에서 실행할 수 없는 셸 명령으로 거절했다.
+ const locked=sc.status==="APPROVED";
+ if(locked&&raws.length)th.appendChild(el("p","pickhint",
+  "승인된 컷입니다 — 다른 후보로 바꾸려면 먼저 되돌려야 합니다(revise)."));
  // 후보는 있는데 아직 고르지 않은 단계(IMAGE)에서는 '고르면 다음으로 간다'를 말해 준다.
  // 등록만으로는 시사 단계로 올라가지 않는다(선택이 REVIEW_HUMAN 을 찍는다 — SCHEMA §2.1).
  if(raws.length&&!sc.selected_image&&sc.status!=="APPROVED")
@@ -588,17 +641,18 @@ function scThumbs(sc,msg){
  raws.forEach((r,i)=>{
   const sel=r===sc.selected_image;
   const b=el("button");
-  b.title=r.split("/").pop();
+  b.disabled=locked;
+  b.title=locked?"승인된 장면입니다 — 다른 컷을 고르려면 먼저 되돌리세요(revise)":r.split("/").pop();
   b.setAttribute("aria-pressed",sel?"true":"false");
   b.setAttribute("aria-label","후보 "+(i+1)+"/"+raws.length+" 고르기 — "+(sc.purpose||sc.scene_id));
   const img=el("img",sel?"sel":null);
   img.src="/img/"+r.replace(/^images\//,"")+"?w=224";
   img.alt="";img.loading="lazy";img.decoding="async";
   b.appendChild(img);
-  b.onclick=async()=>{msg.textContent="선택 중…";
+  if(!locked)b.onclick=async()=>{msg.textContent="선택 중…";
    draftOf(sc.scene_id).note="";   // "새 후보를 고르세요" 안내는 고른 순간 할 일을 다했다
    try{const d=await api("/api/select",{scene_id:sc.scene_id,image:r});
-    msg.textContent=d.auto_pass?"선택됨 — 도장 찍을 수 있음":"선택됨 · 경고: "+d.fails;
+    say(sc.scene_id,msg,d.auto_pass?"선택됨 — 도장 찍을 수 있음":"선택됨 · 경고: "+d.fails);
     await refresh({scene:sc.scene_id})}
    catch(e){msg.textContent="실패: "+e.message}};
   th.appendChild(b)});
@@ -694,6 +748,10 @@ function upDoneNote(sc){
 function scBtnUpscale(sc,p,msg){
  const weak=p&&p.printable===false;   // 인화 부적합일 때가 이 버튼이 필요한 바로 그때다
  const b=el("button","btn"+(weak?"":" ghost"),"⬆ 인화용 업스케일");
+ if(!mfToken()){        // 유료 확인창을 띄우기 전에 눌리지 않는 상태로 이유를 말한다
+  b.disabled=true;
+  b.title="MAKEFUN_API_TOKEN 미설정 — 서버에 토큰을 설정해야 인화용 업스케일을 쓸 수 있습니다";
+  return b}
  b.title="선택한 그림 그대로 해상도만 키웁니다(다시 그리지 않습니다)."
   +" MakeFun 크레딧이 차감되는 유료 호출입니다.";
  b.onclick=async()=>{
@@ -937,7 +995,8 @@ let lbList=[],lbIdx=-1;
 function openLightbox(i){lbList=galList();lbIdx=i;
  if(lbIdx<0||lbIdx>=lbList.length)return;
  const sc=lbList[lbIdx],im=$("lbImg");
- if(sc.image_url){im.hidden=false;im.src=sc.image_url;im.alt=sc.purpose||sc.scene_id}
+ // 라이트박스 그림은 높이 76vh 안에 들어간다 — 원본 대신 그만한 축소본을 받는다.
+ if(sc.image_url){im.hidden=false;im.src=imgSized(sc.image_url,1000);im.alt=sc.purpose||sc.scene_id}
  else{im.hidden=true;im.removeAttribute("src")}
  $("lbCap").textContent=(sc.scene_order||"")+". "+(sc.purpose||sc.scene_id)+"  ·  "+sc.scene_id
   +(sc.image_url?"":"  (이미지 없음)");
@@ -964,7 +1023,9 @@ function vnHeroine(){return (S&&S.characters&&S.characters[0]&&S.characters[0].n
 function vnCharId(){return (S&&S.characters&&S.characters[0]&&S.characters[0].id)||""}
 function vnDefaultCG(){const s=(S&&S.scenes||[]).find(x=>x.image_url);return s?s.image_url:""}
 function vnSetCG(url){const im=$("vnCG");if(!url){im.style.opacity=0;return}
- if(im.src!==url)im.src=url;im.style.opacity=1}
+ // 대화창 배경은 화면 폭이면 충분하다 — 원본(1.3MB)을 받을 이유가 없다.
+ const src=hasQuery(url)?url:url+"?w=900";
+ if(im.src!==src)im.src=src;im.style.opacity=1}
 // 57 · 타자기 속도는 뷰어 설정(재생 엔진의 텍스트 속도)을 그대로 쓴다 — 0 이면 즉시 표시
 function vnType(text){if(vnTimer){clearInterval(vnTimer);vnTimer=null}
  vnFull=text;const box=$("vnText");box.textContent="";
@@ -992,7 +1053,8 @@ function renderTalk(){
  // 백로그
  const log=$("talkLog");log.replaceChildren();
  for(const m of talkChat){const b=el("div","msg "+m.role,(m.role==="user"?"나: ":vnHeroine()+": ")+m.content);
-  for(const p of (m.photos||[])){const im=el("img");im.src=p.url;im.alt=p.caption||"";
+  for(const p of (m.photos||[])){const im=el("img");     // 백로그 사진은 폭 60% 로 보인다
+   im.src=hasQuery(p.url)?p.url:p.url+"?w=420";im.alt=p.caption||"";
    im.loading="lazy";im.decoding="async";
    im.style.cssText="max-width:60%;border-radius:10px;margin-top:8px;display:block";b.appendChild(im)}
   log.appendChild(b)}
@@ -1039,6 +1101,7 @@ async function talkStatus(){const c=$("talkStatus");
  renderTalk();
  let st=null;
  try{st=await api("/api/talk-status",{});
+  llmUp=!!st.up;renderChips();   // 머리말 칩과 이 칩이 서로 다른 말을 하지 않게
   if(st.up){c.textContent="로컬 LLM 연결됨";c.className="chip ok"}
   else{c.textContent="로컬 LLM 꺼짐 — serve.ps1 실행 필요";c.className="chip bad"}}
  catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}
@@ -1242,7 +1305,8 @@ function selectTab(name,quiet){const sec=$("tab-"+name);if(!sec)return;
   if(on)x.setAttribute("aria-current","page");else x.removeAttribute("aria-current")});
  document.querySelectorAll("section").forEach(x=>x.classList.remove("on"));
  sec.classList.add("on");
- if(name==="gallery")renderGallery();
+ if(name==="scenes"&&scStale){scStale=false;renderScenes()}
+ if(name==="gallery"){galStale=false;renderGallery()}
  if(name==="talk")talkStatus();
  if(name==="story")loadChatHistory();
  if(name==="viewer"){syncResume();renderLan();if($("dlBox").open)renderDl()}}
@@ -1255,8 +1319,11 @@ function initTab(){let saved="";
 $("authReload").onclick=()=>{location.reload()};
 $("authDismiss").onclick=()=>{closeOverlay($("authGate"))};
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab));
-$("btnCheck").onclick=async()=>{const d=await api("/api/check",{});
- $("checkOut").textContent=d.output};
+$("btnCheck").onclick=async()=>{const b=$("btnCheck");b.disabled=true;
+ const bz=busy($("checkOut"),"검사기 실행 중…");   // 검사기는 최대 60초 걸린다
+ try{const d=await api("/api/check",{});bz.stop();$("checkOut").textContent=d.output}
+ catch(e){bz.stop("실패: "+e.message)}
+ b.disabled=false};
 $("btnLint").onclick=async()=>{const o=$("lintOut");o.hidden=false;o.textContent="점검 중…";
  try{const d=await api("/api/lint",{});
   o.textContent=d.findings.length?d.summary+"\n\n"+d.findings.map(f=>(f.level==="warn"?"⚠ ":"· ")+"["+f.scene_id+"] "+f.message).join("\n"):"연출·분기 양호 — 특이사항 없음"}
@@ -1431,5 +1498,5 @@ function qrEncode(text){
 
 syncResume();renderLan();   // syncResume 이 재생 엔진을 mount 한다(설정·저장 위치를 읽어 온다)
 initTab();                  // 주소·마지막 탭 복원 (스토리 탭이면 아래 loadChatHistory 와 합쳐진다)
-refresh().then(loadChatHistory)   // 스토리 탭이 첫 화면이므로 지난 대화를 바로 채운다
+refresh().then(loadChatHistory).then(probeEngines)   // 스토리 탭이 첫 화면이므로 지난 대화를 바로 채운다
  .catch(e=>{$("chipTitle").textContent="상태 불러오기 실패";$("chipTitle").className="chip bad"});
