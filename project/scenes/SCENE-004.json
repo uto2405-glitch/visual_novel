@@ -23,8 +23,8 @@
   "prompt": {
     "grok_input_version": 1,
     "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt catching 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings by the arm as she stumbles on a spring park path with cherry blossoms falling, soft pink petals in the air, petals swirling",
-    "external_generator": "",
-    "external_model": ""
+    "external_generator": "ComfyUI",
+    "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
   "dialogue": [
     {
@@ -40,15 +40,20 @@
   ],
   "assets": {
     "raw_images": [
-      "images/raw/SCENE-004/SCENE-004_a-2.png"
+      "images/raw/SCENE-004/cf_06179c_1.png",
+      "images/raw/SCENE-004/cf_0f3dbc_1.png",
+      "images/raw/SCENE-004/cf_12ef56_2.png",
+      "images/raw/SCENE-004/cf_676171_2.png"
     ],
-    "selected_image": "images/raw/SCENE-004/SCENE-004_a-2.png"
+    "selected_image": "images/raw/SCENE-004/cf_06179c_1.png"
   },
   "review": {
     "auto": "PASS",
     "human": "PASS",
     "score": null,
-    "notes": []
+    "notes": [
+      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성"
+    ]
   },
-  "version": 1
+  "version": 2
 }

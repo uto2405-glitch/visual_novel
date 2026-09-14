@@ -23,8 +23,8 @@
   "prompt": {
     "grok_input_version": 1,
     "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, looking up at the fireworks while lightly holding his sleeve, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, at night, summer fireworks blooming in the deep blue night sky, festival lights reflecting on the water",
-    "external_generator": "",
-    "external_model": ""
+    "external_generator": "ComfyUI",
+    "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
   "dialogue": [
     {
@@ -40,17 +40,22 @@
   ],
   "assets": {
     "raw_images": [
-      "images/raw/SCENE-007/mf_424c98_1.jpg"
+      "images/raw/SCENE-007/cf_a799ab_2.png",
+      "images/raw/SCENE-007/cf_d92ca8_2.png",
+      "images/raw/SCENE-007/cf_ded252_1.png",
+      "images/raw/SCENE-007/cf_e67af3_1.png"
     ],
-    "selected_image": "images/raw/SCENE-007/mf_424c98_1.jpg"
+    "selected_image": "images/raw/SCENE-007/cf_ded252_1.png"
   },
   "review": {
     "auto": "PASS",
     "human": "PASS",
     "score": null,
-    "notes": []
+    "notes": [
+      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성"
+    ]
   },
-  "version": 1,
+  "version": 2,
   "print": {
     "crop_anchor": "center"
   }
