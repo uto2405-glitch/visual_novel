@@ -535,13 +535,26 @@ def check_backups() -> None:
     imgs = sorted((ROOT / "images").rglob("*")) if (ROOT / "images").exists() else []
     n_img = sum(1 for p in imgs if p.is_file())
     if snaps and n_img:
-        with_img = any(load_json_safe(m, {}).get("images_included") for m in snaps[-3:])
-        add("백업", "이미지 원본 포함", OK if with_img else WARN,
-            "최근 스냅샷에 이미지 원본 포함됨" if with_img else
-            f"최근 3개 스냅샷에 이미지가 빠져 있습니다 — images/ 의 {n_img}개 파일은 "
-            "체크섬만 있고 zip 으로 복구할 수 없습니다",
-            "" if with_img else
-            "python tools/backup_project.py snapshot --with-images  (외장 사본: --dest D:/backup)")
+        # 기준은 **최신 스냅샷** 이다 — restore 가 기본으로 겨냥하는 그것. '최근 3개 중
+        # 하나라도' 로 보면, 이미지 없는 스냅샷을 두 번만 더 만들어도 최신 복구 지점에
+        # 앨범이 없는데 초록불이 켜진다.
+        newest_has = bool(load_json_safe(snaps[-1], {}).get("images_included"))
+        older = [m for m in snaps[:-1] if load_json_safe(m, {}).get("images_included")]
+        stamp = snaps[-1].stem.replace("manifest_", "")
+        if newest_has:
+            add("백업", "이미지 원본 포함", OK, f"최신 스냅샷 {stamp} 에 이미지 원본 포함됨")
+        else:
+            older_note = ""
+            if older:
+                old_stamp = older[-1].stem.replace("manifest_", "")
+                older_note = (f" 이미지가 든 마지막 스냅샷은 {old_stamp} 입니다 — "
+                              f"복구하려면 python tools/backup_project.py restore "
+                              f"--snapshot {old_stamp}")
+            add("백업", "이미지 원본 포함", WARN,
+                f"최신 스냅샷 {stamp} 에 이미지가 빠져 있습니다 — images/ 의 {n_img}개 파일은 "
+                "체크섬만 있어 zip 으로 되돌릴 수 없습니다",
+                "지금 한 줄로 해결됩니다: python tools/backup_project.py snapshot --with-images"
+                "  (다른 디스크 사본까지: --dest D:/backup)" + older_note)
 
     legacy = sorted(p for p in (ROOT / "project").glob("scenes_backup_*") if p.is_dir()) \
         if (ROOT / "project").exists() else []

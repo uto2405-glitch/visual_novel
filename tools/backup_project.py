@@ -411,9 +411,20 @@ def list_backups(base: Path | None = None) -> int:
     print("복원(수작업 압축 해제 불필요):")
     print(f"  python tools/backup_project.py restore --snapshot {latest} --dry-run   # 차이 먼저 확인")
     print(f"  python tools/backup_project.py restore --snapshot {latest}             # 되돌리기")
-    if not any(_load_json(m).get("images_included") for m in ms):
-        print("※ 어느 스냅샷에도 이미지 원본이 없습니다 — images/ 는 체크섬만 있어 zip 으로 "
-              "되돌릴 수 없습니다.")
+    # 경고의 기준은 '최신 스냅샷' 이다 — restore 가 기본으로 겨냥하는 바로 그것.
+    # 옛날 스냅샷 하나에 이미지가 들어 있다고 해서 오늘의 복구가 되는 것은 아니다.
+    with_img = [m for m in ms if _load_json(m).get("images_included")]
+    if not _load_json(ms[-1]).get("images_included"):
+        print()
+        if not with_img:
+            print("※ 어느 스냅샷에도 이미지 원본이 없습니다 — images/ 는 체크섬만 있어 "
+                  "zip 으로 되돌릴 수 없습니다.")
+        else:
+            newest = with_img[-1].stem.replace("manifest_", "")
+            print(f"※ 최신 스냅샷({latest})에는 이미지 원본이 없습니다 — 위의 restore 명령은 "
+                  "장면 파일만 되돌립니다.")
+            print(f"   이미지까지 들어 있는 가장 최근 스냅샷은 {newest} 입니다: "
+                  f"python tools/backup_project.py restore --snapshot {newest}")
         print("   다음 백업부터: python tools/backup_project.py snapshot --with-images "
               "(외장 사본: --dest D:/backup)")
     return 0
