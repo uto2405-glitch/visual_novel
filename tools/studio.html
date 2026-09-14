@@ -196,6 +196,12 @@ body{-webkit-tap-highlight-color:rgba(95,179,154,.25)}
 .galcard .play{position:absolute;top:6px;left:6px;width:40px;height:40px;border-radius:50%;
  border:none;background:rgba(18,13,9,.66);color:var(--jade);font-size:15px;cursor:pointer;
  line-height:40px;padding:0;z-index:2}
+/* 엄지 바닥값 — ★/▶ 만 40px 로 남아 있었다(실측 400px: 24개). 이 블록은 .fav(위)·.play(바로 위)
+   **둘 다보다 뒤에** 있어야 이긴다: 미디어 쿼리는 특정도를 올려 주지 않으므로, 같은 특정도끼리는
+   나중에 선언한 쪽이 이긴다. 카드 최소폭이 150px 이라 44+44 가 겹치지도 않는다. */
+@media(max-width:720px){
+ .galcard .fav,.galcard .play{width:44px;height:44px;line-height:44px}
+}
 /* ---- 90 · LAN 접속 QR ---- */
 #qrBox{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px}
 #qrCanvas{background:#fff;border-radius:8px;image-rendering:pixelated}
