@@ -2,7 +2,7 @@
   "scene_id": "SCENE-009",
   "scene_order": 9,
   "episode": 3,
-  "status": "SCENE_PLAN",
+  "status": "APPROVED",
   "location_id": "LOC-001",
   "time": "오후",
   "characters": [
@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 1girl, 1boy, 2people, couple, both characters visible, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, seated across a cafe table, she pushes the cooled cup aside and rises with her bag as he looks up, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, cozy warm wood-toned cafe near a school, afternoon sunlight through the window, afternoon",
     "external_generator": "",
     "external_model": ""
   },
@@ -56,12 +56,14 @@
     }
   ],
   "assets": {
-    "raw_images": [],
-    "selected_image": ""
+    "raw_images": [
+      "images/raw/SCENE-009/cf_3f0987_1.png"
+    ],
+    "selected_image": "images/raw/SCENE-009/cf_3f0987_1.png"
   },
   "review": {
     "auto": "PASS",
-    "human": "PENDING",
+    "human": "PASS",
     "score": null,
     "notes": [
       "[2026-09-15] REVISE → SCENE_PLAN: 외부 요청이 남긴 후보 파일(evil.png) 제거 후 계획 단계로 복원"
