@@ -7,6 +7,8 @@
     컷마다 얼굴·배경이 흔들리지 않게 한다.
   * **인원수·구도 태그도 코드가 넣는다**(`composition_tags`) — 앵커는 사람 수를 세어 주지
     않아서, 두 사람 장면이 한 사람만 그려지던 문제의 처방이다.
+  * **인물 태그도 코드가 넣는다**(`character_tags`) — 앵커 문장 끝의 의상·머리색이 옆 사람에게
+    새던 문제의 처방이다. 그 인물의 앵커 **바로 앞**에만 붙는다.
   * **LLM 은 동작·구도 한 문장만 만든다** — 외모·장소를 다시 묘사하면 앵커와 충돌한다.
 
 저장소 규약: **모델에 보내는 프롬프트 문자열은 prompt_build 와 vn_compose 에만 있다.**
@@ -210,6 +212,35 @@ def composition_tags(sc: dict, mf: dict | None = None) -> str:
     return ", ".join(out)
 
 
+def character_tags(ch: dict) -> str:
+    """캐릭터 기준정보 → 그 인물의 앵커 **바로 앞**에 붙일 짧은 태그 한 줄.
+
+    앵커만으로는 옷·머리색이 옆 사람에게 샌다 — 앵커는 사람이 읽는 문장이라 태그로 학습된
+    체크포인트에서는 문장 끝의 의상 구절이 약하게 걸리고, `pastel` 처럼 색 태그가 아닌 말은
+    그냥 무시된다. 실측(같은 시드 3개 × 프롬프트 변형 17종)에서 순서 바꾸기·끝에 한 번 더
+    붙이기·`BREAK`·네거티브 보강은 모두 시드 노이즈와 구분되지 않았고, **그 인물의 태그를
+    그 인물의 앵커 바로 앞에 두는 것**만 반복해서 들어맞았다.
+
+    LLM 을 부르지 않는다 — 기준정보를 적힌 순서 그대로 옮기고 중복만 지운다(결정적).
+    태그는 앵커를 **대체하지 않는다**: 원문은 뒤에 그대로 남으므로 A6 판정은 달라지지 않는다.
+    """
+    raw = ch.get("prompt_tags")
+    if not isinstance(raw, list):
+        return ""
+    out, seen = [], set()
+    for t in raw:
+        tag = " ".join(str(t or "").split()).strip(" ,")
+        if tag and tag.lower() not in seen:
+            seen.add(tag.lower())
+            out.append(tag)
+    return ", ".join(out)
+
+
+def _character_block(ch: dict) -> str:
+    """인물 한 사람이 프롬프트에서 차지하는 덩어리 — `<인물 태그>, <앵커 원문>`."""
+    return ", ".join(p for p in (character_tags(ch), str(ch.get("prompt_anchor", "") or "").strip()) if p)
+
+
 def compose_image_prompt(sc: dict, action: str | None = None) -> str:
     """장면 dict → 이미지 프롬프트 문자열.
 
@@ -232,11 +263,12 @@ def compose_image_prompt(sc: dict, action: str | None = None) -> str:
     parts = [visual_style(sc) + ", portrait 2:3", _shot_phrase(cam.get("shot", "medium")),
              composition_tags(sc, mf)]
     ids = scene_cast(sc, mf)
+    # 인물 태그는 **그 인물의 앵커 바로 앞**에 붙는다(character_tags) — 앵커 원문은 그대로다.
     if ids:
-        parts.append(chars[ids[0]].get("prompt_anchor", ""))
+        parts.append(_character_block(chars[ids[0]]))
     parts.append(action)
     for cid in ids[1:]:
-        parts.append("with " + str(chars[cid].get("prompt_anchor", "")))
+        parts.append("with " + _character_block(chars[cid]))
     if sc.get("location_id") in locs:
         parts.append(locs[sc["location_id"]].get("prompt_anchor", ""))
     t = str(sc.get("time", "")).strip()

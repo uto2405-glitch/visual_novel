@@ -89,6 +89,7 @@
       },
       "reference_images": [],
       "prompt_anchor": "",
+      "prompt_tags": [],
       "wardrobe_default": "",
       "wardrobe_variants": []
     }

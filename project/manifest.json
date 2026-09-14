@@ -90,6 +90,7 @@
       },
       "reference_images": [],
       "prompt_anchor": "18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings",
+      "prompt_tags": ["light brown hair", "half updo", "pink cardigan", "star earrings"],
       "wardrobe_default": "pastel knit cardigan",
       "wardrobe_variants": [
         {
@@ -141,6 +142,7 @@
       },
       "reference_images": [],
       "prompt_anchor": "18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt",
+      "prompt_tags": ["black hair", "white shirt", "short sleeves"],
       "wardrobe_default": "plain white casual shirt",
       "wardrobe_variants": [
         {

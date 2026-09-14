@@ -200,11 +200,25 @@ SDXL 은 1MP 근처를 벗어날수록 인물이 갈라진다. 값을 지어내�
 | `profile.speech_style` | str | ⬜ | 사람 | **대화 페르소나**(`prompt_build`) `[말투 규칙]` | — |
 | `reference_images` | list[str] | ⬜ | 사람 | **이미지 생성에 첨부**(`makefun_client` → `input_images`) · 프롬프트 입력의 첨부 안내 | — |
 | `prompt_anchor` | str | ⚠ | 사람 | 프롬프트 조립 · `scene_lint` 역방향 검사 | **A6 필수** |
+| `prompt_tags` | list[str] | ⬜ | 사람 | **프롬프트 조립**(`prompt_build.character_tags`) — 앵커 바로 앞에 붙는 짧은 인물 태그 | — |
 | `wardrobe_default` | str | ⬜ | 사람 | **(없음)** — 아래 참조 | — |
 | `wardrobe_variants[]` | list[obj] | ⬜ | 사람 | **(없음)** — 아래 참조 | — |
 
 **`prompt_anchor` 는 사실상 필수다.** 장면이 `IMAGE` 단계에 오르면 A6 이 "그 캐릭터의
 `prompt_anchor` 가 기준정보에 없음"으로 FAIL 한다. 컷 간 얼굴·의상 일관성의 유일한 근거다.
+
+**`prompt_tags` 는 같은 사실을 모델의 어휘로 한 번 더 말한다.** 앵커는 사람이 읽는 문장이라
+(`"plain white casual shirt"`, `"pastel knit cardigan"`) 태그 학습된 체크포인트에서는 문장 끝의
+의상 구절이 다른 인물에게 새거나(남자가 가디건을 입는다) 아예 무시된다(`pastel` 은 색 태그가
+아니라 크림색으로 떨어진다). 그래서 **그 인물에게 반드시 묶여야 하는 속성만** 짧은 태그로
+적어 두면, 조립부가 그 인물의 앵커 **바로 앞**에 붙여 준다(§2.3).
+
+| 항목 | 규칙 |
+|---|---|
+| 무엇을 적나 | 색·머리·의상처럼 **틀리면 바로 보이는** 속성만. 앵커를 요약하거나 옮겨 적는 곳이 아니다 |
+| 어떻게 적나 | 짧은 명사구 1개씩 (`"light brown hair"` · `"white shirt"` · `"short sleeves"`) |
+| 앵커와의 관계 | **앵커를 대체하지 않는다.** 앵커 원문은 뒤에 그대로 남으므로 A6 판정은 달라지지 않는다 |
+| 비워 두면 | 예전과 똑같은 프롬프트가 나온다(빈 배열·키 없음 모두 안전) |
 
 > **`gender_presentation` 은 이제 그림에도 영향을 준다.** 프롬프트 조립이 이 값으로 인원수
 > 태그(`1girl` · `1boy` · `2people` · `couple`)를 만든다(§2.3). 읽는 규칙은
@@ -499,6 +513,35 @@ both characters fully visible, facing each other, <인물 앵커…>, <동작>, 
 `scene_lint` 가 자문으로 알려 준다(PASS/FAIL 아님): `composition-cue`(2인 이상인데 인원수 단서
 없음) · `two-shot-single`(`camera.shot` 이 `two-shot` 인데 프롬프트에 든 인물 앵커가 하나뿐).
 단서가 있는지의 판정은 `scene_ops.has_composition_cue` 하나다.
+
+#### 인물 태그 — 그 인물의 앵커 **바로 앞**에 붙는 짧은 줄
+
+인원수 태그가 사람 수를 고쳤어도 **옷과 머리색은 계속 흘렀다** — CHAR-002 의
+`"plain white casual shirt"` 가 검은 재킷으로, 이지혜의 `"pastel knit cardigan"` 이 크림색으로
+나왔다. A6 는 앵커 **글자**가 프롬프트에 있는지만 보므로 이 드리프트를 잡지 못한다.
+
+실제로 구운 그림으로 확인한 것(같은 시드 3개 × 프롬프트 변형 17종, 512×768·10steps):
+순서를 바꾸거나(복장을 인원수 태그 옆으로, 끝에 한 번 더) `BREAK` 를 넣거나 네거티브에
+`dark jacket, black sweater` 를 넣는 것은 **거의 효과가 없었다**(`BREAK` 는 Illustrious 에서
+블록 구분자가 아니라 그냥 한 단어로 들어간다). 효과가 있었던 것은 하나뿐이다 —
+**그 인물에게 묶일 태그를 그 인물의 앵커 바로 앞에 두는 것**.
+
+```
+<화풍>, portrait 2:3, medium shot, 1girl, 1boy, 2people, couple, both characters visible,
+<CHAR-001 prompt_tags>, <CHAR-001 앵커>, <동작>, with <CHAR-002 prompt_tags>, <CHAR-002 앵커>,
+<장소 앵커>, <시간대>
+```
+
+| 무엇에서 나오나 | 규칙 |
+|---|---|
+| 각 인물의 `prompt_tags` (§1.6) | 적힌 순서 그대로, 중복만 제거해 한 줄로. 비어 있으면 아무것도 붙지 않는다 |
+| 붙는 자리 | **그 인물의 `prompt_anchor` 바로 앞** — 두 번째 인물부터는 `with` 뒤 |
+| 인원수·구도 태그 | 그대로 맨 앞에 남는다(§ 위) — 두 줄은 서로 다른 문제를 고친다 |
+
+앵커 원문은 손대지 않으므로 **A6 판정은 달라지지 않는다.** 네거티브 프롬프트는 이 문제에
+쓰지 않는다 — 효과가 시드 노이즈와 구분되지 않았고, 길어진 네거티브가 그림에 흰 액자
+테두리를 만드는 부작용이 관측됐다. 체크포인트별 부정 문구가 정말 필요해지면 그 자리는
+`image_generator.comfyui.negative_prompt`(§1.4) 하나이고, 조립부에는 넣지 않는다.
 
 ### 2.4 `dialogue[]`
 

@@ -5880,6 +5880,63 @@ def u17(b: Box):
         mfp.write_text(keep, encoding="utf-8")
 
 
+@test("unit", "U18 prompt_build — 인물 태그는 그 인물의 앵커 바로 앞에만 붙는다(A6 원문 보존)")
+def u18(b: Box):
+    """앵커 문장 끝의 의상·머리색이 옆 사람에게 새던 문제의 잠금장치.
+
+    실측에서 반복해 들어맞은 유일한 처방이 **그 인물의 태그를 그 인물의 앵커 바로 앞에
+    두는 것**이었다(순서 바꾸기·끝에 한 번 더·BREAK·네거티브 보강은 시드 노이즈와
+    구분되지 않았다). 여기서 잠그는 것은 셋이다 —
+    ① 태그가 **자기 앵커 앞**에 오고 남의 앵커 앞으로 가지 않는다,
+    ② 앵커 원문은 글자 하나 다치지 않는다(A6),
+    ③ prompt_tags 가 없거나 이상한 값이어도 예전과 같은 프롬프트가 나온다(기존 작품 보호).
+    """
+    pb = b.mod("prompt_build")
+    mfp = b.p("project/manifest.json")
+    keep = mfp.read_text(encoding="utf-8")
+    try:
+        mf = read_json(mfp)
+        girl = mf["characters"][0]
+        boy = json.loads(json.dumps(girl))
+        boy.update({"character_id": "CHAR-778", "name": "선배",
+                    "prompt_anchor": "18-year-old Korean boy, neat short black hair, white shirt",
+                    "prompt_tags": ["black hair", "white shirt", " white shirt ", ""]})
+        boy.setdefault("profile", {})["gender_presentation"] = "남성"
+        girl["prompt_tags"] = ["light brown hair", "pink cardigan"]
+        mf["characters"].append(boy)
+        write_json(mfp, mf)
+        anchor_g, anchor_b = girl["prompt_anchor"], boy["prompt_anchor"]
+        sc = read_json(b.root / "examples" / "scenes" / "SCENE-001.json")
+        sc["characters"] = [girl["character_id"], "CHAR-778"]
+
+        eq(pb.character_tags(boy), "black hair, white shirt", "중복·공백 태그가 정리되지 않음")
+        text = pb.compose_image_prompt(sc, action="walking side by side")
+        for label, anchor in (("인물", anchor_g), ("두 번째 인물", anchor_b)):
+            has(text, anchor, f"{label} 앵커 원문이 사라짐(A6 FAIL)")
+        # ① 각 태그가 '자기' 앵커 바로 앞에 — 남의 앵커 앞으로 가면 드리프트가 그대로다
+        has(text, "light brown hair, pink cardigan, " + anchor_g, "여자 태그가 자기 앵커 앞에 없음")
+        has(text, "black hair, white shirt, " + anchor_b, "남자 태그가 자기 앵커 앞에 없음")
+        ok(text.index("pink cardigan") < text.index("black hair"),
+           "태그 덩어리가 서로 섞임(두 인물 블록의 경계가 무너졌다)")
+        ok(text.index("1girl") < text.index(anchor_g), "인원수 태그가 여전히 맨 앞에 있어야 한다")
+
+        # ③ 태그가 없거나 망가진 값이면 예전 프롬프트 그대로(기존 작품이 깨지지 않는다)
+        for bad in (None, [], "white shirt", 7, [None, "  ", ","]):
+            mf2 = read_json(mfp)
+            for c in mf2["characters"]:
+                if bad is None:
+                    c.pop("prompt_tags", None)
+                else:
+                    c["prompt_tags"] = bad
+            write_json(mfp, mf2)
+            plain = pb.compose_image_prompt(sc, action="walking side by side")
+            for anchor in (anchor_g, anchor_b):
+                has(plain, anchor, f"prompt_tags={bad!r} 에서 앵커 원문이 사라짐")
+            hasnt(plain, "pink cardigan, 18-year-old", f"prompt_tags={bad!r} 인데 태그가 붙음")
+    finally:
+        mfp.write_text(keep, encoding="utf-8")
+
+
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")
 def u08(b: Box):
     gj = need_mod(b, "gen_jobs")
