@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 1girl, 1boy, 2people, couple, both characters visible, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, stumbling forward as he catches her arm to steady her, petals swirling between them, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, spring park path with cherry blossoms falling, soft pink petals in the air, afternoon",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, stumbling forward as he catches her arm to steady her, petals swirling between them, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, spring park path with cherry blossoms falling, soft pink petals in the air, afternoon",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -45,11 +45,13 @@
       "images/raw/SCENE-004/cf_0f3dbc_1.png",
       "images/raw/SCENE-004/cf_12ef56_2.png",
       "images/raw/SCENE-004/cf_29c006_1.png",
+      "images/raw/SCENE-004/cf_2fb0ff_2.png",
       "images/raw/SCENE-004/cf_676171_2.png",
       "images/raw/SCENE-004/cf_7f3720_1.png",
-      "images/raw/SCENE-004/cf_ef5277_2.png"
+      "images/raw/SCENE-004/cf_ef5277_2.png",
+      "images/raw/SCENE-004/cf_fb036d_1.png"
     ],
-    "selected_image": "images/raw/SCENE-004/cf_29c006_1.png"
+    "selected_image": "images/raw/SCENE-004/cf_2fb0ff_2.png"
   },
   "review": {
     "auto": "PASS",
@@ -57,8 +59,9 @@
     "score": null,
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
-      "[2026-09-15] REVISE → PROMPT: 구도 태그 도입 — 두 인물이 모두 나오도록 프롬프트 재생성"
+      "[2026-09-15] REVISE → PROMPT: 구도 태그 도입 — 두 인물이 모두 나오도록 프롬프트 재생성",
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
     ]
   },
-  "version": 3
+  "version": 4
 }

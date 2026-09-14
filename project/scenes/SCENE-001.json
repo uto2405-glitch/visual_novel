@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving brightly at a window seat in a cozy warm wood-toned cafe near a school, afternoon sunlight through the window, seen over the shoulder of 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving brightly from a window seat as he walks up to the table, seen past his shoulder, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, cozy warm wood-toned cafe near a school, afternoon sunlight through the window, afternoon",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -40,18 +40,21 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-001/cf_314370_1.png",
       "images/raw/SCENE-001/cf_bee157_1.png",
-      "images/raw/SCENE-001/cf_e8ab70_2.png"
+      "images/raw/SCENE-001/cf_e8ab70_2.png",
+      "images/raw/SCENE-001/cf_fc363d_2.png"
     ],
-    "selected_image": "images/raw/SCENE-001/cf_e8ab70_2.png"
+    "selected_image": "images/raw/SCENE-001/cf_fc363d_2.png"
   },
   "review": {
     "auto": "PASS",
     "human": "PASS",
     "score": null,
     "notes": [
-      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성"
+      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
     ]
   },
-  "version": 2
+  "version": 3
 }

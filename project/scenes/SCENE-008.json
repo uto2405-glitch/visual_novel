@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, 1girl, 1boy, 2people, couple, both characters visible, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, seen from behind, walking home slowly as she lingers half a step back holding his sleeve, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, night",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, seen from behind, walking home slowly as she lingers half a step back holding his sleeve, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, night",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -45,6 +45,10 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-008/cf_02ade1_2.png",
+      "images/raw/SCENE-008/cf_35478d_2.png",
+      "images/raw/SCENE-008/cf_a07c8c_1.png",
+      "images/raw/SCENE-008/cf_c5c3fe_1.png",
       "images/raw/SCENE-008/cf_d36edd_1.png"
     ],
     "selected_image": "images/raw/SCENE-008/cf_d36edd_1.png"
@@ -53,7 +57,9 @@
     "auto": "PASS",
     "human": "PENDING",
     "score": null,
-    "notes": []
+    "notes": [
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
+    ]
   },
-  "version": 1
+  "version": 2
 }

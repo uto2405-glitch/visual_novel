@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, looking up at the fireworks while lightly holding his sleeve, with 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, at night, summer fireworks blooming in the deep blue night sky, festival lights reflecting on the water",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, looking up together at summer fireworks blooming in the deep blue night sky while she lightly holds his sleeve, festival lights reflecting on the water, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, night",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -40,22 +40,25 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-007/cf_21df67_1.png",
+      "images/raw/SCENE-007/cf_9ec97c_2.png",
       "images/raw/SCENE-007/cf_a799ab_2.png",
       "images/raw/SCENE-007/cf_d92ca8_2.png",
       "images/raw/SCENE-007/cf_ded252_1.png",
       "images/raw/SCENE-007/cf_e67af3_1.png"
     ],
-    "selected_image": "images/raw/SCENE-007/cf_ded252_1.png"
+    "selected_image": "images/raw/SCENE-007/cf_21df67_1.png"
   },
   "review": {
     "auto": "PASS",
     "human": "PASS",
     "score": null,
     "notes": [
-      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성"
+      "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
     ]
   },
-  "version": 2,
+  "version": 3,
   "print": {
     "crop_anchor": "center"
   }
