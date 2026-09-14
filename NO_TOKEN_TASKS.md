@@ -125,6 +125,14 @@
   `1girl, 1boy, 2people, couple, …` 을 넣는다(엔진 중립 · docs/SCHEMA.md §2.3)
 - [x] **102** `scene_lint` 역방향 경고 — `composition-cue` · `two-shot-single` (자문, PASS/FAIL 아님)
 
+## 8단계 · 인화 파이프라인 (Pillow 필요 · 토큰 0)
+- [x] **103** 인화 해상도 조치의 단일 출처 — `comfyui_client/makefun_client.size_recipe` 가
+  바꿀 키와 값을 돌려주고 `print_preflight`·`print_export` 는 옮겨만 적는다
+  (8의 배수 절삭 · ComfyUI hires 2배 상한까지 반영)
+- [x] **104** `doctor` — 크기 조치를 클라이언트 문구 그대로 전달 + `인화 가능 규격` 행 신설
+- [x] **105** `print_export` — 크롭이 **어느 변에서** 잘렸는지 안내 · 저장소 밖 출력 경로 허용
+- [x] **106** 인화 회귀 테스트 PR03~PR06 (PR03·PR04·PR05 는 Pillow 없이도 실행된다)
+
 ---
 
 ## ⛔ 남은 6건 — 토큰 또는 사용자 결정 대기

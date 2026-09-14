@@ -4312,6 +4312,220 @@ def pr02(b: Box):
     shutil.rmtree(out, ignore_errors=True)
 
 
+def _apply_edits(b: Box, edits) -> None:
+    """size_recipe 가 돌려준 (매니페스트 경로, 값) 을 **그 경로 그대로** 적용한다.
+
+    조치를 화면에 찍기만 하고 아무도 적용해 보지 않으면, 존재하지 않는 자리를 가리키는 안내가
+    조용히 산다. 마지막 조각(잎)은 새로 생길 수 있지만(max_long_edge_px 는 기본 매니페스트에
+    없다) **그 위 블록은 실제로 있어야 한다** — 틀린 잎 이름은 적용 뒤 크기 검증이 잡는다.
+    """
+    def fix(d):
+        for path, val in edits:
+            node, parts = d, str(path).split(".")
+            for k in parts[:-1]:
+                ok(isinstance(node.get(k), dict), f"매니페스트에 없는 경로 조각 '{k}' ({path})")
+                node = node[k]
+            node[parts[-1]] = val
+    edit_json(b.p("project/manifest.json"), fix)
+
+
+@test("print", "PR03 인화 목표 → 매니페스트 조치는 '그대로 적으면 실제로 되는' 값이어야 한다(8의 배수·hires 2배 상한)")
+def pr03(b: Box):
+    """"더 크게 생성하세요" 는 **어느 값을 얼마로** 까지 말해야 조언이다.
+
+    이 자리는 두 번 틀렸다.
+      * 상한은 8의 배수로 **내려** 잘리는데 요청값을 그대로 권했다(2250 → 실제 2248 → A3 계속 FAIL).
+      * ComfyUI 의 hires 2배 상한(1248 → 2496px)을 몰라서 8×10(3600px)에도
+        max_long_edge_px 만 올리라고 했다 — 올려도 2496px 이 나온다. 사용자는 렌더를 다 돌린
+        뒤에야 그 사실을 안다.
+    그래서 상한을 아는 곳(클라이언트 size_recipe)이 조치를 만들고, 인화 도구는 옮기기만 한다.
+    여기서는 **조치를 실제로 적용해 보고** 그 다음에도 깎이는지 확인한다 — 말만 바꾸고 결과가
+    같으면 통과하지 못한다.
+    """
+    cf = b.mod("comfyui_client")
+    pfm = b.mod("print_preflight")
+
+    def target(d, minpx):
+        d.setdefault("output", {}).update(aspect_ratio="2:3", min_long_edge_px=minpx)
+        d.setdefault("image_generator", {}).pop("max_long_edge_px", None)
+
+    # 인화 규격이 요구하는 픽셀은 프리플라이트가 정본이다(두 도구가 다른 수를 말하면 안 된다)
+    eq(pfm.needed_px("엽서 4×6")[1], 1800, "4×6 @300DPI 필요 긴 변")
+    eq(pfm.needed_px("5×7")[1], 2250, "5×7 @300DPI 필요 긴 변")
+    eq(pfm.needed_px("8×10")[1], 3600, "8×10 @300DPI 필요 긴 변")
+    eq(pfm.needed_px_for(5.0, 7.0, 300), pfm.needed_px("5×7"), "프리셋/자유 규격 산수가 갈림")
+
+    with env_var("COMFYUI_URL", None), manifest_patch(b, lambda d: target(d, 1024)):
+        r4, r5, r8 = (cf.size_recipe(1800), cf.size_recipe(2250), cf.size_recipe(3600))
+        for r, name in ((r4, "4×6"), (r5, "5×7"), (r8, "8×10")):
+            eq(r["reachable"], False, f"{name}: 지금 설정으로 된다고 판정")
+            eq(r["feasible"], True, f"{name}: 하드 상한 안인데 불가 판정")
+        eq(dict(r4["edits"]), {"output.min_long_edge_px": 1800},
+           f"4×6 은 요청 크기만 올리면 된다(기본 상한 2048·hires 천장 2496 안) — {r4['edits']}")
+        eq(dict(r5["edits"]).get("image_generator.max_long_edge_px"), 2256,
+           f"5×7 상한 권고가 8의 배수가 아님(2250 은 2248 로 깎인다) — {r5['edits']}")
+        eq(r5["hires_note"], "", "5×7 은 hires 천장(2496) 안인데 1차 캔버스를 올리라고 함")
+        keys8 = [k for k, _v in r8["edits"]]
+        ok("image_generator.comfyui.base_long_edge_px" in keys8,
+           f"8×10 인데 hires 2배 상한(1차 캔버스)을 말하지 않음 — {keys8}")
+        has(r8["hires_note"], "2496", "hires 천장 픽셀을 말하지 않음")
+        # 인화 도구는 그 조치를 그대로 옮긴다(규칙을 다시 구현하지 않는다)
+        lines = "\n".join(pfm.recipe_lines(3600, ("ComfyUI", cf)))
+        for needle in ("output.min_long_edge_px = 3600", "base_long_edge_px", "2496"):
+            has(lines, needle, "프리플라이트가 옮긴 조치")
+        eq(pfm.recipe_lines(3600, None), [], "엔진이 없는데 조치를 지어냄")
+
+        # 조치를 **그대로 적용**하면 실제로 그 크기가 나와야 한다 — 이것이 이 테스트의 핵심이다
+        _apply_edits(b, r8["edits"])
+        plan = cf.size_plan()
+        eq((plan["long"], plan["capped"], plan["hires_capped"]), (3600, False, False),
+           f"권고대로 고쳤는데 여전히 깎인다 — {plan}")
+        eq(cf.size_warnings(plan), [], "권고대로 고쳤는데 경고가 남음")
+        eq(cf.size_recipe(3600)["reachable"], True, "고친 뒤에도 '조치 필요' 로 남음")
+
+    # MakeFun 도 같은 계약을 낸다(엔진을 모르는 호출부가 그대로 옮겨 적을 수 있어야 한다)
+    mk = b.mod("makefun_client")
+    with manifest_patch(b, lambda d: target(d, 1024)):
+        rm = mk.size_recipe(2250)
+        eq(sorted(rm), sorted(cf.size_recipe(2250)), f"두 클라이언트의 size_recipe 키가 다름 — {rm}")
+        eq(dict(rm["edits"]).get("image_generator.max_long_edge_px"), 2256, f"8의 배수 권고 — {rm}")
+        eq(rm["hires_note"], "", "MakeFun 에는 hires 상한이 없다")
+
+
+@test("print", "PR04 doctor 의 크기 조치가 제자리로 돌려보내지 않는다 + 인화 가능 규격을 말한다")
+def pr04(b: Box):
+    """doctor 는 판정을 클라이언트에 위임해 놓고 **조치 문구만 따로 지어 냈다.** 그 문구가
+    사용자를 두 번 제자리로 보냈다: 이미 3600 인 max_long_edge_px 를 "3600 이상으로 올리세요"
+    (진짜 막은 건 hires 2배 상한), 그리고 이미 2250 인 상한을 "2250 이상으로"(실제 2248).
+    시키는 대로 고치고 다시 렌더해도 같은 화면이 나오는 조치는 조치가 아니다.
+
+    함께: 인화는 이 제품의 절반인데 doctor 는 화면 기준(A3)만 봤다 — 832×1248 은 A3 를 통과하고
+    감상도 멀쩡하지만 300DPI 로는 엽서에도 못 미친다. 그 사실을 굽기 전에 말해야 한다.
+    """
+    env = dict(b.env)
+    env["COMFYUI_URL"] = DEAD_COMFY          # 상한 계산은 매니페스트만 보면 된다(네트워크 없이)
+    env["LOCAL_LLM_URL"] = "http://127.0.0.1:59997/v1"      # 꺼진 포트 — 진단이 기다리지 않게
+
+    def rows_of(out: str) -> dict:
+        data, _n = json.JSONDecoder().raw_decode(out[out.index("{"):])
+        return {(r["section"], r["name"]): r for r in data["results"]}
+
+    def target(d, minpx, cap):
+        d.setdefault("output", {}).update(aspect_ratio="2:3", min_long_edge_px=minpx)
+        d.setdefault("image_generator", {})["max_long_edge_px"] = cap
+
+    # 1) hires 2배 상한에 걸린 경우 — 막은 값의 이름을 대야 한다
+    with manifest_patch(b, lambda d: target(d, 3600, 3600)):
+        rc, out = b.run("tools/doctor.py", "--json", env=env)
+    hasnt(out, "Traceback", "traceback")
+    ok(rc in (0, 1), f"rc={rc} — {out[:200]}")
+    row = rows_of(out).get(("프로젝트", "생성 크기 상한"))
+    ok(row is not None, "'생성 크기 상한' 행이 없음")
+    eq(row["level"], "문제", f"상한에 깎였는데 문제가 아님 — {row}")
+    has(row["fix"], "base_long_edge_px", "hires 상한에 걸렸는데 1차 캔버스를 말하지 않음")
+    hasnt(row["fix"], "max_long_edge_px 를 3600", "이미 3600 인 값을 올리라고 함(제자리 조치)")
+
+    # 2) 상한이 8의 배수가 아닌 경우 — 다음 8의 배수를 말해야 한다
+    with manifest_patch(b, lambda d: target(d, 2250, 2250)):
+        rc2, out2 = b.run("tools/doctor.py", "--json", env=env)
+    hasnt(out2, "Traceback", "traceback(8의 배수)")
+    row2 = rows_of(out2).get(("프로젝트", "생성 크기 상한"))
+    has(row2["fix"], "2256", "다음 8의 배수를 말하지 않음")
+    hasnt(row2["fix"], "2250 이상", "이미 적혀 있는 값을 다시 올리라고 함")
+
+    # 3) 기본 설정 — 인화로는 엽서에도 못 미친다는 사실을 doctor 가 말한다
+    rc3, out3 = b.run("tools/doctor.py", "--json", env=env)
+    hasnt(out3, "Traceback", "traceback(기본)")
+    row3 = rows_of(out3).get(("프로젝트", "인화 가능 규격"))
+    ok(row3 is not None, "'인화 가능 규격' 행이 없음 — 인화는 이 제품의 절반이다")
+    has(row3["detail"], "300DPI", "목표 DPI 를 말하지 않음")
+    has(row3["fix"] + row3["detail"], "min_long_edge_px", "무엇을 올려야 하는지 말하지 않음")
+
+
+@test("print", "PR05 크롭 안내는 '어느 변이' 잘렸는지까지 말한다 · 저장소 밖 출력 경로에서 죽지 않는다")
+def pr05(b: Box):
+    """총 크롭률만 찍으면 사용자는 파일을 열어 봐야 머리가 잘린 걸 안다. 8×10 의 16.7% 는
+    위·아래 절반씩이고, 이 작품처럼 얼굴이 프레임 위쪽인 컷은 center 크롭이 정수리를 깎는다.
+
+    함께: 스펙시트 경로를 무조건 ROOT 기준 상대경로로 바꾸던 자리 — 출력 폴더를 저장소 밖으로
+    돌려 놓고 부르면 **파일을 다 구운 뒤 마지막 한 줄에서** ValueError 로 죽었다.
+    (Pillow 없이 도는 순수 계산이라 이 검사는 사용자 PC 에서도 실행된다.)
+    """
+    pem = b.mod("print_export")
+    tall = {"crop_pct": 16.7, "src_px": [832, 1248], "out_px": [2400, 3000], "anchor": "center"}
+    note = pem._crop_note(tall)
+    has(note, "위·아래", f"세로가 잘리는데 방향을 말하지 않음 — {note!r}")
+    has(note, "8.3", f"한쪽 몫(절반)을 말하지 않음 — {note!r}")
+    top = pem._crop_note(dict(tall, anchor="top"))
+    has(top, "bottom", f"top 고정이면 아래쪽만 잘린다 — {top!r}")
+    hasnt(top, "각 8.3", "한쪽으로 붙였는데 양쪽이 잘린다고 함")
+    wide = pem._crop_note({"crop_pct": 16.7, "src_px": [1248, 832],
+                           "out_px": [2400, 3000], "anchor": "center"})
+    has(wide, "좌·우", f"가로가 잘리는데 방향이 틀림 — {wide!r}")
+    eq(pem._crop_note({"crop_pct": 0.0, "src_px": [832, 1248],
+                       "out_px": [1200, 1800], "anchor": "center"}), "",
+       "잘리지 않았는데 크롭 안내")
+    eq(pem._crop_note({"crop_pct": 9.9}), "", "픽셀을 모르는데 방향을 지어냄")
+
+    inside = pem.ROOT / "output" / "print" / "5x7" / "x.tiff"
+    eq(pem._rel(inside), "output/print/5x7/x.tiff", "저장소 안 경로는 상대경로 그대로")
+    outside = pem.ROOT.parent / "somewhere_else" / "x.tiff"
+    eq(pem._rel(outside), outside.as_posix(), "저장소 밖 출력 경로에서 예외 대신 절대경로")
+
+
+@test("print", "PR06 크롭 기준점(--anchor)이 실제로 남기는 자리를 바꾼다 — top 은 윗변(머리)을 지킨다")
+def pr06(b: Box):
+    """앵커는 인자만 받고 스펙시트에 받아 적힐 뿐, **픽셀이 실제로 달라지는지** 검사한 적이 없었다.
+
+    2:3 원본을 8×10(4:5)에 채우면 16.7% 가 날아가고 center 는 그 절반씩을 위·아래에서 가져간다
+    — 얼굴이 프레임 위쪽인 컷(이 작품의 대부분)은 정수리가 깎인다. 윗변에 표식을 둔 그림으로
+    center/top/bottom 이 서로 다른 자리를 남기는지 확인한다.
+    """
+    try:
+        from PIL import Image as PImg
+    except Exception:
+        raise Skip("Pillow 미설치")
+    pem = b.mod("print_export")
+    out = b.root / "_pe_anchor"
+    src = b.root / "pe_band.png"
+    with patched(pem, "OUT", out):
+        band = PImg.new("RGB", (832, 1248), (40, 40, 40))
+        band.paste(PImg.new("RGB", (832, 40), (255, 0, 0)), (0, 0))           # 윗변 3.2% 표식
+        band.paste(PImg.new("RGB", (832, 40), (0, 0, 255)), (0, 1208))        # 아랫변 표식
+        band.save(src)
+
+        def corners(spec):
+            with PImg.open(b.root / spec["jpg"]) as im:
+                return im.convert("RGB").getpixel((im.width // 2, 2)), \
+                       im.convert("RGB").getpixel((im.width // 2, im.height - 3))
+
+        def red(px):      # JPEG 는 손실이라 정확 비교 대신 채널 우세로 본다
+            return px[0] > 140 and px[0] > px[2] + 60
+
+        def blue(px):
+            return px[2] > 140 and px[2] > px[0] + 60
+
+        cen = pem.export_one("A-CENTER", src, 8.0, 10.0, 300, 0.0, "center")
+        top = pem.export_one("A-TOP", src, 8.0, 10.0, 300, 0.0, "top")
+        bot = pem.export_one("A-BOTTOM", src, 8.0, 10.0, 300, 0.0, "bottom")
+        eq(cen["crop_pct"], 16.7, "2:3 → 8×10 크롭률")
+        eq(cen["out_px"], [2400, 3000], "출력 픽셀")
+        c_top, c_bot = corners(cen)
+        t_top, t_bot = corners(top)
+        b_top, b_bot = corners(bot)
+        ok(not red(c_top) and not blue(c_bot), f"center 인데 위·아래 표식이 남음 — {c_top} {c_bot}")
+        ok(red(t_top), f"--anchor top 인데 윗변(머리)이 잘렸다 — {t_top}")
+        ok(not blue(t_bot), f"--anchor top 인데 아랫변이 남았다 — {t_bot}")
+        ok(blue(b_bot), f"--anchor bottom 인데 아랫변이 잘렸다 — {b_bot}")
+        ok(not red(b_top), f"--anchor bottom 인데 윗변이 남았다 — {b_top}")
+        # fit 은 아무것도 자르지 않는다 — 양끝 표식이 모두 살아 있어야 한다
+        fit = pem.export_one("A-FIT", src, 8.0, 10.0, 300, 0.0, "center", mode="fit", bg="#ffffff")
+        eq(fit["crop_pct"], 0.0, "fit 인데 크롭이 생김")
+        ok(fit["pad_pct"] > 0, f"fit 인데 여백이 0 — {fit['pad_pct']}")
+    shutil.rmtree(out, ignore_errors=True)
+    src.unlink(missing_ok=True)
+
+
 # ============================================================ 감상본(viewer)
 @contextlib.contextmanager
 def approved_scene(b: Box):
