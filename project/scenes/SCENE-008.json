@@ -2,7 +2,7 @@
   "scene_id": "SCENE-008",
   "scene_order": 8,
   "episode": 2,
-  "status": "REVIEW_HUMAN",
+  "status": "APPROVED",
   "location_id": "LOC-003",
   "time": "밤",
   "characters": [
@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, seen from behind, walking home slowly as she lingers half a step back holding his sleeve, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, night",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, full body, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, from behind, walking away down the lamplit promenade side by side, she lingers half a step behind holding the hem of his sleeve, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, night",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -46,20 +46,26 @@
   "assets": {
     "raw_images": [
       "images/raw/SCENE-008/cf_02ade1_2.png",
+      "images/raw/SCENE-008/cf_27e061_1.png",
       "images/raw/SCENE-008/cf_35478d_2.png",
+      "images/raw/SCENE-008/cf_5976f8_1.png",
+      "images/raw/SCENE-008/cf_89f479_2.png",
       "images/raw/SCENE-008/cf_a07c8c_1.png",
       "images/raw/SCENE-008/cf_c5c3fe_1.png",
-      "images/raw/SCENE-008/cf_d36edd_1.png"
+      "images/raw/SCENE-008/cf_d36edd_1.png",
+      "images/raw/SCENE-008/cf_fcb5b8_2.png"
     ],
-    "selected_image": "images/raw/SCENE-008/cf_d36edd_1.png"
+    "selected_image": "images/raw/SCENE-008/cf_fcb5b8_2.png"
   },
   "review": {
     "auto": "PASS",
-    "human": "PENDING",
+    "human": "PASS",
     "score": null,
     "notes": [
-      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정"
+      "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
+      "[2026-09-15] REVISE → PROMPT: 인물 동일성 파탄(밝은 갈색 반묶음 → 어두운 긴 생머리, 흰 셔츠 → 검은 재킷)과 wide 가 근접 투샷으로 나온 문제 — 거리 태그·머리색 네거티브를 넣고 재조립",
+      "[2026-09-15] REVISE → PROMPT: 거리·의상·머리색은 잡혔으나 두 후보 모두 정면 — 연출은 '멀어지는 뒷모습'이다. 동작문을 'from behind' 로 다시 쓴다"
     ]
   },
-  "version": 2
+  "version": 4
 }
