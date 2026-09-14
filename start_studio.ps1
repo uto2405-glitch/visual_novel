@@ -5,6 +5,9 @@
 #   powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan          # 폰에서 접속
 #   powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Model "models\Qwen3.5-9B-Q4_K_M.gguf"
 #   powershell -ExecutionPolicy Bypass -File start_studio.ps1 -NoLlm        # 스튜디오만
+#   powershell -ExecutionPolicy Bypass -File start_studio.ps1 -NoComfy      # 이미지 엔진은 그대로
+#
+# 더블클릭용: start_studio.bat (같은 폴더) — 실행 정책을 건드리지 않고 이 파일을 부른다.
 #
 # 이미 떠 있는 서버는 다시 켜지 않는다(중복 기동·모델 재적재 방지).
 # 이 창을 닫거나 Ctrl+C 하면 스튜디오만 멈춘다. LLM 은 계속 떠 있다:
@@ -15,6 +18,7 @@ param(
     [string]$Model = "",          # serve.ps1 에 넘길 모델 경로 (생략 시 serve.ps1 기본값)
     [int]$Port = 8765,            # 웹 스튜디오 포트
     [switch]$NoLlm,               # 로컬 LLM 은 건드리지 않음
+    [switch]$NoComfy,             # 이미지 엔진(ComfyUI)은 건드리지 않음
     [switch]$NoBrowser            # 브라우저 자동 열기 안 함
 )
 
@@ -44,19 +48,89 @@ if (-not (Test-Path $webapp)) {
     exit 1
 }
 
-# ---------------------------------------------------------------- 1) 로컬 LLM
+# ---------------------------------------------------------------- 1) 이미지 엔진
+# 매니페스트 image_generator.engine 이 comfyui 면 로컬 ComfyUI 가 떠 있어야 [🎨 이미지 생성]
+# 버튼이 동작한다. 스튜디오만 먼저 켜 두면 사람이 그 사실을 생성 실패로 처음 알게 된다 —
+# 그래서 기동 순서의 맨 앞에 둔다. 주소는 COMFYUI_URL > 매니페스트 > 기본값 순이고,
+# **이미 떠 있으면 절대 건드리지 않는다**(모델 재적재·VRAM 중복 점유 방지).
+$comfyPort = 8188
+$comfyUrl = "http://127.0.0.1:8188"
+$engine = "makefun"
+try {
+    $mf = Get-Content (Join-Path $repo "project\manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    $ig = $mf.image_generator
+    if ($ig) {
+        if ($ig.engine) { $engine = "$($ig.engine)".ToLower() }
+        elseif ($ig.comfyui) { $engine = "comfyui" }
+        if ($ig.comfyui -and $ig.comfyui.api -and $ig.comfyui.api.base_url) { $comfyUrl = "$($ig.comfyui.api.base_url)" }
+    }
+} catch { }
+if ($env:COMFYUI_URL) { $comfyUrl = $env:COMFYUI_URL }
+$comfyUrl = $comfyUrl.TrimEnd("/")
+try { $comfyPort = ([uri]$comfyUrl).Port } catch { }
+
+function Test-Comfy {
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$comfyUrl/system_stats"
+        return ($r.StatusCode -eq 200)
+    } catch { return $false }
+}
+
+if ($engine -ne "comfyui") {
+    Write-Output "[1/3] 이미지 엔진: $engine — ComfyUI 기동 없음"
+} elseif ($NoComfy) {
+    Write-Output "[1/3] 이미지 엔진: 건너뜀 (-NoComfy)"
+} elseif (Test-Comfy) {
+    Write-Output "[1/3] 이미지 엔진: ComfyUI 이미 실행 중 ($comfyUrl) — 그대로 사용"
+} else {
+    # 내 PC 에 있는 설치본만 띄운다. 주소가 다른 기기를 가리키면 그 기기에서 켜야 한다.
+    $local = $false
+    try { $local = @("127.0.0.1", "localhost", "::1") -contains ([uri]$comfyUrl).Host } catch { }
+    $comfyHome = ""
+    foreach ($cand in @($env:COMFYUI_HOME, (Join-Path (Split-Path $repo -Parent) "ComfyUI"))) {
+        if ($cand -and (Test-Path (Join-Path $cand "main.py"))) { $comfyHome = $cand; break }
+    }
+    if (-not $local) {
+        Write-Output "[1/3] 이미지 엔진: $comfyUrl 응답 없음 — 다른 기기 주소라 여기서 켤 수 없습니다."
+        Write-Step "그 PC 에서 ComfyUI 를 켜세요. 확인: python tools\comfyui_client.py --check --online"
+    } elseif (-not $comfyHome) {
+        Write-Output "[1/3] 이미지 엔진: ComfyUI 설치본을 찾지 못했습니다 — 건너뜀"
+        Write-Step "환경변수 COMFYUI_HOME 에 ComfyUI 폴더(main.py 가 있는 곳)를 지정하세요."
+    } else {
+        Write-Output "[1/3] 이미지 엔진 기동 중... ($comfyHome)"
+        $comfyPy = Join-Path $comfyHome "venv\Scripts\python.exe"
+        if (-not (Test-Path $comfyPy)) { $comfyPy = "python" }
+        $listen = if ($Lan) { "0.0.0.0" } else { "127.0.0.1" }
+        Start-Process -FilePath $comfyPy `
+            -ArgumentList @("main.py", "--listen", $listen, "--port", "$comfyPort") `
+            -WorkingDirectory $comfyHome -WindowStyle Minimized | Out-Null
+        $ready = $false
+        for ($i = 1; $i -le 60; $i++) {
+            if (Test-Comfy) { $ready = $true; break }
+            Start-Sleep -Seconds 2
+        }
+        if ($ready) {
+            Write-Step "준비 완료 ($comfyUrl)"
+        } else {
+            Write-Step "아직 응답이 없습니다 — 첫 기동은 느릴 수 있습니다. 스튜디오는 그대로 띄웁니다."
+            Write-Step "확인: python tools\comfyui_client.py --check --online"
+        }
+    }
+}
+
+# ---------------------------------------------------------------- 2) 로컬 LLM
 if ($NoLlm) {
-    Write-Output "[1/2] 로컬 LLM: 건너뜀 (-NoLlm)"
+    Write-Output "[2/3] 로컬 LLM: 건너뜀 (-NoLlm)"
 } else {
     $running = Get-Process llama-server -ErrorAction SilentlyContinue
     if ($running) {
         # serve.ps1 은 기존 프로세스를 죽이고 다시 띄운다 → 이미 떠 있으면 호출하지 않는다.
-        Write-Output "[1/2] 로컬 LLM: 이미 실행 중 (PID $($running[0].Id)) — 그대로 사용"
+        Write-Output "[2/3] 로컬 LLM: 이미 실행 중 (PID $($running[0].Id)) — 그대로 사용"
     } elseif (-not (Test-Path $serve)) {
-        Write-Output "[1/2] 로컬 LLM: serve.ps1 을 찾을 수 없어 건너뜀 ($serve)"
+        Write-Output "[2/3] 로컬 LLM: serve.ps1 을 찾을 수 없어 건너뜀 ($serve)"
         Write-Step "스토리·프롬프트·대화 탭은 서버가 켜질 때까지 동작하지 않습니다."
     } else {
-        Write-Output "[1/2] 로컬 LLM 기동 중..."
+        Write-Output "[2/3] 로컬 LLM 기동 중..."
         if ($Model) {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $serve -Model $Model
         } else {
@@ -81,20 +155,20 @@ if ($NoLlm) {
     }
 }
 
-# ---------------------------------------------------------------- 2) 웹 스튜디오
+# ---------------------------------------------------------------- 3) 웹 스튜디오
 $busy = $null
 try {
     $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 } catch { }
 if ($busy) {
-    Write-Output "[2/2] 웹 스튜디오: 포트 $Port 가 이미 사용 중 — 중복 기동하지 않습니다."
+    Write-Output "[3/3] 웹 스튜디오: 포트 $Port 가 이미 사용 중 — 중복 기동하지 않습니다."
     Write-Output ""
     Write-Output "  이미 열려 있는 주소: http://127.0.0.1:$Port/"
     Write-Output "  다른 포트로 띄우려면: -Port 8766"
     exit 0
 }
 
-Write-Output "[2/2] 웹 스튜디오 기동 (포트 $Port)"
+Write-Output "[3/3] 웹 스튜디오 기동 (포트 $Port)"
 if ($Lan) {
     Write-Step "LAN 모드 — 같은 와이파이의 다른 기기도 접속할 수 있습니다. 신뢰된 네트워크에서만 쓰세요."
 }
