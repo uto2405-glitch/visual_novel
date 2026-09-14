@@ -2319,6 +2319,39 @@ def w34(b: Box):
     has(str(out.get("url", "")), "http://", "scheme 이 사라짐")
 
 
+@test("webapp", "W35 POST 본문 상한 — 위조 Content-Length(음수·초과)를 본문 읽기 전에 400", web=True)
+def w35(b: Box):
+    """음수 Content-Length 를 통과시키면 아래 read(length) 가 read(-1) 이 되어, 연결이
+    끊길 때까지 본문을 통째로 메모리에 읽어들이고 json 파싱까지 겹친다 — 인증도 받지 않은
+    LAN 기기가 서버를 메모리 고갈(OOM)로 떨굴 수 있었다. 초과·음수 모두 **본문을 읽기 전에**
+    400 으로 거절하고, 서버는 그 뒤에도 살아남아야 한다. 정상 본문은 그대로 통과한다.
+    """
+    wa = b.mod("webapp")
+    eq(int(getattr(wa, "MAX_BODY_BYTES", 0)), 10_000_000, "본문 상한 상수(MAX_BODY_BYTES)")
+    # 위조 헤더 + 작은 본문으로 관문만 친다(실제로 10MB 를 보내지 않는다). urllib 은
+    # 호출부가 준 Content-Length 를 그대로 실어 보낸다 — 그래서 음수도 서버까지 도달한다.
+    for cl, label in (("-1", "음수"), (str(10_000_001), "상한 초과")):
+        code, _h, _b = b.raw("/api/check", data=b"{}",
+                             headers={"Content-Type": "application/json",
+                                      "Content-Length": cl}, timeout=10)
+        eq(code, 400, f"{label} Content-Length 가 400 으로 막히지 않음")
+    eq(b.raw("/api/state")[0], 200, "본문 공격 뒤 서버 생존")
+    st, _d = b.wapi("/api/chat-history", {})   # 본문을 실어야 POST — 정상 요청은 그대로 통과
+    eq(st, 200, "위조 헤더 없는 정상 POST 회귀")
+
+
+@test("webapp", "W36 /img·/dl 경로의 널바이트·잘못된 문자 → 404(500 아님)", web=True)
+def w36(b: Box):
+    """safe_path 래퍼는 vn_core.safe_path 가 resolve 단계에서 던지는 ValueError(널바이트 등)·
+    OSError 도 삼켜 '없는 파일'(404)로 답한다. 예전에는 이런 경로가 500(서버 오류)으로 새어
+    나갔다 — 잘못된 요청 경로는 사용자 잘못이지 서버 고장이 아니다.
+    """
+    for path in ("/img/%00CLAUDE.md", "/dl/%00x", "/img/a%00/b.png"):
+        code, _h, _b = b.raw(path)
+        eq(code, 404, f"{path} 가 404 가 아님(500 누출)")
+    eq(b.raw("/api/state")[0], 200, "잘못된 경로 뒤 서버 생존")
+
+
 # ============================================================ PIN 인증(LAN)
 @contextlib.contextmanager
 def auth_state(wa, pin: str = "482913"):

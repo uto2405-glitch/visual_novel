@@ -121,6 +121,9 @@ SERVER_PORT = 0              # 실제 바인딩된 포트 — CSRF 출처 검증
 IMG_MAX_AGE = 86400          # /img 브라우저 캐시(초) — ETag 로 무효화되므로 길게 잡는다
 GZIP_MIN = 1024              # 이보다 작은 응답은 압축 이득보다 오버헤드가 크다
 DL_CHUNK = 256 * 1024        # /dl 전송 단위 — 큰 감상본을 통째로 메모리에 올리지 않는다
+MAX_BODY_BYTES = 10_000_000  # POST 본문 상한. 초과·음수 길이는 본문을 읽지 않고 거절한다
+                             # (음수 Content-Length 는 rfile.read(-1) 로 이어져 인증 전에
+                             #  서버를 메모리 고갈로 떨굴 수 있다 — 상한과 같은 문에서 막는다).
 SEC_HEADERS = [("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer")]
 # 스튜디오 화면(및 잠금 화면)의 콘텐츠 보안 정책. 페이지는 자기 출처 안에서만 동작한다
 # — 외부 스크립트·외부 연결·프레임 삽입이 전부 막히므로, 혹시 주입이 생겨도 유출 경로가 없다.
@@ -1012,7 +1015,10 @@ def safe_path(base: Path, rel: str) -> Path | None:
     """
     try:
         return vn_core.safe_path(base, rel)
-    except VNError:
+    except (VNError, ValueError, OSError):
+        # ValueError: 경로에 널바이트 등 OS 가 거부하는 문자(resolve 가 던진다).
+        # OSError: 이름이 너무 길거나 잘못된 경로. 어느 쪽이든 '없는 파일'(404)로 답한다
+        # — 500(서버 오류)이 아니라. 잘못된 요청 경로는 사용자 잘못이지 서버 고장이 아니다.
         return None
 
 
@@ -1388,11 +1394,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 10_000_000:
-                # 본문을 읽지 않고 거절하므로 이 연결은 재사용할 수 없다(남은 바이트가
-                # 다음 요청으로 해석되면 안 된다) — keep-alive 를 끊는다.
+            if length < 0 or length > MAX_BODY_BYTES:
+                # 초과분은 물론, **음수 길이**(위조 헤더)도 여기서 막는다. 음수를 통과시키면
+                # 아래 read(length) 가 read(-1) 이 되어 연결이 끊길 때까지 본문을 통째로
+                # 메모리에 읽어들이고 json 파싱까지 겹쳐, 인증도 받지 않은 기기가 서버를
+                # 메모리 고갈(OOM)로 떨굴 수 있다. 본문을 읽지 않고 거절하므로 이 연결은
+                # 재사용할 수 없다(남은 바이트가 다음 요청으로 해석되면 안 된다) — keep-alive 를 끊는다.
                 self.close_connection = True
-                raise VNError("요청 본문이 너무 큽니다(10MB 초과).")
+                raise VNError("요청 본문 길이가 올바르지 않습니다(10MB 이하만 허용).")
             body = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
                 raise VNError("요청 본문이 JSON 객체가 아닙니다.")
