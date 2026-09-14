@@ -42,6 +42,17 @@ if (-not $py) {
     Write-Output "[중단] python 을 찾을 수 없습니다. Python 3.9+ 설치 후 PATH 를 확인하세요."
     exit 1
 }
+
+# 저장소 전용 가상환경을 우선한다. 있는 이유는 딱 하나, Pillow 다 — 없는 파이썬으로
+# 스튜디오를 띄우면 /img?w=224 가 썸네일 대신 원본 PNG 를 그대로 보낸다(장면 탭 한 번에 수십 MB).
+# 없으면 그냥 python 으로 돌아간다 — 가상환경은 선택사항이지 준비물이 아니다.
+$studioPy = Join-Path $repo ".venv\Scripts\python.exe"
+if (Test-Path $studioPy) {
+    $pyNote = "저장소 가상환경 .venv (Pillow 포함 — 썸네일·인화 마스터·컨택트시트 동작)"
+} else {
+    $studioPy = "python"
+    $pyNote = "시스템 python (.venv 없음 — Pillow 가 없으면 썸네일 없이 원본 PNG 를 보냅니다: python -m venv .venv)"
+}
 $webapp = Join-Path $repo "tools\webapp.py"
 if (-not (Test-Path $webapp)) {
     Write-Output "[중단] tools\webapp.py 가 없습니다: $webapp"
@@ -169,6 +180,7 @@ if ($busy) {
 }
 
 Write-Output "[3/3] 웹 스튜디오 기동 (포트 $Port)"
+Write-Step "파이썬: $pyNote"
 if ($Lan) {
     Write-Step "LAN 모드 — 같은 와이파이의 다른 기기도 접속할 수 있습니다. 신뢰된 네트워크에서만 쓰세요."
 }
@@ -183,5 +195,5 @@ if ($NoBrowser) { $argv.Add("--no-browser") }
 Set-Location $repo
 # python 이 stderr 로 뭔가 쓸 때 PowerShell 이 이를 종료 오류로 승격시키지 않게 한다.
 $ErrorActionPreference = "Continue"
-& python $argv.ToArray()
+& $studioPy $argv.ToArray()
 exit $LASTEXITCODE

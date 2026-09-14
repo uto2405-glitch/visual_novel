@@ -7,6 +7,9 @@ secrets/
 # 파이썬
 __pycache__/
 *.pyc
+# 프로젝트 전용 가상환경 (Pillow 전용 — tools/*.py 는 여전히 표준 라이브러리만 쓴다).
+# 기기마다 다시 만드는 물건이라 추적하지 않는다: python -m venv .venv && .venv\Scripts\python -m pip install Pillow
+.venv/
 
 # 대용량 생성물 (원본은 별도 백업 권장)
 images/raw/

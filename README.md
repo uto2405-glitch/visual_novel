@@ -41,7 +41,21 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 
 스튜디오만 따로 띄우려면 `python tools/webapp.py` (기본 `http://127.0.0.1:8765/`).
 이미 떠 있는 서버는 `start_studio.ps1` 이 다시 켜지 않는다(모델 재적재 방지).
-요구사항: **Python 3.9+**. Pillow 는 인화 마스터·감상본 최적화에만 쓰인다(없어도 나머지는 동작).
+요구사항: **Python 3.9+**. 도구(`tools/*.py`)는 표준 라이브러리만 쓰므로 그 자체로는 설치할 것이 없다.
+
+### .venv — Pillow 하나를 위한 저장소 전용 가상환경 (선택)
+Pillow 가 없는 파이썬으로 스튜디오를 띄우면 `/img?w=224` 가 썸네일 대신 **원본 PNG 를 그대로 보낸다**
+— 장면 탭 한 번에 수십 MB, 폰에서는 그대로 데이터 요금이다. 인화 마스터 굽기·컨택트시트·PWA 컷 아이콘도 함께 막힌다.
+그래서 시스템 파이썬은 건드리지 않고 저장소 안에만 Pillow 를 둔다:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install Pillow
+```
+
+`start_studio.ps1` 은 `.venv\Scripts\python.exe` 가 있으면 그쪽으로, 없으면 그냥 `python` 으로 스튜디오를
+띄우고 어느 쪽을 썼는지 기동 로그에 한 줄로 알린다. **없어도 감상·검사·생성은 전부 동작한다** — 선택사항이다.
+`.venv/` 는 git 제외 대상이라 기기마다 위 두 줄로 다시 만든다. 지금 상태는 `python tools/doctor.py` 가 알려 준다.
 
 ## 워크플로우
 

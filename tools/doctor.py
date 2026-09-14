@@ -67,9 +67,22 @@ def check_pillow() -> None:
             pv = getattr(Image, "__version__", "?")
         add("실행 환경", "Pillow(인화·감상본 최적화)", OK, f"설치됨 {pv}")
     except ImportError:
-        add("실행 환경", "Pillow(인화·감상본 최적화)", WARN,
-            "없음 — 감상·검사·생성은 그대로 되지만 인화 마스터 굽기(print_export)는 막힙니다",
-            "python -m pip install Pillow")
+        # 없을 때 가장 비싼 값을 치르는 것은 인화가 아니라 스튜디오다 — webapp.make_thumb 이
+        # None 을 돌려 /img?w=224 가 원본 PNG 를 그대로 보낸다. 그래서 먼저 말한다.
+        # 고치는 방법도 시스템 파이썬을 건드리는 쪽이 아니라 저장소 안의 .venv 이다.
+        venv_py = ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        if venv_py.is_file():
+            fix = ("저장소에 .venv 가 이미 있습니다 — 그쪽으로 실행하세요: "
+                   f"{venv_py} tools\\webapp.py --port 8765 "
+                   "(start_studio.ps1 은 이미 .venv 를 먼저 찾습니다)")
+        else:
+            fix = ("저장소 전용 가상환경을 만듭니다(시스템 파이썬은 그대로 둡니다): "
+                   "python -m venv .venv · .venv\\Scripts\\python -m pip install Pillow "
+                   "— 그 뒤 start_studio.ps1 이 알아서 .venv 를 씁니다")
+        add("실행 환경", "Pillow(썸네일·인화·감상본 최적화)", WARN,
+            "없음 — 스튜디오가 썸네일을 못 만들어 원본 PNG 를 그대로 보냅니다"
+            "(장면 탭 한 번에 수십 MB). 인화 마스터 굽기·컨택트시트도 막힙니다",
+            fix)
 
 
 # 없으면 파이프라인이 멈추는 파일. vn_core(공용 기반)·scene_ops(상태 전이)는 다른 도구가 의존한다.
