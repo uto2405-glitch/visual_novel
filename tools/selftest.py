@@ -345,6 +345,8 @@ class Box:
         self.env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         self._mods: dict[str, object] = {}
         self._syspath: list[str] | None = None
+        self._lockdir_keep: str | None = None      # VN_GEN_LOCK_DIR 원래 값
+        self._lockdir_had = False                  # 원래 설정돼 있었는가(복원용)
         self._web: subprocess.Popen | None = None
         self._web_error: str | None = None
         self._mock = None
@@ -370,6 +372,16 @@ class Box:
         real = str((SRC / "tools").resolve())
         sys.path[:] = [p for p in sys.path if str(Path(p or ".").resolve()) != real]
         sys.path.insert(0, str(self.root / "tools"))
+        # 생성 잠금도 샌드박스 안에서만 떨어지게 **명시**한다. 예전에도 결과는 같았지만
+        # 그건 위의 sys.path 교체가 만든 부수효과였다(gen_jobs → import vn_core → 샌드박스
+        # 사본 → ROOT 가 샌드박스). vn_core 가 먼저 sys.modules 에 실리는 경로가 하나만
+        # 생겨도 조용히 깨지고, 그때는 사람이 쓰는 저장소의 장면이 최대 STALE_SEC 동안
+        # 잠긴다. 우연 대신 계약으로 바꾼다 — U11b 가 이 계약을 지킨다.
+        lock_dir = str(self.root / "logs" / "gen_locks")
+        self._lockdir_had = "VN_GEN_LOCK_DIR" in os.environ
+        self._lockdir_keep = os.environ.get("VN_GEN_LOCK_DIR")
+        os.environ["VN_GEN_LOCK_DIR"] = lock_dir     # in-process 로 적재하는 사본
+        self.env["VN_GEN_LOCK_DIR"] = lock_dir       # b.run 으로 띄우는 하위 프로세스
 
     def close(self) -> None:
         if self._web is not None:
@@ -385,6 +397,10 @@ class Box:
         if self._syspath is not None:
             sys.path[:] = self._syspath
             self._syspath = None
+        if self._lockdir_had:
+            os.environ["VN_GEN_LOCK_DIR"] = self._lockdir_keep or ""
+        else:
+            os.environ.pop("VN_GEN_LOCK_DIR", None)
 
     # -------------------------------------------------- 경로 · 데이터
     def p(self, rel: str) -> Path:
@@ -6324,6 +6340,9 @@ def u11(b: Box):
     돌리면 메모리 표시로는 막을 수 없다 — 표시가 프로세스마다 따로 있기 때문이다.
     그래서 여기서는 진짜 별도 프로세스를 띄워 확인한다(MakeFun 호출은 하지 않는다 —
     선점만).
+
+    되찾는 규칙도 같은 자리에서 본다: 주인이 **죽었으면 즉시**, 주인을 믿을 수 없으면
+    **STALE_SEC 뒤에**. 두 겹의 경계가 무너지면 한쪽은 20분 잠김이고 다른 쪽은 중복 과금이다.
     """
     gj = need_mod(b, "gen_jobs")
     lock_dir = getattr(gj, "LOCK_DIR", None)
@@ -6348,15 +6367,27 @@ def u11(b: Box):
         gj.release(held)
         eq(claim_in_subprocess(held), "CLAIMED", "해제한 장면을 다른 프로세스가 잡지 못함")
 
-        # 2) 급사한 프로세스가 남긴 좌초 잠금 — 살아 있는 동안은 막고, 늙으면 회수한다
+        # 2) 급사한 프로세스가 남긴 잠금 — **주인이 죽었으므로 즉시** 회수된다.
+        #    예전에는 여기서 REJECTED 를 기대했다. 그 기대가 곧 결함이었다: 렌더를 죽인
+        #    사람이 같은 장면을 20분 기다려야 했고, 실제로 그 잠금이 게이트를 한 번 깼다.
+        #    지금은 잠금에 적힌 pid 가 이 기기에서 죽었음이 확실하면 그 자리에서 열어 준다.
         eq(claim_in_subprocess(other, crash=True), "CLAIMED", "선점 실패")
-        eq(claim_in_subprocess(other), "REJECTED", "남은 잠금이 다음 프로세스를 막지 않음")
         locks = sorted(Path(lock_dir).glob("*")) if lock_dir else []
         stale = [p for p in locks if other in p.name]
-        ok(stale, f"좌초 잠금 파일을 찾지 못함: {[p.name for p in locks]}")
+        ok(stale, f"급사가 남긴 잠금 파일을 찾지 못함: {[p.name for p in locks]}")
+        eq(claim_in_subprocess(other), "CLAIMED",
+           "주인이 죽은 잠금이 아직도 다음 프로세스를 막는다 — 20분 잠김이 그대로다")
+
+        # 3) 시각 규칙은 그대로 살아 있다 — pid 를 믿을 수 없는 잠금(다른 기기·옛 형식)이
+        #    남는 자리다. 살아 있는 동안은 막고, STALE_SEC 을 넘기면 회수한다.
+        foreign = {"scene_id": other, "pid": 1, "host": "다른기기",
+                   "label": "남의 기기 렌더", "token": "zz"}
+        path = Path(lock_dir) / f"{other}.lock"
+        path.write_text(json.dumps(foreign), encoding="utf-8")
+        eq(claim_in_subprocess(other), "REJECTED",
+           "pid 를 믿을 수 없는 잠금을 그냥 열었다 — 남의 렌더 위에 두 번 굽는다")
         old = time.time() - stale_sec - 60
-        for p in stale:
-            os.utime(p, (old, old))
+        os.utime(path, (old, old))
         eq(claim_in_subprocess(other), "CLAIMED",
            f"{stale_sec / 60:.0f}분 넘게 방치된 좌초 잠금이 회수되지 않음(영구 잠금)")
     finally:
@@ -6371,6 +6402,153 @@ def u11(b: Box):
                 if held in p.name or other in p.name:
                     with contextlib.suppress(OSError):
                         p.unlink()
+
+
+# 잠금을 잡은 채 **살아서 기다리는** 조각 — 주인이 살아 있는 동안은 회수되면 안 된다.
+_HOLD_PY = (
+    "import sys, time\n"
+    "sys.path.insert(0, 'tools')\n"
+    "import gen_jobs\n"
+    "gen_jobs.claim(sys.argv[1])\n"
+    "print('CLAIMED', flush=True)\n"
+    "time.sleep(float(sys.argv[2]))\n"
+)
+
+
+def dead_pid() -> int:
+    """확실히 끝난 프로세스의 pid — 생존 판정의 False 쪽을 재는 재료."""
+    p = subprocess.Popen([PY, "-c", "pass"])
+    p.wait()
+    time.sleep(0.2)          # 종료 직후 핸들이 정리될 틈
+    return p.pid
+
+
+@test("unit", "U11b gen_jobs — 샌드박스 잠금은 샌드박스 안에서만(살아 있는 저장소를 잠그지 않는다)")
+def u11b(b: Box):
+    """selftest 는 사람이 실제로 쓰는 저장소 옆에서 돈다. 잠금 파일이 그 저장소의
+    logs/gen_locks 에 떨어지면 검사 한 번이 사람의 장면을 최대 STALE_SEC(20분) 잠근다 —
+    스튜디오에서 [생성]을 눌렀는데 "이미 생성 중입니다" 가 나오고, 원인이 될 프로세스는
+    어디에도 없다.
+
+    결과만 보면 예전에도 샌드박스 안에 떨어졌다. 다만 그건 Box.build 가 sys.path 를
+    갈아끼운 **부수효과**였고(gen_jobs → import vn_core → 샌드박스 사본), 부수효과는
+    계약이 아니다. 지금은 VN_GEN_LOCK_DIR 로 대놓고 지정하며, 여기서 그것을 지킨다.
+    """
+    gj = need_mod(b, "gen_jobs")
+    lock_dir = getattr(gj, "LOCK_DIR", None)
+    ok(lock_dir is not None, "gen_jobs 에 LOCK_DIR 이 없다 — 프로세스 경계 잠금이 사라졌다")
+    box_root = Path(b.root).resolve()
+    real_locks = (SRC / "logs" / "gen_locks").resolve()
+    got = Path(lock_dir).resolve()
+    ok(str(got).startswith(str(box_root)), f"샌드박스 잠금 폴더가 샌드박스 밖이다: {got}")
+    ok(got != real_locks and not str(got).startswith(str(real_locks) + os.sep),
+       f"샌드박스가 살아 있는 저장소에 잠금을 떨어뜨린다: {got}")
+
+    # 말이 아니라 파일로 확인한다 — 실제로 잡아 보고 진짜 저장소 쪽 개수를 센다.
+    before = sorted(q.name for q in real_locks.glob("*")) if real_locks.is_dir() else []
+    sid = "SCENE-931"
+    gj.claim(sid, "잠금 위치 검사")
+    try:
+        ok((Path(lock_dir) / f"{sid}.lock").exists(),
+           f"샌드박스 안에 잠금 파일이 생기지 않음: {lock_dir}")
+        after = sorted(q.name for q in real_locks.glob("*")) if real_locks.is_dir() else []
+        eq(after, before,
+           f"살아 있는 저장소에 잠금이 떨어졌다 — 늘어난 것: {sorted(set(after) - set(before))}")
+    finally:
+        with contextlib.suppress(Exception):
+            gj.release(sid)
+
+    # 하위 프로세스(b.run)도 같은 폴더를 봐야 한다 — 아니면 U11 의 교차 프로세스 검증이
+    # 서로 다른 폴더를 보며 통과해 버린다(가짜 초록불).
+    rc, out = b.run("-c", "import sys\nsys.path.insert(0, 'tools')\nimport gen_jobs\n"
+                          "print(gen_jobs.LOCK_DIR)\n")
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    child = Path(lines[-1].strip()).resolve() if lines else None
+    eq(child, got, f"하위 프로세스가 다른 잠금 폴더를 본다(rc={rc}) — {out[:200]}")
+
+
+@test("unit", "U11c gen_jobs — 주인이 죽은 잠금은 즉시 회수 · 살아 있으면 그대로 거절(중복 과금)")
+def u11c(b: Box):
+    """좌초 잠금을 되찾는 규칙이 '20분 기다리기' 하나뿐이면, 렌더를 죽인 사람은 같은 장면을
+    20분 동안 다시 그릴 수 없다(실제로 그렇게 게이트가 한 번 깨졌다). 그래서 pid 겹을 앞에
+    두되 **확실할 때만** 회수한다. 여기서 재는 것은 세 방향이다.
+
+      (1) 주인 프로세스가 죽었다 → mtime 을 건드리지 않고도 곧바로 다시 잡힌다
+      (2) 주인 프로세스가 살아 있다 → 여전히 거절된다 — 이게 중복 과금 방지의 본체다
+      (3) pid 를 믿을 수 없는 잠금(옛 형식·다른 기기) → (1) 로 새지 않고 시각 규칙에 남는다
+
+    (3) 이 특히 중요하다. 남의 기기에서 적힌 pid 번호가 우연히 내 기기에서 비어 있다는
+    이유로 잠금을 열면, 새 규칙이 막으려던 바로 그 사고(같은 이미지 2회 과금)를 만든다.
+    """
+    gj = need_mod(b, "gen_jobs")
+    err = getattr(gj, "VNError", RuntimeError)
+    lock_dir = Path(need_attr(gj, "LOCK_DIR", "프로세스 경계 잠금 폴더"))
+    alive = need_attr(gj, "_pid_alive", "pid 생존 판정 — 죽은 잠금을 즉시 회수하는 근거")
+    host = getattr(gj, "_HOST", None)
+    ok(host, "잠금에 기기 이름이 없다 — pid 판정을 안전하게 할 수 없다")
+    stale_sec = float(getattr(gj, "STALE_SEC", 1200) or 1200)
+
+    # 판정 함수 자체 — 확실할 때만 답하고, 모르면 None 이어야 한다.
+    eq(alive(os.getpid()), True, "자기 자신을 살아 있다고 보지 못한다")
+    gone = dead_pid()
+    eq(alive(gone), False, f"확실히 죽은 pid {gone} 를 죽었다고 판정하지 못한다")
+
+    held, foreign = "SCENE-941", "SCENE-942"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_lock(sid: str, info: dict, age: float = 0.0) -> None:
+        path = lock_dir / f"{sid}.lock"
+        path.write_text(json.dumps(info), encoding="utf-8")
+        if age:
+            t = time.time() - age
+            os.utime(path, (t, t))
+
+    try:
+        # (1) 이 기기의 죽은 pid → 방금 찍힌 잠금이라도 즉시 회수된다
+        write_lock(held, {"scene_id": held, "pid": gone, "host": host,
+                          "label": "죽은 렌더", "token": "zz"})
+        gj.claim(held)                       # 여기서 막히면 20분 잠김이 그대로다
+        eq(gj.status(held)["running"], True, "회수 뒤 선점이 잡히지 않음")
+        gj.release(held)
+
+        # (2) 살아 있는 주인 → 여전히 거절
+        proc = subprocess.Popen([PY, "-c", _HOLD_PY, held, "60"], cwd=b.root, env=b.env,
+                                stdout=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace")
+        try:
+            line = (proc.stdout.readline() or "").strip()
+            ok(line == "CLAIMED", f"살아 있는 잠금을 만들지 못함 — {line!r}")
+            raises(lambda: gj.claim(held), err,
+                   "주인이 살아 있는 잠금을 회수했다 — 같은 이미지에 두 번 과금된다")
+            eq(gj.status(held)["running"], True, "살아 있는 남의 작업이 화면에 안 보인다")
+        finally:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=10)
+        # 죽인 직후 — 시각 겹은 아직 막지만(방금 찍힌 mtime) pid 겹이 곧바로 열어 줘야 한다
+        for _ in range(60):
+            if alive(proc.pid) is False:
+                break
+            time.sleep(0.1)
+        gj.claim(held)
+        gj.release(held)
+
+        # (3) pid 를 믿을 수 없는 잠금은 시각 규칙에 남는다 — 새로 뚫린 구멍이 없어야 한다
+        for label, info in (("옛 형식(host 없음)", {"scene_id": foreign, "pid": gone}),
+                            ("다른 기기", {"scene_id": foreign, "pid": gone,
+                                          "host": str(host) + "-다른기기"})):
+            write_lock(foreign, info)
+            raises(lambda: gj.claim(foreign), err,
+                   f"{label} 잠금을 pid 만 보고 회수했다 — 남의 렌더를 덮어쓴다")
+            write_lock(foreign, info, age=stale_sec + 60)
+            gj.claim(foreign)                # 늙으면 예전처럼 회수된다
+            gj.release(foreign)
+    finally:
+        for sid in (held, foreign):
+            with contextlib.suppress(Exception):
+                gj.release(sid)
+            with contextlib.suppress(OSError):
+                (lock_dir / f"{sid}.lock").unlink()
 
 
 def str_consts(b: Box, mod: str) -> list[str]:

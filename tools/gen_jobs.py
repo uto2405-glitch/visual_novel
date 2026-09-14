@@ -17,12 +17,29 @@
      장면을 CLI ``--all-pending`` 이 다시 굽는 이중 과금을 막는 것은 이 파일 하나다.
 
      한계도 같이 적는다. 이 잠금은 **협조적**이다 — 이 모듈을 지나는 경로만 지킨다.
-     프로세스가 갑자기 죽으면 파일이 남는데, Windows 에서는 pid 로 생존을 확인할 안전한
-     방법이 없어(``os.kill(pid, 0)`` 이 프로세스를 죽인다) **시각 기반 만료**로만 회수한다:
-     마지막 진행 갱신에서 :data:`STALE_SEC`(20분)이 지난 잠금은 좌초로 보고 회수한다.
-     서버를 Ctrl+C 로 끄는 정상 경로에서는 webapp 이 :func:`release_all` 로 즉시 풀어 주므로
-     기다릴 일이 없다. logs/ 에 쓸 수 없는 환경이면 잠금 파일을 만들지 못하고 (1) 만 남는다
-     — 그때는 경고를 로그에 남긴다(보호가 조용히 사라지지 않게).
+     logs/ 에 쓸 수 없는 환경이면 잠금 파일을 만들지 못하고 (1) 만 남는다 — 그때는 경고를
+     로그에 남긴다(보호가 조용히 사라지지 않게).
+
+남은 잠금을 되찾는 규칙은 **두 겹**이고, 각 겹이 무엇을 보장하는지가 이 파일의 핵심이다.
+어느 겹도 "살아 있을지도 모르는" 잠금은 절대 회수하지 않는다 — 회수 = 같은 이미지 2회 과금.
+
+  a. **pid 겹(즉시·확실)** — 잠금에 적힌 주인이 *이 기기의 죽은 프로세스*임이 **확실할 때만**
+     곧바로 회수한다. 판정은 `host` 가 이 기기와 같고, `pid` 가 살아 있지 않다고 OS 가
+     단언할 때뿐이다. 모르겠으면(다른 기기·옛 형식 잠금·권한 거부·조회 실패) 회수하지 않고
+     b 로 넘긴다. Windows 에서 ``os.kill(pid, 0)`` 은 조회가 아니라 TerminateProcess 라
+     **부르면 그 프로세스가 죽는다** — 그래서 조회 전용 핸들(OpenProcess)만 연다.
+     이 겹이 있어서 렌더를 죽인 뒤 20분을 기다리지 않아도 된다.
+  b. **시각 겹(보수적·최후)** — 마지막 진행 갱신에서 :data:`STALE_SEC`(20분)이 지난 잠금은
+     좌초로 보고 회수한다. pid 를 믿을 수 없는 모든 경우에 남는 그물이고, 예전부터 있던
+     유일한 규칙이다. :func:`note` 가 시계를 밀어 주므로 오래 걸리는 생성은 스스로 늙지 않는다.
+
+  서버를 Ctrl+C 로 끄는 정상 경로에서는 webapp 이 :func:`release_all` 로 즉시 풀어 주므로
+  어느 겹도 기다릴 일이 없다.
+
+잠금이 사는 폴더는 :data:`LOCK_DIR` 이고 기본값은 ``logs/gen_locks`` 다. 환경변수
+``VN_GEN_LOCK_DIR`` 로 **명시적으로** 옮길 수 있다 — 샌드박스(selftest)가 살아 있는
+저장소에 잠금을 떨어뜨리지 않게 하는 장치다. 예전에는 샌드박스가 sys.path 를 갈아끼운
+덕에 *우연히* 자기 트리를 봤다. 우연은 규약이 아니므로 이제 대놓고 지정한다.
 
 공개 API
   claim(sid, label="생성")         생성 선점 — 이미 진행 중이면 VNError
@@ -48,10 +65,12 @@ Python 3.9+ · 표준 라이브러리만. (makefun_client 를 import 하지 않�
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import json
 import logging
 import os
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -64,7 +83,16 @@ import vn_core  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
 STALE_SEC = 1200      # 이 시간을 넘긴 '진행 중' 표시·잠금은 죽은 작업으로 본다(20분)
-LOCK_DIR = vn_core.LOGS / "gen_locks"     # 프로세스 경계 잠금 파일이 사는 곳
+
+# 잠금 파일이 사는 곳. 기본은 저장소의 logs/gen_locks 이고, VN_GEN_LOCK_DIR 로 옮길 수 있다.
+# 옮길 이유는 하나뿐이다 — **샌드박스가 살아 있는 저장소를 건드리지 않게** 하는 것.
+# (selftest 가 이 값을 지정한다. 사람이 쓸 일은 없다.)
+_LOCK_DIR_ENV = (os.environ.get("VN_GEN_LOCK_DIR") or "").strip()
+LOCK_DIR = Path(_LOCK_DIR_ENV) if _LOCK_DIR_ENV else vn_core.LOGS / "gen_locks"
+
+# 잠금에 적어 두는 기기 이름. pid 는 기기 안에서만 뜻이 있으므로, 이 값이 다르면
+# (예: 공유 폴더에 올린 저장소) pid 판정을 아예 하지 않는다.
+_HOST = socket.gethostname()
 
 _LOCK = threading.Lock()
 _JOBS: dict[str, dict] = {}     # scene_id → {running, message, ts}
@@ -104,6 +132,73 @@ def _lock_age(path: Path) -> float | None:
         return None
 
 
+_STILL_ACTIVE = 259                          # Windows GetExitCodeProcess: 아직 돌고 있다
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000  # 조회 전용 — 죽일 권한은 요구하지 않는다
+_ERROR_INVALID_PARAMETER = 87                # OpenProcess 가 이걸 주면 그런 pid 가 없다는 뜻
+
+
+def _pid_alive(pid: int) -> bool | None:
+    """이 기기에서 pid 가 살아 있는가. **확실할 때만** True/False, 모르면 None.
+
+    None 을 돌리는 경우가 이 함수의 존재 이유다 — 모르면 부르는 쪽이 잠금을 회수하지
+    않고 시각 규칙으로 넘어간다. "아마 죽었을 것" 으로 회수하면 중복 과금이 된다.
+
+    Windows 에서는 ``os.kill(pid, 0)`` 을 쓰지 않는다. POSIX 와 달리 그 호출은
+    TerminateProcess 로 내려가 **묻는 순간 그 프로세스를 죽인다** — 남의 렌더를 죽여 놓고
+    "죽어 있더라" 고 답하는 셈이다. 그래서 조회 전용 핸들만 연다.
+    """
+    if os.name == "nt":
+        try:
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.OpenProcess.restype = ctypes.c_void_p      # HANDLE — 기본 c_int 면 64비트에서 잘린다
+            k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+            k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        except (AttributeError, OSError):                  # ctypes 를 못 쓰는 환경
+            return None
+        handle = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+        if not handle:
+            # 87 = 그런 pid 가 없다(확실히 죽음). 5(접근 거부) 등은 '있는데 못 본다' 일 수 있다.
+            return False if ctypes.get_last_error() == _ERROR_INVALID_PARAMETER else None
+        try:
+            code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return None
+            # 종료 코드 259 로 정상 종료한 프로세스도 여기서는 '살아 있음' 으로 보인다.
+            # 그 착각의 대가는 '조금 늦게 회수' 뿐이다 — 안전한 쪽으로 틀린다.
+            return code.value == _STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)                # POSIX 에서는 이것이 진짜 조회다
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                    # 있는데 내 것이 아니다 = 살아 있다
+    except OSError:
+        return None
+    return True
+
+
+def _is_dead_owner(info: dict) -> bool:
+    """잠금 주인이 **이 기기의 죽은 프로세스**임이 확실할 때만 True.
+
+    확실하지 않은 모든 경우는 False 다(= 회수하지 않는다). 그래서 이 함수는 중복 과금을
+    새로 만들 수 없다 — 기껏해야 시각 규칙이 원래 하던 일을 그대로 하게 둘 뿐이다:
+
+      * ``host`` 가 없다(옛 형식 잠금) 또는 이 기기가 아니다 → pid 는 남의 번호다
+      * pid 가 없거나 정수가 아니다 → 판정할 것이 없다
+      * pid 가 나 자신이다 → 같은 프로세스의 경합이라 메모리 표시(_JOBS)가 판단할 몫
+      * :func:`_pid_alive` 가 True 나 None → 살아 있거나 모른다
+    """
+    if not isinstance(info, dict) or info.get("host") != _HOST:
+        return False
+    pid = info.get("pid")
+    if not isinstance(pid, int) or pid <= 0 or pid == os.getpid():
+        return False
+    return _pid_alive(pid) is False
+
+
 def _owner(info: dict) -> str:
     """잠금 주인 설명 — 어느 창·터미널을 봐야 하는지 사람에게 알려 주는 문구."""
     bits = [str(info.get("label") or "생성")]
@@ -133,6 +228,14 @@ def _acquire_file(sid: str, label: str) -> str:
             if age is None:   # 방금 풀렸다 — 곧바로 다시 잡아 본다
                 continue
             info = _read_lock(path)
+            # (a) pid 겹 — 주인이 이 기기의 죽은 프로세스라고 OS 가 단언하면 즉시 회수한다.
+            #     렌더를 죽였을 때 같은 장면이 20분간 잠기던 것이 이 줄로 사라진다.
+            if _is_dead_owner(info):
+                log.warning("죽은 생성 잠금 회수 %s — 주인 프로세스가 없습니다(%s)", sid, _owner(info))
+                with contextlib.suppress(OSError):
+                    os.unlink(path)
+                continue
+            # (b) 시각 겹 — pid 를 믿을 수 없는 나머지 전부. 살아 있을 가능성이 남아 있으면 막는다.
             if age < STALE_SEC:
                 raise VNError(f"{sid} 이미지를 이미 생성 중입니다({_owner(info)}). "
                               f"끝난 뒤 다시 시도하세요.")
@@ -146,7 +249,8 @@ def _acquire_file(sid: str, label: str) -> str:
         token = secrets.token_hex(8)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump({"scene_id": sid, "pid": os.getpid(), "label": str(label),
+                json.dump({"scene_id": sid, "pid": os.getpid(), "host": _HOST,
+                           "label": str(label),
                            "started_at": datetime.now().isoformat(timespec="seconds"),
                            "token": token}, fh, ensure_ascii=False)
         except OSError as exc:   # 내용은 설명일 뿐 — 파일이 있다는 사실이 잠금이다
@@ -279,8 +383,12 @@ def status(sid: str) -> dict:
         path = _lock_path(sid)
         age = _lock_age(path)
         if age is not None and age < STALE_SEC:
-            return {"running": True, "scene_id": sid,
-                    "message": f"다른 곳에서 생성 중입니다({_owner(_read_lock(path))})."}
+            # 회수 규칙과 같은 두 겹을 본다. 그러지 않으면 죽은 잠금을 두고 화면은
+            # "다른 곳에서 생성 중" 이라 말하는데 [생성] 버튼은 통과하는 모순이 생긴다.
+            info = _read_lock(path)
+            if not _is_dead_owner(info):
+                return {"running": True, "scene_id": sid,
+                        "message": f"다른 곳에서 생성 중입니다({_owner(info)})."}
     out = {"running": running_now, "message": str(job.get("message", "")), "scene_id": sid}
     err = str(job.get("error", "") or "")
     if err and not running_now:
