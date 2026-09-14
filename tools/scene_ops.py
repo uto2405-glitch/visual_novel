@@ -376,6 +376,22 @@ def scene_anchors(sc: dict) -> list[tuple[str, str]]:
     return out
 
 
+# 인원수·다인물 단서 — "이 프롬프트가 사람 수를 말하고 있는가" 의 판정.
+# 문구를 **만드는** 곳은 prompt_build.composition_tags 하나지만, 그것을 되묻는 쪽(scene_lint)과
+# 만드는 쪽이 같은 계층이라 서로를 import 할 수 없다(계층 2 ↔ 2). 그래서 판정만 아래층인
+# 여기에 둔다 — 자가진단이 "조립부가 낸 태그는 반드시 이 판정을 통과한다"로 둘을 묶는다.
+_COMPOSITION_CUE = re.compile(
+    r"(?:\b\d+\s*(?:girls?|boys?|people|persons?|characters?|men|women)\b"
+    r"|\bcouple\b|\bboth\s+characters\b|\ball\s+characters\b"
+    r"|\bmultiple\s+(?:girls|boys|people)\b|\btwo\s+(?:people|characters)\b)",
+    re.IGNORECASE)
+
+
+def has_composition_cue(text: str) -> bool:
+    """프롬프트에 인원수/다인물 단서(1girl·2people·couple·both characters …)가 있는가."""
+    return bool(_COMPOSITION_CUE.search(str(text or "")))
+
+
 def missing_anchors(sc: dict, text: str) -> list[str]:
     """장면에 필요한 인물/장소 앵커 중 프롬프트에 빠진 원문 목록.
 

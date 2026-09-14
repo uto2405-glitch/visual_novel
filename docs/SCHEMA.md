@@ -176,7 +176,7 @@
 | `name` | str | ⬜ | 사람 | 감상본 화자 이름 · 대화 페르소나 | — |
 | `version` | int | ⬜ | 사람 | 프롬프트 입력 표기 | — |
 | `profile.age` | str | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 | — |
-| `profile.gender_presentation` | str | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 | — |
+| `profile.gender_presentation` | str | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 · **프롬프트 인원수 태그**(`prompt_build`) | — |
 | `profile.hair` / `eyes` | str | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 | — |
 | `profile.build` | str | ⬜ | 사람 | 프롬프트 입력 | — |
 | `profile.wardrobe` | str | ⬜ | 사람 | 프롬프트 입력 · 대화 페르소나 | — |
@@ -190,6 +190,13 @@
 
 **`prompt_anchor` 는 사실상 필수다.** 장면이 `IMAGE` 단계에 오르면 A6 이 "그 캐릭터의
 `prompt_anchor` 가 기준정보에 없음"으로 FAIL 한다. 컷 간 얼굴·의상 일관성의 유일한 근거다.
+
+> **`gender_presentation` 은 이제 그림에도 영향을 준다.** 프롬프트 조립이 이 값으로 인원수
+> 태그(`1girl` · `1boy` · `2people` · `couple`)를 만든다(§2.3). 읽는 규칙은
+> `prompt_build.FEMALE_WORDS`/`MALE_WORDS` — `"여성"·"여자"·"소녀"·`영어 `female/woman/girl`
+> 은 여성, `"남성"·"남자"·"소년"·`영어 `male/man/boy` 는 남성으로 읽고, 그 밖의 값(빈 값 포함)은
+> **모름**으로 두고 총원만 센다(`2people`). 비워 두어도 프롬프트가 깨지지는 않지만, 두 사람
+> 장면에서 성별 태그가 빠지면 모델이 인물을 하나만 그릴 확률이 다시 올라간다.
 
 **이 표가 캐릭터 스키마의 정본이다.** 캐릭터는 별도 파일이 아니라 `manifest.characters[]`
 안에 산다. `templates/character.json` 은 여기에 붙여넣을 항목 1개짜리 조각일 뿐이다(§4).
@@ -391,7 +398,7 @@ FAIL 이 아니다.
 | `purpose` | str | ⬜ | 프롬프트 입력 · 스튜디오 카드 · 컨택트시트 라벨 · 감상본 | — |
 | `action_beat` | str | ⬜ | 프롬프트 입력 · 직전 장면 연속성 | — |
 | `emotion` | str | ⬜ | 프롬프트 입력 · `scene_lint` 감정 반복 | — |
-| `camera.shot` | str | ⬜ | 프롬프트 입력 · `scene_lint` 컷 반복·어휘 | — |
+| `camera.shot` | str | ⬜ | 프롬프트 입력 · **프롬프트 구도 힌트**(`prompt_build`) · `scene_lint` 컷 반복·어휘 | — |
 | `camera.angle` | str | ⬜ | 프롬프트 입력 · `scene_lint` 어휘 | — |
 | `camera.framing` | str | ⬜ | 프롬프트 입력 | — |
 | `camera.focus` | str | ⬜ | 프롬프트 입력 | — |
@@ -432,6 +439,34 @@ angle: eye-level / high-angle / low-angle / overhead /
 **A6 이 보는 것**: `grok_output` 안에 이 장면 `characters` 전원의 `prompt_anchor` **원문**이
 (또는 `character_id` 문자열이) 들어 있는가, 장소 앵커가 들어 있는가. 이게 컷 간 일관성의 근거다.
 `scene_lint` 는 그 역방향 — **등장 목록에 없는** 인물의 앵커가 섞였는지도 경고한다.
+
+#### 인원수·구도 태그 — 앵커 **앞**에 붙는 한 줄
+
+A6 를 통과해도 그림에 사람이 하나만 나오는 사고가 있었다(1차 렌더: SCENE-005 에는 두 번째
+인물이 아예 없었다). 앵커는 자연어 묘사라 **사람 수를 세어 주지 않기 때문**이다 — 모델은
+`"<여자 묘사> and <남자 묘사>"` 를 한 사람의 긴 묘사로 읽는다. 그래서 `prompt_build` 가
+앵커보다 **먼저** 인원수·구도 태그를 한 줄 넣는다(정본: `prompt_build.composition_tags`).
+
+```
+<화풍>, portrait 2:3, two-shot, 1girl, 1boy, 2people, couple,
+both characters fully visible, facing each other, <인물 앵커…>, <동작>, <장소 앵커>, <시간대>
+```
+
+| 무엇에서 나오나 | 규칙 |
+|---|---|
+| `characters[]` + 각 인물의 `profile.gender_presentation` (§1.6) | 성별 수 → `1girl` · `1boy` · `2girls` …, 성별 미상은 `1person`/`N people`. 2인 이상이면 총원 `N people` 을 덧붙이고, 여성 1 + 남성 1 이면 `couple` |
+| `camera.shot` (§2.2 표준 어휘) | 2인 이상일 때만 구도 힌트: `two-shot` → `both characters fully visible, facing each other` · `over-the-shoulder` → `over-the-shoulder view, both characters visible` · 그 밖 → `both characters visible`(3인 이상은 `all characters visible`) |
+| 좁게 잡은 컷(`close-up`·`extreme-close-up`·`medium-close-up`·`insert`·`pov`) | 구도 힌트를 **넣지 않는다** — 연출 의도를 뒤집지 않기 위해 |
+
+**태그는 엔진을 보지 않는다.** 프롬프트는 장면에 저장되고 어느 엔진이 그릴지는 매니페스트
+한 줄(`image_generator.engine`)로 바뀌므로, 엔진별 문구를 굳혀 두면 엔진을 바꾼 순간 저장된
+프롬프트가 전부 틀린 문구가 된다. `1girl, 1boy, couple` 은 애니 계열 체크포인트가 가장 잘 따르는
+표기이면서 자연어로 읽어도 뜻이 통해 MakeFun 쪽에도 그대로 실린다.
+
+이미 만들어 둔 프롬프트에는 이 줄이 없다 — **프롬프트를 다시 만들 때 붙는다.** 그 사이를
+`scene_lint` 가 자문으로 알려 준다(PASS/FAIL 아님): `composition-cue`(2인 이상인데 인원수 단서
+없음) · `two-shot-single`(`camera.shot` 이 `two-shot` 인데 프롬프트에 든 인물 앵커가 하나뿐).
+단서가 있는지의 판정은 `scene_ops.has_composition_cue` 하나다.
 
 ### 2.4 `dialogue[]`
 

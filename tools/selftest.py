@@ -5027,6 +5027,75 @@ def u07(b: Box):
     has(bare, anchor_l, "LLM 실패 시 장소 앵커까지 사라짐")
 
 
+@test("unit", "U17 prompt_build — 다인물 컷의 인원수 태그(앵커 원문은 그대로 · 린터와 같은 어휘)")
+def u17(b: Box):
+    """두 사람이 나오는 컷이 **한 사람만** 그려지던 문제의 잠금장치.
+
+    앵커는 자연어 묘사라 사람 수를 세어 주지 않는다(A6 는 앵커가 있는지만 본다). 그래서
+    조립부가 앵커 **앞에** 인원수 태그를 넣는다. 여기서 함께 묶는 것이 두 가지다 —
+    ① 태그가 붙어도 A6 앵커 원문은 하나도 다치지 않는다,
+    ② 태그를 만드는 쪽(prompt_build)과 그것을 되묻는 쪽(scene_ops.has_composition_cue ·
+       scene_lint)이 같은 어휘를 본다. 갈라지면 린터가 영영 조용해진다.
+    """
+    pb, so, sl = b.mod("prompt_build"), b.mod("scene_ops"), b.mod("scene_lint")
+    mfp = b.p("project/manifest.json")
+    keep = mfp.read_text(encoding="utf-8")
+    try:
+        mf = read_json(mfp)
+        girl = mf["characters"][0]
+        boy = json.loads(json.dumps(girl))
+        boy.update({"character_id": "CHAR-777", "name": "선배",
+                    "prompt_anchor": "18-year-old Korean boy, neat short black hair, white shirt"})
+        boy.setdefault("profile", {})["gender_presentation"] = "남성"
+        mf["characters"].append(boy)
+        write_json(mfp, mf)
+        anchor_g, anchor_b = girl["prompt_anchor"], boy["prompt_anchor"]
+        anchor_l = mf["locations"][0]["prompt_anchor"]
+        sc = read_json(b.root / "examples" / "scenes" / "SCENE-001.json")
+        sc["characters"] = [girl["character_id"], "CHAR-777"]
+        sc["camera"] = {"shot": "two-shot", "angle": "eye-level"}
+
+        tags = pb.composition_tags(sc)
+        for want in ("1girl", "1boy", "2people", "couple", "facing each other"):
+            has(tags, want, f"구도 태그에 {want!r} 가 없음")
+        ok(so.has_composition_cue(tags),
+           f"조립부가 낸 태그를 판정부가 못 알아봄(어휘가 갈렸다): {tags!r}")
+
+        def boom(*_a, **_k):
+            raise Failed("action 을 줬는데도 로컬 LLM 을 불렀다")
+
+        with patched(pb.local_llm, "chat", lambda *a, **k: "walking side by side"):
+            text = pb.compose_image_prompt(sc)
+        for label, anchor in (("인물", anchor_g), ("두 번째 인물", anchor_b), ("장소", anchor_l)):
+            has(text, anchor, f"{label} 앵커 원문이 사라짐(A6 FAIL)")
+        ok(so.has_composition_cue(text), "완성된 프롬프트에 인원수 단서가 없음")
+        ok(text.index("1girl") < text.index(anchor_g), "인원수 태그가 앵커 뒤에 옴(묘사보다 앞에 와야 한다)")
+        hasnt(text, "two-shot shot", "샷 표기가 'shot shot' 으로 겹침")
+        with patched(pb.local_llm, "chat", boom):      # 서버가 꺼져 있어도 다시 만들 수 있다
+            eq(pb.compose_image_prompt(sc, action="walking side by side"), text,
+               "action 경로가 LLM 경로와 다른 프롬프트를 만듦")
+
+        eq(pb.composition_tags(read_json(b.root / "examples" / "scenes" / "SCENE-001.json")),
+           "1girl", "1인 장면 태그")
+        hasnt(pb.composition_tags(dict(sc, camera={"shot": "close-up"})), "visible",
+              "일부러 좁게 잡은 컷에 '둘 다 보이게' 가 붙음(연출 의도 뒤집기)")
+
+        # 린터(자문)도 같은 사실을 본다 — 경고가 나야 할 때만 난다
+        def rules(prompt_text):
+            got = []
+            sl._check_composition([dict(sc, prompt={"grok_output": prompt_text})], mf,
+                                  lambda lv, rule, msg, sid="-": got.append(rule))
+            return got
+
+        ok("composition-cue" in rules(f"{anchor_g}, and {anchor_b}, {anchor_l}"),
+           "인원수 단서가 없는 2인 프롬프트를 린터가 그냥 보냄")
+        ok("two-shot-single" in rules(f"{tags}, {anchor_g}, {anchor_l}"),
+           "two-shot 인데 앵커가 하나뿐인 프롬프트를 린터가 그냥 보냄")
+        eq(rules(text), [], "제대로 만든 프롬프트에 경고가 남음")
+    finally:
+        mfp.write_text(keep, encoding="utf-8")
+
+
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")
 def u08(b: Box):
     gj = need_mod(b, "gen_jobs")

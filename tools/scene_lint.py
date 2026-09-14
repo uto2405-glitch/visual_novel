@@ -10,6 +10,8 @@
   3) 프롬프트 상태: 되돌림(revise) 뒤에 남은 프롬프트와 그 때문에 지금 A6 가 FAIL 을 내는
      장면 — '고장'과 '아직 다시 만들지 않은 중간 상태'를 구분해 준다.
      stale-prompt / anchor-missing.
+     여기에 A6 의 사각지대 하나가 더 있다 — 앵커는 둘인데 인원수 단서가 없어 실제로는
+     한 명만 그려지는 컷. composition-cue / two-shot-single.
 
 검사기(check_protocol)는 분기 필드를 보지 않는다 — 분기는 '규격 위반'이 아니라 '설계
 오류'라서 자문 계층이 올바른 위치다. 그래서 여기서는 어떤 경우에도 PASS/FAIL 을 만들지
@@ -186,6 +188,47 @@ def _check_offcast(scenes, mf, add) -> None:
             add("warn", "offcast-anchor",
                 f"등장 목록에 없는 {cid}({_s(c.get('name'))}) 앵커가 프롬프트에 있음 — "
                 "characters 에 추가하거나 프롬프트에서 빼야 인물 수가 어긋나지 않음", sid)
+
+
+def _check_composition(scenes, mf, add) -> None:
+    """다인물 컷의 인원수 단서 — 검사기 A6 의 사각지대('앵커는 둘인데 사람은 하나').
+
+    A6 는 앵커 **원문이 프롬프트에 있는가**만 본다. 앵커 둘이 나란히 있어도 이미지 모델은
+    그것을 한 사람의 긴 묘사로 읽고 하나만 그린다(1차 렌더에서 실제로 그랬다 —
+    SCENE-005 에는 CHAR-002 가 아예 없었다). 인원수 태그를 붙이는 쪽은
+    `prompt_build.composition_tags`, 그것이 붙었는지 되묻는 판정은
+    `scene_ops.has_composition_cue` 하나다(같은 계층끼리 import 하지 않으려고 아래층에 둔다).
+    프롬프트를 다시 만들면 사라지는 경고다 — PASS/FAIL 이 아니다.
+    """
+    import scene_ops   # 판정의 단일 출처(지연 import — 린터는 위층을 모듈 수준에서 안 쓴다)
+    chars = {_s(c.get("character_id")): c for c in mf.get("characters", []) if isinstance(c, dict)}
+    for sc in scenes:
+        sid = _s(sc.get("scene_id", "?"))
+        prompt = _prompt_of(sc)
+        raw = sc.get("characters")
+        listed = [_s(c) for c in (raw if isinstance(raw, list) else []) if _s(c) in chars]
+
+        if prompt and len(listed) >= 2 and not scene_ops.has_composition_cue(prompt):
+            add("warn", "composition-cue",
+                f"등장인물 {len(listed)}명인데 프롬프트에 인원수 단서(1girl·1boy·2people·couple …)가 "
+                "없음 — 앵커만으로는 모델이 사람 수를 세지 않아 한 명만 그려진다. "
+                "프롬프트를 다시 만들면 앵커 앞에 붙는다", sid)
+
+        cam = sc.get("camera") if isinstance(sc.get("camera"), dict) else {}
+        if _cam_canon(_s(cam.get("shot", "")).strip(), STD_SHOTS) != "two-shot":
+            continue
+        if prompt:
+            present = [cid for cid in listed
+                       if _s(chars[cid].get("prompt_anchor")).strip()
+                       and _s(chars[cid].get("prompt_anchor")).strip() in prompt]
+            if len(present) < 2:
+                add("warn", "two-shot-single",
+                    f"camera.shot 이 two-shot 인데 프롬프트에 든 인물 앵커는 {len(present)}명뿐 — "
+                    "두 사람이 함께 잡히는 컷이면 나머지 앵커도 프롬프트에 있어야 한다", sid)
+        elif len(listed) < 2:
+            add("warn", "two-shot-single",
+                f"camera.shot 이 two-shot 인데 등장인물이 {len(listed)}명 — "
+                "characters 를 채우거나 샷을 medium/close-up 으로 바꿀 것", sid)
 
 
 def _check_time(scenes, add) -> None:
@@ -526,6 +569,7 @@ def lint_scenes() -> dict:
                     f"{i}번째 대사가 {len(txt)}자 — 카드 한 장에 길다(≤{LONG_LINE}자 권장)", sid)
 
     _check_offcast(scenes, mf, add)
+    _check_composition(scenes, mf, add)
     _check_time(scenes, add)
     _check_prompt_state(scenes, add)
     _check_camera_vocab(scenes, add)

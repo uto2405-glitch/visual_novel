@@ -5,6 +5,8 @@
 
   * **앵커(인물·장소 원문)는 코드가 조립한다** — 검사기 A6 를 구조적으로 보장하고,
     컷마다 얼굴·배경이 흔들리지 않게 한다.
+  * **인원수·구도 태그도 코드가 넣는다**(`composition_tags`) — 앵커는 사람 수를 세어 주지
+    않아서, 두 사람 장면이 한 사람만 그려지던 문제의 처방이다.
   * **LLM 은 동작·구도 한 문장만 만든다** — 외모·장소를 다시 묘사하면 앵커와 충돌한다.
 
 저장소 규약: **모델에 보내는 프롬프트 문자열은 prompt_build 와 vn_compose 에만 있다.**
@@ -37,6 +39,29 @@ TIME_EN = {"밤": "night", "낮": "daytime", "아침": "morning", "저녁": "eve
 
 STORYLINE_CHARS = 1500   # 컨텍스트에 싣는 스토리라인 길이 상한(토큰·비용 관리)
 CONTEXT_SCENES = 40      # 컨텍스트에 싣는 장면 요약 수 상한
+
+# ------------------------------------------------------- 구도(인원수) 태그의 어휘
+# 두 사람이 나오는 컷인데 한 사람만 그려지던 문제의 처방이다. 앵커는 자연어 묘사라
+# **인원수를 세어 주지 않는다** — 이미지 모델은 "A … and B …" 를 한 사람의 긴 묘사로
+# 읽고 둘 중 하나만 그린다. 수 세기 태그(1girl · 1boy · couple)가 그 셈을 강제한다.
+#
+# **엔진은 보지 않는다 — 태그를 엔진 중립으로 고른다.** 조립부가 체크포인트를 알면
+#   * 프롬프트는 장면에 저장되고(prompt.grok_output) 어느 엔진이 그릴지는 매니페스트
+#     한 줄로 바뀐다 — 엔진별 문구를 굳혀 두면 엔진을 바꾼 순간 저장된 프롬프트가 전부
+#     틀린 문구가 된다.
+#   * 체크포인트 판별(화풍 프리셋)은 이미 comfyui_client 에 있다 — 두 벌이 된다.
+# 그래서 "1girl, 1boy, 2people, couple" 처럼 **자연어로 읽어도 뜻이 통하는** 태그만 쓴다.
+FEMALE_WORDS = ("여성", "여자", "소녀", "female", "woman", "women", "girl")
+MALE_WORDS = ("남성", "남자", "소년", "male", "man", "men", "boy")
+GENDER_EXACT = {"여": "female", "f": "female", "남": "male", "m": "male"}
+
+# 일부러 좁게 잡은 컷 — 여기에 "둘 다 보이게" 를 붙이면 연출 의도를 뒤집는다.
+TIGHT_SHOTS = ("close-up", "extreme-close-up", "medium-close-up", "insert", "pov")
+# 둘 다 프레임에 있어야 하는 컷의 구도 힌트(2인 장면에서만). 어휘는 scene_lint.STD_SHOTS.
+SHOT_COMPOSITION = {"two-shot": "both characters fully visible, facing each other",
+                    "over-the-shoulder": "over-the-shoulder view, both characters visible"}
+PAIR_VISIBLE = "both characters visible"      # 2인 · 그 밖의 샷
+GROUP_VISIBLE = "all characters visible"      # 3인 이상
 
 STORY_SYSTEM_HEAD = (
     "너는 비주얼 노벨/웹툰 스토리 기획 파트너다. 한국어로 간결하고 구체적으로 답한다.\n"
@@ -105,23 +130,108 @@ def story_system_message() -> dict:
     return {"role": "system", "content": STORY_SYSTEM_HEAD + story_context()}
 
 
-def compose_image_prompt(sc: dict) -> str:
+def _shot_key(value) -> str:
+    """카메라 표기 흔들림을 지운 비교용 키 — 'Two-Shot' · 'two shot' → 'twoshot'."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _shot_phrase(shot) -> str:
+    """'medium' → 'medium shot' · 'two-shot' → 'two-shot' ('shot shot' 방지)."""
+    s = str(shot or "").strip() or "medium"
+    return s if _shot_key(s).endswith("shot") else f"{s} shot"
+
+
+def _gender_of(ch: dict) -> str:
+    """캐릭터 기준정보 → 'female' · 'male' · ''(모름). 한국어·영어 표기를 함께 읽는다."""
+    prof = ch.get("profile") if isinstance(ch.get("profile"), dict) else {}
+    s = str(prof.get("gender_presentation", "") or "").strip().lower()
+    if not s:
+        return ""
+    if s in GENDER_EXACT:
+        return GENDER_EXACT[s]
+    if any(w in s for w in FEMALE_WORDS):   # 'female'·'woman' 안에 'male'·'man' 이 있다 → 여성 먼저
+        return "female"
+    if any(w in s for w in MALE_WORDS):
+        return "male"
+    return ""
+
+
+def scene_cast(sc: dict, mf: dict | None = None) -> list:
+    """장면 등장인물 중 기준정보에 있는 것만 **순서대로·중복 없이** — 조립과 태그의 공통 입력."""
+    mf = vn_core.load_manifest() if mf is None else mf
+    chars = {c.get("character_id"): c for c in mf.get("characters", []) if isinstance(c, dict)}
+    ids, seen = [], set()
+    for cid in (sc.get("characters") if isinstance(sc.get("characters"), list) else []):
+        if cid in chars and cid not in seen:
+            seen.add(cid)
+            ids.append(cid)
+    return ids
+
+
+def composition_tags(sc: dict, mf: dict | None = None) -> str:
+    """장면 → 인원수·구도 태그 한 줄. 등장인물이 없으면 빈 문자열.
+
+    예) 여성 1 + 남성 1 · two-shot →
+    ``1girl, 1boy, 2people, couple, both characters fully visible, facing each other``
+
+    LLM 을 부르지 않는다 — 같은 장면이면 언제나 같은 문자열이다(결정적).
+    '그 단서가 프롬프트에 있는가' 를 되묻는 쪽(scene_lint)은 scene_ops.has_composition_cue 를 본다.
+    """
+    mf = vn_core.load_manifest() if mf is None else mf
+    chars = {c.get("character_id"): c for c in mf.get("characters", []) if isinstance(c, dict)}
+    ids = scene_cast(sc, mf)
+    n = len(ids)
+    if not n:
+        return ""
+    genders = [_gender_of(chars[cid]) for cid in ids]
+    f, m = genders.count("female"), genders.count("male")
+    u = n - f - m
+    tags = []
+    if f:
+        tags.append("1girl" if f == 1 else f"{f}girls")
+    if m:
+        tags.append("1boy" if m == 1 else f"{m}boys")
+    if u:
+        tags.append("1person" if u == 1 else f"{u}people")
+    if n >= 2:
+        tags.append(f"{n}people")            # 총원 — 성별을 모르는 인물이 섞여도 수는 남는다
+        if n == 2 and f == 1 and m == 1:
+            tags.append("couple")
+        cam = sc.get("camera") if isinstance(sc.get("camera"), dict) else {}
+        key = _shot_key(cam.get("shot", ""))
+        if key not in {_shot_key(s) for s in TIGHT_SHOTS}:   # 좁게 잡은 컷은 그대로 둔다
+            hint = {_shot_key(k): v for k, v in SHOT_COMPOSITION.items()}.get(key) if n == 2 else None
+            tags.append(hint or (PAIR_VISIBLE if n == 2 else GROUP_VISIBLE))
+    out, seen = [], set()
+    for t in tags:                           # 2인 전원 성별 미상이면 '2people' 이 두 번 나온다
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return ", ".join(out)
+
+
+def compose_image_prompt(sc: dict, action: str | None = None) -> str:
     """장면 dict → 이미지 프롬프트 문자열.
 
     LLM 응답이 비거나 이상해도 앵커·화풍·구도는 코드가 넣으므로 프롬프트가 무너지지 않는다.
+    ``action`` 을 주면 그 문장을 그대로 쓴다 — 로컬 LLM 이 꺼져 있을 때 프롬프트를 다시
+    만들거나 사람이 동작 문장을 직접 고를 때의 경로다(앵커·화풍·구도는 그대로 코드가 넣는다).
     """
     mf = vn_core.load_manifest()
     chars = {c.get("character_id"): c for c in mf.get("characters", []) if isinstance(c, dict)}
     locs = {l.get("location_id"): l for l in mf.get("locations", []) if isinstance(l, dict)}
-    ask = ("아래 장면을 그림으로 그릴 때의 '동작과 구도'만 영어 한 문장(20단어 이내)으로 써라. "
-           "인물 외모나 장소 묘사는 쓰지 마라. 설명 없이 그 문장만 출력하라.\n"
-           f"목적: {sc.get('purpose', '')}\n동작: {sc.get('action_beat', '')}\n"
-           f"감정: {sc.get('emotion', '')}\n시간: {sc.get('time', '')}")
-    action = local_llm.chat([{"role": "user", "content": ask}], temperature=0.4, max_tokens=120)
+    if action is None:
+        ask = ("아래 장면을 그림으로 그릴 때의 '동작과 구도'만 영어 한 문장(20단어 이내)으로 써라. "
+               "인물 외모나 장소 묘사는 쓰지 마라. 설명 없이 그 문장만 출력하라.\n"
+               f"목적: {sc.get('purpose', '')}\n동작: {sc.get('action_beat', '')}\n"
+               f"감정: {sc.get('emotion', '')}\n시간: {sc.get('time', '')}")
+        action = local_llm.chat([{"role": "user", "content": ask}], temperature=0.4, max_tokens=120)
     action = " ".join(str(action).strip().splitlines()).strip().strip('"')[:220]
     cam = sc.get("camera", {}) if isinstance(sc.get("camera"), dict) else {}
-    parts = [visual_style(sc) + ", portrait 2:3", f"{cam.get('shot', 'medium')} shot"]
-    ids = [c for c in sc.get("characters", []) if c in chars]
+    # 구도 태그는 **앵커보다 앞**에 온다 — 인원수는 묘사가 시작되기 전에 정해져야 한다.
+    parts = [visual_style(sc) + ", portrait 2:3", _shot_phrase(cam.get("shot", "medium")),
+             composition_tags(sc, mf)]
+    ids = scene_cast(sc, mf)
     if ids:
         parts.append(chars[ids[0]].get("prompt_anchor", ""))
     parts.append(action)
