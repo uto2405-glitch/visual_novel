@@ -29,7 +29,7 @@
 | `title` | str | ✅ | 사람 | 감상본 제목 · 컨택트시트 제목 · 스튜디오 헤더 | **A1** 키 존재 |
 | `language` | str | ⬜ | 사람 | (없음) — 표기용 | — |
 | `orchestrator` | obj | ⬜ | 사람 | `local_llm` · `grok_api` · 스튜디오(모드 표시) | — |
-| `image_generator` | obj | ⬜ | 사람 | `makefun_client` | — |
+| `image_generator` | obj | ⬜ | 사람 | `image_gen` · `comfyui_client` · `makefun_client` | — |
 | `output` | obj | ⬜ | 사람 | 프롬프트 조립 · 검사기 · 인화 | **A3** (`min_long_edge_px`) |
 | `dating` | obj | ⬜ | 사람 | 뷰어·감상본 호감도 미터 | — |
 | `episodes` | list | ⬜ | 사람 | 스튜디오 `/api/state` (화 단위 선택) | — |
@@ -57,25 +57,56 @@
 
 ### 1.3 `image_generator` — 이미지 생성 담당
 
+엔진은 둘이고 `engine` 한 줄로 고른다. **ComfyUI(로컬·무료)가 기본**, MakeFun(유료 종량제)은 보조다.
+스튜디오 [🎨 이미지 생성]은 `engine` 을 따르고, 다른 엔진도 설정돼 있으면 보조 버튼이 하나 더 붙는다.
+
+**최상위**
+
 | 필드 | 타입 | 필수 | 읽는 쪽 |
 |---|---|---|---|
-| `provider` | str | ⬜ | 표기용 |
-| `model` | str | ⬜ | `makefun_client` 의 `model_type` (기본 `a2e`) · **레퍼런스 장수 상한도 이 값이 정한다**(아래) |
-| `max_long_edge_px` | int | ⬜ | `makefun_client` **생성 크기 상한** (기본 2048 · 하드 상한 4096) |
-| `max_reference_images` | int | ⬜ | `makefun_client` 레퍼런스 첨부 장수 상한. **템플릿에 없는 선택 필드** — 기본은 모델별(A2E 2 · Seedream 5.0 Pro 10)이고 어떤 값을 적어도 10 을 넘지 않는다 |
-| `skip_face_enhance` | bool | ⬜ | `makefun_client` — 참이면 A2E 얼굴 유사도 보정을 끈다. **템플릿에 없는 선택 필드**이고 레퍼런스를 실제로 보낼 때만 요청에 실린다(기본: 보정 켬) |
-| `api.base_url` | str | ⬜ | `makefun_client` 접속 주소 |
-| `api.token_env` | str | ⬜ | 토큰을 담은 **환경변수 이름** (`MAKEFUN_API_TOKEN`) |
+| `provider` | str | ⬜ | 표기용 (스튜디오 칩 · 버튼 툴팁) |
+| `engine` | str | ⬜ | `image_gen` — `"comfyui"` 또는 `"makefun"`. **없으면 `makefun`**(구 매니페스트 호환) |
+| `max_long_edge_px` | int | ⬜ | 두 엔진 공통 **생성 크기 상한** (기본 2048 · 하드 상한 4096) |
+| `comfyui` | obj | ⬜ | `comfyui_client` — 아래 표 |
+| `makefun` | obj | ⬜ | `makefun_client` — 아래 표 |
 | `note` | str | ⬜ | 사람용 메모 |
 
-이 블록 하나가 **생성·업스케일·업로드·크레딧 조회 네 경로 전부**의 접속 설정이다
-(같은 `base_url`·같은 토큰). 어떤 API 를 쓰고 무엇을 아직 안 붙였는지는
-→ [MAKEFUN_CAPABILITIES.md](MAKEFUN_CAPABILITIES.md)
+**`comfyui`** — 내 PC 의 ComfyUI. 토큰 없음 · 과금 없음. 파일은 `cf_<prompt6>_<n>.png` 로 저장된다.
+
+| 필드 | 기본 | 뜻 |
+|---|---|---|
+| `api.base_url` | `http://127.0.0.1:8188` | ComfyUI 주소. 환경변수 `COMFYUI_URL`(비밀 아님)이 있으면 그것이 우선 |
+| `checkpoint` | `""` | 체크포인트 파일명. 비우면 ComfyUI 가 가진 첫 번째 |
+| `steps` | 30 | 1차 샘플링 스텝 |
+| `negative_prompt` | `""` | 부정 프롬프트. `""`(또는 키 없음) = **코드 기본 문구**(글자·말풍선·워터마크·손 붕괴 억제 — `checkpoint` 의 `""` 와 같은 뜻) · `false` 또는 `"none"` = **끔** · 프리셋 접두어는 어느 쪽이든 앞에 자동으로 붙는다 |
+| `base_long_edge_px` | 1248 | 1차 렌더의 긴 변(SDXL 은 1MP 근처가 최적). 목표(§1.4 `min_long_edge_px`)가 더 크면 2-pass hires fix 로 키우되 **이 값의 2배까지만**(1248 → 2496 · 그 이상은 12GB VRAM 에서 OOM·디테일 뭉개짐 — 잘리고 경고). 더 큰 인화 목표는 이 값을 올리거나(느려짐) 승인 뒤 MakeFun 업스케일 |
+| `hires_denoise` · `hires_steps` | 0.4 · 16 | 2차(확대) 패스의 디노이즈 · 스텝 |
+| `timeout_sec` | 600 | 한 장 대기 상한 — 넘기면 큐에서 지우고 실패로 기록 |
+| `sampler` · `scheduler` · `cfg` · `clip_skip` | `dpmpp_2m` · `karras` · 4.0 · 1 | **템플릿에 없는 선택 필드.** Illustrious/WAI 계열 체크포인트면 프리셋(`euler_ancestral` · `normal` · 6 · 2 · 품질 접두어)이 자동 적용되고, 여기 적은 값은 프리셋보다 **항상 우선**한다 |
+| `prompt_prefix` · `negative_prefix` | `""` · `""` | **템플릿에 없는 선택 필드.** 모든 프롬프트·부정 프롬프트 맨 앞에 **한 번만** 붙는 공통 접두어(이미 있으면 다시 붙지 않는다). 비우면 체크포인트 프리셋의 품질 접두어가 그 자리에 오고, 적으면 프리셋을 덮는다 |
+| `note` | — | 사람용 메모 |
+
+**`makefun`** — MakeFun AI. 생성·업스케일·업로드·크레딧 조회 **네 경로의 공통 접속 설정**이다
+(같은 `base_url`·같은 토큰). 업스케일과 크레딧 조회는 MakeFun 전용이다. 어떤 API 를 쓰고 무엇을
+아직 안 붙였는지는 → [MAKEFUN_CAPABILITIES.md](MAKEFUN_CAPABILITIES.md)
+
+| 필드 | 기본 | 뜻 |
+|---|---|---|
+| `model` | `a2e` | `model_type` · **레퍼런스 장수 상한도 이 값이 정한다**(§1.6) |
+| `api.base_url` | `https://makefun.ai` | 접속 주소(https 만) |
+| `api.token_env` | `MAKEFUN_API_TOKEN` | 토큰을 담은 **환경변수 이름** — 값은 절대 적지 않는다 |
+| `max_reference_images` | 모델별(A2E 2 · Seedream 5.0 Pro 10) | **템플릿에 없는 선택 필드** — 어떤 값을 적어도 10 을 넘지 않는다 |
+| `skip_face_enhance` | false | **템플릿에 없는 선택 필드** — 참이면 A2E 얼굴 유사도 보정을 끈다(레퍼런스를 실제로 보낼 때만 실린다) |
+| `note` | — | 사람용 메모 |
+
+> **구 매니페스트 호환** — `engine` 없이 `model`·`api` 가 최상위에 있는 예전 모양은 그대로 MakeFun 으로 동작한다.
+> `makefun_client` 는 최상위 블록과 `makefun` 블록을 합쳐 읽는다(블록 값이 우선) — 최상위 `model`·`api` 는
+> `makefun` 블록이 없을 때의 폴백이다.
 
 > ### ⚠ `max_long_edge_px` — 인화 해상도의 함정
-> `makefun_client` 는 요청 픽셀을 **이 값으로 잘라 낸다**(`_cap_px()` → `_align8()`).
+> 두 클라이언트 모두 요청 픽셀을 **이 값으로 잘라 낸다**(`_cap_px()` → `_align8()`).
 > 기본값이 2048 이므로 `output.min_long_edge_px` 만 2250·3600 으로 올리면
-> **요청이 조용히 2048 로 깎여 검사기 A3 가 그 장면을 FAIL 시킨다** — 돈은 쓰고 규격은 못 맞춘다.
+> **요청이 조용히 2048 로 깎여 검사기 A3 가 그 장면을 FAIL 시킨다** — MakeFun 이면 돈까지 쓰고 규격은 못 맞춘다.
 > 인화용으로 올릴 때는 **두 값을 함께** 올린다:
 >
 > ```json
@@ -85,7 +116,11 @@
 >
 > 실제로 몇 px 로 요청되는지는 과금 없이 확인할 수 있다:
 > `python tools/makefun_client.py --check` → `생성 크기 1500x2250 (긴 변 2250px · 상한 2560px)`
+> (ComfyUI 는 `python tools/comfyui_client.py --check` — 1차 크기와 hires 여부까지 보여준다)
+> ComfyUI 에는 **hires 2배 상한**이 하나 더 있다(`comfyui.base_long_edge_px` 행) — `--check` 의 `hires 상한 …px` 와 경고로 드러난다.
 > 하드 상한은 4096 이며, 이보다 큰 값을 적어도 4096 으로 잘린다.
+> **생성 크기는 8의 배수로만 나간다** — 상한은 8의 배수로 내려 맞춰지므로(2250 → 2248) 인화 목표가
+> 8의 배수가 아니면 상한은 그보다 큰 8의 배수(2250 → **2256**)로 적는다.
 > 공급자가 실제로 받아 주는 크기는 별개다 — 큰 값은 1장으로 먼저 시험한다.
 
 ### 1.4 `output`
@@ -94,17 +129,17 @@
 |---|---|---|---|---|
 | `mode` | str | ⬜ | (없음) — 표기용 | — |
 | `print_ready` | bool | ⬜ | (없음) — 표기용 | — |
-| `aspect_ratio` | str | ⬜ | `makefun_client` 생성 크기(`W:H`) · 프롬프트 입력 조립(`make_grok_input`) | — |
-| `min_long_edge_px` | int | ⬜ | 검사기 해상도 기준 · `makefun_client` 생성 크기 · `print_preflight` | **A3** (기본 1024) |
+| `aspect_ratio` | str | ⬜ | `comfyui_client` · `makefun_client` 생성 크기(`W:H`) · 프롬프트 입력 조립(`make_grok_input`) | — |
+| `min_long_edge_px` | int | ⬜ | 검사기 해상도 기준 · `comfyui_client` · `makefun_client` 생성 크기 · `print_preflight` | **A3** (기본 1024) |
 | `visual_style` | str | ⬜ | 프롬프트 조립의 **작품 전체 화풍** (최우선) | — |
 
 **화풍 우선순위**: `output.visual_style` → 장면의 `visual_style` → 코드 기본값
 (`vn_core.DEFAULT_VISUAL_STYLE`). 매니페스트에 값이 있으면 장면 오버라이드는 무시된다.
 
-**`aspect_ratio` 는 아직 완전히 배선되지 않았다.** `makefun_client` 는 이 값으로 생성 크기를
-계산하고 `make_grok_input` 은 지시서에 적어 주지만, **`prompt_build` 는 `"portrait 2:3"` 을
-하드코딩**한다(로컬 LLM 경로로 만든 프롬프트 문자열). 2:3 이 아닌 작품을 하려면 그 한 줄도
-함께 고쳐야 한다.
+**`aspect_ratio` 는 아직 완전히 배선되지 않았다.** 두 이미지 클라이언트(`comfyui_client`·
+`makefun_client`)는 이 값으로 생성 크기를 계산하고 `make_grok_input` 은 지시서에 적어 주지만,
+**`prompt_build` 는 `"portrait 2:3"` 을 하드코딩**한다(로컬 LLM 경로로 만든 프롬프트 문자열).
+2:3 이 아닌 작품을 하려면 그 한 줄도 함께 고쳐야 한다.
 
 **`min_long_edge_px` 는 화면 감상 기준이다.** 실물 인화를 하려면 올려야 한다 —
 4×6 엽서 1800px, 5×7 2250px, 8×10 3600px.
@@ -387,8 +422,12 @@ angle: eye-level / high-angle / low-angle / overhead /
 |---|---|---|---|---|---|
 | `grok_input_version` | int | ⬜ | 템플릿 | (없음) — 기록용 | — |
 | `grok_output` | str | ⚠ | `scene_ops.set_prompt` | 이미지 생성 · 스튜디오 · `scene_lint` | **A6** IMAGE 이상 필수 |
-| `external_generator` | str | ⬜ | 사람 | (없음) — 기록용 | — |
-| `external_model` | str | ⬜ | 사람 | (없음) — 기록용 | — |
+| `external_generator` | str | ⬜ | 이미지 생성 클라이언트(자동) 또는 사람 | (없음) — 기록용 | — |
+| `external_model` | str | ⬜ | 이미지 생성 클라이언트(자동) 또는 사람 | (없음) — 기록용 | — |
+
+`external_generator`·`external_model` 은 **어느 엔진·모델이 그렸나**의 기록이다 — 생성이 성공하면
+클라이언트가 `scene_ops.record_external_generator(sid, "ComfyUI", <체크포인트>)` 로 적어 두고(다른 필드는 건드리지 않는다),
+외부 도구로 직접 뽑았으면 사람이 적는다. 검사기는 보지 않는다.
 
 **A6 이 보는 것**: `grok_output` 안에 이 장면 `characters` 전원의 `prompt_anchor` **원문**이
 (또는 `character_id` 문자열이) 들어 있는가, 장소 앵커가 들어 있는가. 이게 컷 간 일관성의 근거다.
@@ -574,10 +613,11 @@ scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, end
 
 | 경로 | 만드는 쪽 | 읽는 쪽 | git | 지우면 잃는 것 |
 |---|---|---|---|---|
-| `images/raw/<scene_id>/` | 업로드 · MakeFun · 폴더 스캔 | 검사기 A3 · 감상본 · 인화 | ✂ 제외 | **원본 컷** — 되돌릴 수 없다 |
-| `images/raw/<scene_id>/_gen_meta.json` | `makefun_client` | (없음) — 사람이 읽는 감사 기록 | ✂ 제외 | 어떤 프롬프트로 뽑았는지의 이력 |
+| `images/raw/<scene_id>/` | 업로드 · ComfyUI · MakeFun · 폴더 스캔 | 검사기 A3 · 감상본 · 인화 | ✂ 제외 | **원본 컷** — 되돌릴 수 없다 |
+| `images/raw/<scene_id>/_gen_meta.json` | `comfyui_client` · `makefun_client` | (없음) — 사람이 읽는 감사 기록 | ✂ 제외 | 어떤 프롬프트·시드로 뽑았는지의 이력 |
 | `project/favorites.json` | 스튜디오 갤러리 ★ | `print_export --only` · 스튜디오 | ✔ 추적 | 인화 후보 ★ 목록 |
 | `logs/makefun_usage.jsonl` | `makefun_client` | 사람 (비용 추적) | ✂ 제외 | **종량제 지출 이력** |
+| `logs/comfyui_usage.jsonl` | `comfyui_client` | 사람 (렌더 이력) | ✂ 제외 | 로컬 렌더 이력 — 과금 없음(§3.3b) |
 | `logs/webapp.log` | 스튜디오 서버 | 사람 (장애 추적) | ✂ 제외 | 오류·생성 실패 기록 |
 | `logs/lan_pin.txt` | 스튜디오 `--lan` | 사람 (PIN 확인) | ✂ 제외 | 이번 실행의 접속 PIN |
 | `logs/gen_locks/<scene_id>.lock` | `gen_jobs.claim` (생성 선점) | `gen_jobs` — 웹·CLI 양쪽 | ✂ 제외 | 없음 — **지워도 된다**(§3.5) |
@@ -632,6 +672,17 @@ scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, end
 | `result_url` | **다운로드가 실패했을 때만** 붙는다 — 결과는 이미 만들어졌고(=과금 완료) 이 주소로 받으면 **다시 결제하지 않는다** |
 | `input_images` | 생성 항목에 붙는 레퍼런스 URL 목록(§1.6). 무엇을 보고 그렸는지의 기록 |
 
+ComfyUI 가 만든 항목은 같은 파일에 같은 모양으로 쌓이되 필드가 몇 개 더 붙는다:
+
+| 필드 | 뜻 |
+|---|---|
+| `engine` | 어느 엔진이 그렸나 — `"comfyui"`. 없으면 MakeFun 항목이다 |
+| `seed` | 그 장의 시드. **같은 체크포인트·프롬프트·시드 = 같은 그림** — 재현과 미세 수정의 열쇠 |
+| `negative` | 실제로 보낸 부정 프롬프트(프리셋 접두어 포함) |
+| `hires` | 2-pass hires fix 를 탔는가(목표가 `base_long_edge_px` 보다 클 때 `true`) |
+| `steps` · `cfg` · `sampler` · `scheduler` · `clip_skip` | 실제 적용된 샘플링 값(프리셋 반영 후) · `model` 은 체크포인트 파일명 |
+| `billable` | **과금 대상인가** — ComfyUI 항목은 항상 `false` |
+
 ### 3.3 `logs/makefun_usage.jsonl`
 
 **append-only** 한 줄 = 한 요청. 종량제 지출을 되짚는 유일한 기록이다.
@@ -658,6 +709,14 @@ scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, end
 > 같은 작은 이미지를 다시 받을 뿐이다. `_gen_meta.json` 항목에도 같은 세 필드가 들어간다.
 >
 > 깎였는지 훑어보기: `python -c "[print(l) for l in open('logs/makefun_usage.jsonl',encoding='utf-8') if 'capped' in l]"`
+
+### 3.3b `logs/comfyui_usage.jsonl`
+
+같은 모양의 **append-only** 대장이지만 지출이 아니라 **로컬 렌더 이력**이다 — `billable` 은 항상 `false`.
+`ts` · `kind`(`text2image`) · `scene_id` · `task_id`(ComfyUI 의 `prompt_id`) · `requested` · `saved` · `ok` ·
+`model`(체크포인트) · `width` · `height` · `hires`(2단 확대 여부) · `seed` · `billable`(항상 `false`) ·
+`error` 를 남긴다. 지워도 잃는 것은 "어느 시드로 뽑았나"
+정도이고 그것도 `_gen_meta.json`(§3.2)에 같이 있다.
 
 ### 3.4 `project/favorites.json`
 

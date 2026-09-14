@@ -39,6 +39,7 @@
       재수출한 이름으로 vn_core 를 썼는데, 계층 4가 계층 2를 지나 계층 0에 닿는 우회로였다.
         scene_ops    장면 상태 전이·필드 편집        vn_compose  장면 구성·대화→장면
         prompt_build 프롬프트 문자열(이미지·스토리챗)  gen_jobs    생성 작업 상태기계
+        image_gen    이미지 엔진 선택(ComfyUI 기본·MakeFun 보조) — 재수령·확대·크레딧은 MakeFun 전용
         talk_store   대화 로그                        print_export/export_viewer  내보내기
       **모델에 보내는 프롬프트 문자열은 이 파일에 한 줄도 없다**(prompt_build·vn_compose 전담).
 
@@ -86,6 +87,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gen_jobs  # noqa: E402
+import image_gen  # noqa: E402
 import local_llm  # noqa: E402
 import make_grok_input  # noqa: E402
 import makefun_client  # noqa: E402
@@ -293,6 +295,8 @@ def state() -> dict:
             "key_set": xai_client.key_set(), "model": model,
             "orch_local": orch_local,
             "mf_token": bool(os.environ.get(makefun_client.TOKEN_ENV, "").strip()),
+            # 이미지 엔진 요약(기본 엔진·모델·host:port·쓸 수 있는 엔진 목록) — 비밀값 없음.
+            "image": image_gen.engine_info(mf or {}),
             "characters": [{"id": c.get("character_id"), "name": c.get("name", "")}
                            for c in (mf or {}).get("characters", [])],
             "favorites": load_favorites(),
@@ -530,8 +534,8 @@ def _candidates(sc: dict) -> int:
     return len(sc.get("assets", {}).get("raw_images", []))
 
 
-def _progress(sid: str, label: str):
-    """MakeFun 폴링 진행을 그대로 진행 표시로 넘기는 콜백.
+def _progress(sid: str, label: str, engine: str | None = None):
+    """엔진 폴링 진행을 그대로 진행 표시로 넘기는 콜백(문구는 image_gen.progress_text 하나).
 
     화면에 경과 시간이 보이는 것도 이유지만, 더 중요한 건 **살아 있다는 신호**다 —
     gen_jobs 의 선점 잠금은 마지막 갱신에서 STALE_SEC 이 지나면 좌초로 보고 회수된다.
@@ -539,30 +543,47 @@ def _progress(sid: str, label: str):
     내주고, 같은 장면이 한 번 더 과금될 수 있다.
     """
     def on_progress(elapsed, status_text):
-        gen_jobs.note(sid, f"MakeFun {label} 중… {float(elapsed):.0f}초 경과 "
-                           f"· 상태 {status_text or '조회중'}")
+        gen_jobs.note(sid, image_gen.progress_text(engine, label, elapsed, status_text))
     return on_progress
 
 
-def r_gen_image(b):
-    """MakeFun AI 로 장면 이미지 생성 → images/raw/<scene>/ 저장 + 자동 등록·검사.
+def r_image_engine(b):
+    """이미지 엔진 상태 — {engine, provider, ok, detail, checkpoints, model, billable}.
 
+    ComfyUI 는 로컬이라 실제로 물어본다(3초 상한). MakeFun 은 토큰 유무만 본다 — 조회조차
+    토큰을 쓰는 실호출이라 '상태 버튼'이 계정을 두드리면 안 된다(그건 /api/credits 의 일이다).
+    """
+    return image_gen.health(b.get("engine") or None)
+
+
+def r_gen_image(b):
+    """설정된 이미지 엔진으로 장면 이미지 생성 → images/raw/<scene>/ 저장 + 자동 등록·검사.
+
+    body.engine 으로 기본 엔진(manifest image_generator.engine)을 한 번만 바꿔 부를 수 있다
+    — ComfyUI 가 기본일 때 "MakeFun 생성(유료)" 보조 버튼이 그 경로다.
     기본은 백그라운드 실행 후 즉시 응답(폰 브라우저 타임아웃 방지) — 진행은 /api/gen-status.
     sync:true 면 예전처럼 끝날 때까지 기다렸다가 결과를 반환한다.
     """
     sid = b.get("scene_id")
+    engine = str(b.get("engine") or image_gen.active_engine()).lower()
+    if engine not in image_gen.ENGINES:
+        raise VNError(f"알 수 없는 이미지 엔진입니다: {str(b.get('engine'))[:40]!r} "
+                      f"(가능: {', '.join(image_gen.ENGINES)})")
+    label = image_gen.label(engine)
     # 승인 잠금 안내는 scene_ops 하나가 낸다 — 라우트마다 다른 문장을 쓰면 같은 거절인데
     # 다음에 할 일(revise 명령)이 화면마다 보이기도 하고 안 보이기도 한다.
     sc = scene_ops.assert_mutable(sid, "이미지를 다시 생성하려면")
     n = max(1, min(int(b.get("n", 1) or 1), 4))
 
     def work():
-        gen_jobs.note(sid, "MakeFun 에 생성 요청 중… (1~3분)")
-        return makefun_client.generate_for_scene(sid, n=n, on_progress=_progress(sid, "생성"))
+        gen_jobs.note(sid, f"{label} 에 생성 요청 중…")
+        return image_gen.generate_for_scene(sid, n=n, engine=engine,
+                                            on_progress=_progress(sid, "생성", engine))
 
     return gen_jobs.start(
         sid, work, "생성", sync=bool(b.get("sync")), count=_candidates(sc),
-        message="MakeFun 생성 중… (1~3분) 진행 상황은 자동으로 갱신됩니다.")
+        message=f"{label} 생성 중… (ComfyUI: 보통 20~90초 / MakeFun: 1~3분) "
+                "진행 상황은 자동으로 갱신됩니다.")
 
 
 def r_refetch(b):
@@ -576,7 +597,7 @@ def r_refetch(b):
 
     def work():
         gen_jobs.note(sid, "이미 만들어진 결과를 다시 받는 중… (무과금)")
-        return makefun_client.refetch_scene(sid, on_progress=_progress(sid, "재수령"))
+        return makefun_client.refetch_scene(sid, on_progress=_progress(sid, "재수령", "makefun"))
 
     return gen_jobs.start(sid, work, "재수령", sync=bool(b.get("sync")),
                           count=_candidates(sc),
@@ -610,7 +631,7 @@ def r_upscale(b):
     # 같은 라벨을 쓴다. 잠금 주인을 알려 주는 문구가 창마다 다른 단어를 쓰면 안 된다.
     def work():
         gen_jobs.note(sid, "원본 업로드 후 MakeFun 업스케일 요청 중… (1~3분)")
-        return makefun_client.upscale_scene(sid, on_progress=_progress(sid, "업스케일"))
+        return makefun_client.upscale_scene(sid, on_progress=_progress(sid, "업스케일", "makefun"))
 
     return gen_jobs.start(
         sid, work, "업스케일", sync=bool(b.get("sync")), register=False,
@@ -642,8 +663,35 @@ def r_gen_status(b):
     return gen_jobs.status(b.get("scene_id"))
 
 
+def _shown_url(url: str) -> str:
+    """화면으로 나가는 주소는 scheme://host:port 만 — user:pw@(basic-auth)는 싣지 않는다.
+
+    doctor·image_gen 이 쓰는 규칙과 같다(vn_core.host_port). LOCAL_LLM_URL 은 비밀값이 아니지만
+    리버스 프록시 뒤에 두면 자격증명이 붙는 자리라, 브라우저로 그대로 내보내지 않는다.
+    """
+    raw = str(url or "").strip()
+    try:
+        host = vn_core.host_port(raw)
+        scheme = urllib.parse.urlsplit(raw).scheme
+    except ValueError:
+        return ""
+    return f"{scheme}://{host}" if host and scheme else host
+
+
 def r_talk_status(b):
-    return local_llm.status()
+    """로컬 LLM 상태 — {up, url, models|error}. 주소는 마스킹해서 내보낸다.
+
+    studio.js 는 up 만 읽지만(그리고 구서버 호환으로 messages 를 찾는다), 응답 전체가 화면·
+    개발자도구에 남으므로 오류 문구에 섞여 나오는 같은 주소까지 함께 가린다.
+    """
+    st = dict(local_llm.status())
+    raw = str(st.get("url", "") or "")
+    shown = _shown_url(raw)
+    st["url"] = shown
+    err = st.get("error")
+    if raw and shown and isinstance(err, str) and raw in err:
+        st["error"] = err.replace(raw, shown)
+    return st
 
 
 # ------------------------------------------------- 인물 대화 로그(사용자의 사적 자산)
@@ -821,6 +869,7 @@ POST_ROUTES = {
     "/api/talk": r_talk, "/api/talk-status": r_talk_status,
     "/api/talk-history": r_talk_history,
     "/api/gen-prompt": r_gen_prompt, "/api/gen-image": r_gen_image,
+    "/api/image-engine": r_image_engine,
     "/api/gen-status": r_gen_status, "/api/refetch": r_refetch,
     "/api/upscale": r_upscale, "/api/credits": r_credits,
     "/api/favorite": r_favorite,

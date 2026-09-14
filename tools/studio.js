@@ -90,8 +90,25 @@ function renderChips(){
  if(S.orch_local){$("chipKey").textContent="스토리: 로컬 LLM";$("chipKey").className="chip ok"}
  else{$("chipKey").textContent="API 키 "+(S.key_set?"연결됨":"미설정");
   $("chipKey").className="chip "+(S.key_set?"ok":"bad")}
- $("chipModel").textContent="이미지: MakeFun "+(S.mf_token?"연결됨":"토큰 미설정");
- $("chipModel").className="chip "+(S.mf_token?"ok":"bad")}
+ imageChip()}
+// ---- 이미지 엔진(ComfyUI 로컬·무료가 기본, MakeFun 유료는 보조) ----
+// 서버가 /api/state 에 image{engine,provider,url,engines,mf_token} 를 실으면 그것을 따르고,
+// 구서버(image 없음)면 예전처럼 mf_token 만 보고 MakeFun 으로 그린다.
+const ENGINE_LABEL={comfyui:"ComfyUI",makefun:"MakeFun"};
+function imgEngine(){const im=S.image;return (im&&im.engine)||"makefun"}
+function imgLabel(e){return ENGINE_LABEL[e]||e||"이미지 AI"}
+function imgProvider(){const im=S.image;return (im&&im.provider)||imgLabel(imgEngine())}
+function imgEngines(){const im=S.image;return Array.isArray(im&&im.engines)?im.engines:[imgEngine()]}
+// MAKEFUN_API_TOKEN 이 서버에 설정돼 있는가(값은 절대 오지 않는다 — 불리언 하나뿐).
+// 구서버(image 없음)는 최상위 mf_token 을 준다. 칩과 유료 보조 버튼이 같은 판정을 쓴다.
+function mfToken(){const im=S.image;
+ return (im&&typeof im.mf_token==="boolean")?im.mf_token:!!S.mf_token}
+function imageChip(){const c=$("chipModel"),im=S.image;
+ if(im&&im.engine==="comfyui"){
+  c.textContent="이미지: ComfyUI"+(im.url?" · "+im.url:"");c.className="chip ok";return}
+ const tok=mfToken();
+ c.textContent="이미지: MakeFun "+(tok?"연결됨":"토큰 미설정");
+ c.className="chip "+(tok?"ok":"bad")}
 // refresh(opts) — opts.scene 이 주어지면 그 장면 카드 하나만 새로 그린다.
 // 전면 재렌더는 다른 카드에 붙여넣던 그록 응답·펼친 <details> 를 통째로 날려 버렸다(감사 지적).
 async function refresh(opts){
@@ -317,6 +334,21 @@ $("btnCredits").onclick=async()=>{
    ?"이 서버는 아직 크레딧 조회를 지원하지 않습니다 — 서버를 최신으로 올린 뒤 다시 시도하세요."
    :"실패: "+e.message)}
  b.disabled=false};
+// ---- 이미지 엔진 확인 ----
+// ComfyUI 는 로컬 서버(/system_stats·체크포인트 목록)를, MakeFun 은 토큰 설정 여부만 본다 — 과금 0.
+$("btnEngineCheck").onclick=async()=>{
+ const b=$("btnEngineCheck");b.disabled=true;
+ const bz=busy($("engineMsg"),"엔진 확인 중…");
+ try{const d=(await api("/api/image-engine",{}))||{};
+  const lab=imgLabel(d.engine);
+  const ck=Array.isArray(d.checkpoints)?d.checkpoints.length:null;
+  bz.stop(lab+(d.provider&&d.provider!==lab?"("+d.provider+")":"")+(d.ok?" 연결됨":" 연결 안 됨")
+   +(d.detail?" · "+d.detail:"")+(ck!=null?" · 체크포인트 "+ck+"개":"")
+   +(d.model?" · "+d.model:"")+(d.billable?" · 유료":" · 무료"))}
+ catch(e){bz.stop(/not found/i.test(e.message)
+   ?"이 서버는 아직 엔진 확인을 지원하지 않습니다 — 서버를 최신으로 올린 뒤 다시 시도하세요."
+   :"실패: "+e.message)}
+ b.disabled=false};
 
 // 생성 진행 조회 — 서버가 /api/gen-status 를 지원할 때만 상황을 보여주고, 없으면 조용히 멈춘다.
 function pollGen(sid,msg){let live=true;
@@ -427,21 +459,45 @@ function scBtnGenPrompt(sc,msg){
   catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
  return b}
 
-function scBtnGenImage(sc,msg){
- const b=el("button","btn","🎨 이미지 생성");
- b.title="MakeFun AI 로 이미지를 생성해 자동 등록합니다 (1~3분)";
- b.onclick=async()=>{b.disabled=true;msg.textContent="MakeFun 생성 중… (1~3분)";
-  const stop=pollGen(sc.scene_id,msg);   // 서버가 진행 조회를 지원하면 상황을 보여준다
-  try{const d=await api("/api/gen-image",{scene_id:sc.scene_id,n:1});
+// 생성 요청 한 벌 — engine 이 비면 서버 기본 엔진(매니페스트 image_generator.engine)으로 간다.
+async function runGenImage(sc,msg,b,engine){
+ const lab=imgLabel(engine||imgEngine());
+ b.disabled=true;msg.textContent=lab+" 생성 중… "+(lab==="ComfyUI"?"(보통 20~90초)":"(1~3분)");
+ const stop=pollGen(sc.scene_id,msg);   // 서버가 진행 조회를 지원하면 상황을 보여준다
+ const body={scene_id:sc.scene_id,n:1};if(engine)body.engine=engine;
+ try{const d=await api("/api/gen-image",body);
    if(d&&d.running){const r=await pollGenUntilDone(sc.scene_id,msg);stop();
     // 실패·시간초과면 사유를 화면에 남긴다(카드가 새로 그려지면 메시지가 지워지므로 여기서 끝낸다)
     if(r&&r.error){msg.textContent="실패: "+r.error;b.disabled=false;return}
     if(r&&r.timeout){msg.textContent="시간 초과 — 아직 생성 중일 수 있습니다. 잠시 뒤 [폴더 스캔]으로 확인하세요.";
      b.disabled=false;return}
-    msg.textContent="생성 완료 — 후보를 확인하세요";await refresh({scene:sc.scene_id});return}
+    msg.textContent=lab+" 생성 완료 — 후보를 확인하세요";await refresh({scene:sc.scene_id});return}
    stop();msg.textContent="생성 "+(d.generated||[]).length+"장 · 자동검사 "+d.auto;
    await refresh({scene:sc.scene_id})}
-  catch(e){stop();msg.textContent="실패: "+e.message;b.disabled=false}};
+  catch(e){stop();msg.textContent="실패: "+e.message;b.disabled=false}}
+function scBtnGenImage(sc,msg){
+ const b=el("button","btn","🎨 이미지 생성");
+ b.title=imgProvider()+" 로 생성해 자동 등록합니다";
+ b.onclick=()=>runGenImage(sc,msg,b,"");
+ return b}
+// 다른 엔진도 설정돼 있으면 보조 버튼 — MakeFun 은 유료라 확인을 한 번 거친다.
+// 토큰이 없으면 눌러도 서버가 거절한다(매니페스트에 makefun 블록만 있으면 버튼은 생긴다).
+// 그래서 유료 확인창을 띄우기 전에 눌리지 않는 상태로 이유를 말한다 — 헛된 과금 확인 0.
+function scBtnGenImageAlt(sc,msg){
+ const active=imgEngine(),eng=imgEngines();
+ let other=null;
+ if(active==="comfyui"&&eng.includes("makefun"))other="makefun";
+ else if(active==="makefun"&&eng.includes("comfyui"))other="comfyui";
+ if(!other)return null;
+ const paid=other==="makefun";
+ const b=el("button","btn ghost",paid?"MakeFun 생성(유료)":"ComfyUI 생성(무료)");
+ if(paid&&!mfToken()){
+  b.disabled=true;
+  b.title="MAKEFUN_API_TOKEN 미설정 — 서버에 토큰을 설정해야 MakeFun 으로 생성할 수 있습니다";
+  return b}
+ b.title=paid?"MakeFun AI 로 생성합니다 — 호출 1회가 곧 과금입니다":"로컬 ComfyUI 로 생성합니다 — 무료";
+ b.onclick=()=>{if(paid&&!confirm("MakeFun 은 유료 호출입니다. 진행할까요?"))return;
+  runGenImage(sc,msg,b,other)};
  return b}
 
 function scBtnScan(sc,msg){
@@ -499,7 +555,8 @@ function scRefNote(){
  if(!refsKnownMissing())return null;
  const p=el("p","small refnote",
   "레퍼런스가 없어 컷마다 얼굴이 달라질 수 있습니다 — project/manifest.json 의 "
-  +"characters[].reference_images 에 기준 그림을 넣으면 생성 요청에 함께 보냅니다.");
+  +"characters[].reference_images 에 기준 그림을 넣으면 MakeFun 생성 요청에 함께 보냅니다"
+  +(imgEngine()==="comfyui"?" (ComfyUI 는 아직 레퍼런스를 쓰지 않고 앵커·시드로 일관성을 잡습니다).":"."));
  return p}
 
 function scActions(sc){
@@ -507,7 +564,8 @@ function scActions(sc){
  const msg=el("span","small");msg.setAttribute("role","status");
  const gen=sc.status!=="APPROVED"&&!!sc.prompt;
  if(sc.status!=="APPROVED"&&!sc.prompt)act.appendChild(scBtnGenPrompt(sc,msg));
- if(gen)act.appendChild(scBtnGenImage(sc,msg));
+ if(gen){act.appendChild(scBtnGenImage(sc,msg));
+  const alt=scBtnGenImageAlt(sc,msg);if(alt)act.appendChild(alt)}
  if(sc.prompt){const bcp=el("button","btn ghost","🖼 프롬프트 복사");
   bcp.title="이 프롬프트를 외부 이미지 AI 에 붙여넣을 수도 있습니다";
   bcp.onclick=()=>copyTo(bcp,sc.prompt,"🖼 프롬프트 복사");
