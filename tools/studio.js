@@ -331,11 +331,19 @@ function showFrame(){$("frameText").value=FRAMES[fsel.value]||""}
 fsel.onchange=showFrame;showFrame();
 $("btnFrameCopy").onclick=()=>copyTo($("btnFrameCopy"),$("frameText").value,"복사");
 $("btnFrameChat").onclick=()=>{$("chatInput").value=$("frameText").value;$("chatInput").focus()};
+// 장면 1개당 30초는 실측값이다(노트북 Qwen3.6-35B-A3B · 출력 12~14 tok/s · 장면당 ~400토큰).
+// 이 한 줄이 없으면 기본값 10개는 5분 동안 "구성 중… 217초" 만 보이고, 사람은 멈춘 줄 알고
+// 새로고침한다 — 그러면 5분을 버리고 처음부터 다시 시작한다.
+const composeEta=n=>(n>=4?" · 약 "+Math.ceil(n*0.5)+"분 예상":" · 1분 안팎 예상")+"(장면 1개당 30초쯤)";
 $("btnCompose").onclick=async()=>{
- const bz=busy($("composeMsg"),"구성 중… 로컬 LLM 이 장면을 나누고 있습니다");
+ const bz=busy($("composeMsg"),"구성 중… 로컬 LLM 이 장면을 나누고 있습니다"
+  +composeEta(+$("composeCount").value||0));
  try{const d=await api("/api/compose",{count:+$("composeCount").value,force:$("composeForce").checked});
   const s=bz.stop();
-  $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음")+took(s);
+  // d.warning(요청 수 ≠ 생성 수)을 빼먹으면 "1개 장면 생성 · 검사 통과" 만 뜬다 —
+  // 12장짜리 앨범이 한 장으로 갈린 순간에도. 직접 입력 경로는 처음부터 보여 주고 있었다.
+  $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음")
+   +(d.warning?" · "+d.warning:"")+(d.backup?" · 이전 장면 백업: "+d.backup:"")+took(s);
   scDraft.clear();   // 장면이 갈렸으니 같은 id 의 옛 초안을 새 장면에 되붙이지 않는다
   await refresh()}
  catch(e){bz.stop("실패: "+e.message+" — 아래 [✍ 직접 입력]으로 진행하세요(로컬 LLM 없이도 됩니다)")}};

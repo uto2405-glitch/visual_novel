@@ -8019,6 +8019,79 @@ def u16(b: Box):
         out.unlink(missing_ok=True)
 
 
+# 실측 재료 — Qwen3.6-35B-A3B(노트북 llama.cpp)에 같은 지시문을 7번 보내 받은 **세 가지 모양**.
+# 지시문은 "다른 말 없이 JSON 배열만" 이라고 못박지만 배열로 온 것은 3/7 뿐이었다.
+_SCENE_A = ('{"order":1,"purpose":"도입","action_beat":"창밖","emotion":"설렘","time":"오후",'
+            '"location_id":"LOC-001","camera":{"shot":"wide","angle":"eye-level",'
+            '"framing":"two-shot","focus":"face"},'
+            '"dialogue":[{"speaker_id":"CHAR-001","text":"안녕"},'
+            '{"speaker_id":"CHAR-002","text":"(심장이 뛴다)"}],"image_prompt":"wide shot"}')
+_SCENE_B = _SCENE_A.replace('"order":1', '"order":2').replace("도입", "전개")
+
+
+@test("unit", "U27 장면 구성 응답 — 배열이 아니어도 읽고, 대사 줄을 장면으로 저장하지 않는다")
+def u27(b: Box):
+    """실제 모델이 돌려주는 모양은 세 가지다(실측 7회): ``[...]`` 배열 3 · ``{"scenes":[...]}``
+    포장 2 · **배열 없이 객체만 줄줄이** 2. 옛 추출기는 ``find("[")``~``rfind("]")`` 로 잘랐다.
+
+    세 번째 모양에서 그 방식이 집는 첫 ``[`` 는 첫 장면 안의 ``"dialogue": [`` 다. 운이 나쁘면
+    터지고(JSONDecodeError), **운이 좋으면 파싱에 성공한다** — 그리고 대사 두 줄이 장면 두 개로
+    저장된다. 화면에는 "2개 장면 생성 · 검사 통과" 만 떴다. 터지는 쪽보다 나쁜 고장이라
+    여기서 둘 다 잠근다: 세 모양이 모두 읽히는 것과, 대사 줄이 절대 장면이 되지 않는 것.
+    """
+    vc = b.mod("vn_compose")
+    shapes = {
+        "배열": f"```json\n[{_SCENE_A},{_SCENE_B}]\n```",
+        "포장": '앞말\n{"scenes": [' + _SCENE_A + "," + _SCENE_B + "]}\n뒷말",
+        "객체나열": _SCENE_A + "\n\n" + _SCENE_B,
+    }
+    for label, text in shapes.items():
+        items = vc._extract_json_array(text)
+        eq(len(items), 2, f"{label} 모양에서 장면 수")
+        eq([it.get("order") for it in items], [1, 2], f"{label} 모양에서 순서")
+        for it in items:
+            ok("speaker_id" not in it,
+               f"{label} 모양에서 대사 줄이 장면으로 올라왔다 — {json.dumps(it, ensure_ascii=False)[:120]}")
+            has(str(it.get("image_prompt", "")), "shot", f"{label} 모양에서 image_prompt")
+
+    # 장면이 하나뿐이어도 그 하나로 읽힌다(옛 추출기는 여기서 대사 2줄을 돌려줬다).
+    one = vc._extract_json_array(_SCENE_A)
+    eq(len(one), 1, "객체 하나짜리 응답")
+    ok("speaker_id" not in one[0], "객체 하나짜리 응답에서 대사 줄이 장면이 됐다")
+
+    # JSON 이 아예 없으면 예전처럼 ValueError — 호출부의 재시도 분기가 그것으로 걸린다.
+    raises(lambda: vc._extract_json_array("미안, 장면을 못 만들겠어."), ValueError, "JSON 없음")
+
+
+@test("unit", "U28 장면 구성은 스트리밍으로 받는다 — 120초 상한이 '총 생성 시간' 이 되지 않게")
+def u28(b: Box):
+    """``local_llm.TIMEOUT`` 은 소켓 한 번의 상한이지 요청 전체의 상한이 아니다. 그런데
+    비스트리밍이면 llama.cpp 는 답을 다 만들 때까지 한 바이트도 보내지 않으므로 **첫 recv 가
+    생성 시간 전체를 기다린다** — 결국 120초가 총 상한이 된다.
+
+    실측(Qwen3.6-35B-A3B · 13~14 tok/s): 장면 3개가 95~115초. 스튜디오 기본값 10개는
+    4천 토큰이 넘어 5분 이상이므로 **언제나** 시간초과였다. 스트리밍이면 조각이 수십 ms
+    마다 오므로 같은 120초가 '조각 사이의 침묵' 상한이 되고, 진짜로 멈춘 서버는 그대로
+    걸린다. 숫자를 키우는 대신 받는 방식을 바꾼 것이라, 되돌아가면 조용히 다시 막힌다.
+    """
+    vc = b.mod("vn_compose")
+    seen: dict = {}
+
+    def fake_chat(messages, temperature=0.8, max_tokens=320, on_token=None):
+        seen.update(on_token=on_token, max_tokens=max_tokens)
+        return "[]"
+
+    real = vc.local_llm.chat
+    vc.local_llm.chat = fake_chat
+    try:
+        vc.orch_chat([{"role": "user", "content": "x"}])
+    finally:
+        vc.local_llm.chat = real
+    ok(callable(seen.get("on_token")),
+       "orch_chat 이 on_token 없이 부른다 — 비스트리밍이면 120초가 생성 시간 전체의 상한이 된다")
+    eq(seen.get("max_tokens"), 8192, "장면 구성의 출력 상한")
+
+
 # ============================================================ 러너
 GROUPS = ["meta", "arch", "pipeline", "template", "checker", "webapp", "auth", "makefun",
           "comfyui", "backup", "print", "viewer", "js", "ux", "security", "unit"]

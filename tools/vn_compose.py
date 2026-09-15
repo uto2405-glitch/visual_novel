@@ -60,12 +60,72 @@ FALLBACK_AFF_MAX = 100   # 그 파일에도 dating 이 없을 때만 쓰는 마�
 WRITE_LOCK = vn_core.WRITE_LOCK
 
 
+# 모델이 배열에 씌우는 이름들 — {"scenes":[...]} 처럼 한 겹 포장해서 주는 경우가 잦다.
+_WRAP_KEYS = ("scenes", "items", "data", "result", "list", "장면")
+# 장면 원소를 알아보는 열쇠. 대사 원소({speaker_id,text})와 갈라내는 것이 유일한 목적이라
+# 두 개만 맞으면 장면으로 본다(모델이 한두 칸을 빠뜨려도 원소 자체는 알아봐야 한다).
+_SCENE_KEYS = ("order", "purpose", "action_beat", "emotion", "time",
+               "location_id", "camera", "dialogue", "image_prompt")
+
+
+def _json_values(body: str) -> list:
+    """텍스트에 흩어진 **최상위** JSON 값을 나온 순서대로 모두 꺼낸다.
+
+    예전에는 ``find("[")`` 와 ``rfind("]")`` 로 잘랐다. 그 방식은 모델이 배열로 감싸지
+    않고 객체를 줄줄이 흘렸을 때 **첫 객체 안의 ``"dialogue": [...]`` 를 배열로 착각**한다 —
+    그리고 그 조각이 문법적으로 온전하면 파싱이 **성공한다**. 실측(Qwen3.6-35B-A3B)에서
+    대사 두 줄이 장면 두 개로 저장됐고, 화면에는 "2개 장면 생성 · 검사 통과" 만 떴다.
+    터지는 것보다 나쁜 고장이라 자르는 방식 자체를 바꾼다: ``raw_decode`` 는 값 하나를
+    끝까지 소비하므로 안쪽 배열이 후보로 올라올 길이 없다.
+    """
+    dec = json.JSONDecoder()
+    out, i, n = [], 0, len(body)
+    while i < n:
+        if body[i] not in "[{":
+            i += 1
+            continue
+        try:
+            val, end = dec.raw_decode(body, i)
+        except ValueError:
+            i += 1          # 여는 괄호처럼 생긴 산문 — 다음 후보로 넘어간다
+            continue
+        out.append(val)
+        i = end
+    return out
+
+
+def _looks_like_scene(v) -> bool:
+    """이 객체가 장면 원소인가 — 포장 객체·대사 원소와 구별하는 최소 판정."""
+    return isinstance(v, dict) and sum(1 for k in _SCENE_KEYS if k in v) >= 2
+
+
 def _extract_json_array(text: str):
-    body = re.sub(r"```(?:json)?", "", text).strip()
-    s_i, e_i = body.find("["), body.rfind("]")
-    if s_i < 0 or e_i <= s_i:
+    """LLM 응답 → 장면 원소 리스트. **배열로 오지 않아도 알아본다.**
+
+    지시문이 "다른 말 없이 JSON 배열만" 이라고 못박아도 실제로 오는 모양은 세 가지다
+    — ``[...]`` 배열 · ``{"scenes":[...]}`` 포장 · **배열 없이 객체만 줄줄이**. 같은 지시문
+    7회에서 각각 3 · 2 · 2 였다. 셋을 모두 받는다. 형식을 고쳐 달라고 다시 부르는 것은 이
+    모델에서 100초짜리 재시도라, 받을 수 있는 모양을 넓히는 쪽이 사람의 시간을 아낀다.
+    """
+    body = re.sub(r"```(?:json)?", "", str(text)).strip()
+    vals = _json_values(body)
+    if not vals:
         raise ValueError("JSON 배열 없음")
-    return json.loads(body[s_i:e_i + 1])
+    for v in vals:                                   # ① 진짜 배열
+        if isinstance(v, list):
+            return v
+    for v in vals:                                   # ② 한 겹 포장된 배열
+        if isinstance(v, dict) and not _looks_like_scene(v):
+            for k in _WRAP_KEYS:
+                if isinstance(v.get(k), list):
+                    return v[k]
+            lists = [x for x in v.values() if isinstance(x, list)]
+            if len(lists) == 1:                      # 이름이 무엇이든 배열이 하나뿐이면 그것
+                return lists[0]
+    scenes = [v for v in vals if _looks_like_scene(v)]   # ③ 배열 없이 객체만 줄줄이
+    if scenes:
+        return scenes
+    raise ValueError("JSON 배열 없음")
 
 
 def extract_json_object(text: str) -> dict:
@@ -440,23 +500,45 @@ def _orch_local() -> bool:
     return str(orch.get("mode", "")) == "local"
 
 
-def orch_chat(messages: list, temperature: float = 0.6, max_tokens: int = 8192) -> str:
+def orch_chat(messages: list, temperature: float = 0.6, max_tokens: int = 8192,
+              on_token=None) -> str:
     """장면 구성용 LLM 호출 — 오케스트레이터는 로컬 LLM 하나뿐이다.
 
     예전에는 mode 가 local 이 아니면 외부 API 클라이언트로 넘어갔다. 그 경로는 은퇴했으므로
     **여기서 멈추고 사람이 실제로 쓸 수 있는 경로를 이름으로 말한다.** 그냥 지우면 예전
     매니페스트(mode:"api")를 그대로 쓰는 프로젝트가 NameError 역추적을 보게 되고, 웹에서는
     그것이 500 이 된다 — 무엇을 해야 하는지는 한 글자도 나오지 않는다.
+
+    **스트리밍으로 받는다.** 이유는 속도가 아니라 시간제한이다: 비스트리밍이면 서버는
+    답을 다 만들 때까지 한 바이트도 보내지 않으므로 첫 recv 가 생성 시간 전체를 기다리고,
+    ``local_llm.TIMEOUT``(120초)이 그대로 총 시간 상한이 된다. 실측(Qwen3.6-35B-A3B,
+    노트북, 13~14 tok/s)에서 장면 3개가 이미 95~115초라 **기본값 10개는 언제나 시간초과**였다.
+    스트리밍이면 조각이 ~75ms 마다 오므로 그 상한은 '조각 사이의 침묵' 상한이 되고,
+    진짜로 멈춘 서버는 여전히 120초에 걸린다 — 숫자를 키우지 않고 고친다.
+    (on_token 을 주면 그 조각을 그대로 흘려 준다. 지금 호출부는 쓰지 않는다.)
     """
     if not _orch_local():
         raise VNError('오케스트레이터가 로컬 LLM 이 아닙니다(manifest.orchestrator.mode). '
                       '원격 API 경로는 더 이상 없습니다 — mode 를 "local" 로 두거나 '
                       '직접 입력(붙여넣기) 경로를 쓰세요.')
-    return local_llm.chat(messages, temperature=temperature, max_tokens=max_tokens)
+    return local_llm.chat(messages, temperature=temperature, max_tokens=max_tokens,
+                          on_token=on_token or (lambda _piece: None))
+
+
+def _scene_count(items) -> int:
+    return sum(1 for it in items if isinstance(it, dict))
 
 
 def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
-    """스토리라인 → 장면 자동 구성 (로컬 LLM). 직접 입력 경로는 compose_from_json 사용."""
+    """스토리라인 → 장면 자동 구성 (로컬 LLM). 직접 입력 경로는 compose_from_json 사용.
+
+    재시도가 걸리는 조건이 둘이다: **파싱 실패**와 **개수 불일치**. 두 번째가 뒤늦게
+    추가된 이유는 실측이다 — 3개를 시켰는데 1개만 돌려주는 일이 일곱 번 중 한 번 있었다.
+    개수가 어긋난 채로 그냥 저장하면 force 재구성에서 12장짜리 앨범이 1장으로 갈리고,
+    화면에는 "1개 장면 생성 · 검사 통과" 만 뜬다(자동 경로는 warning 을 보여 주지도
+    않았다). 백업은 남지만 사람은 무엇이 잘못됐는지 모른다. 그래서 **디스크를 건드리기
+    전에** 한 번 더 묻고, 그래도 어긋나면 숫자를 말하며 멈춘다.
+    """
     if not force and vn_core.scene_files():
         raise VNError(_EXISTS_MSG)          # 호출 낭비 방지 — 미리 막는다
     instruction = build_compose_instruction(count, branching)
@@ -464,16 +546,27 @@ def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
     try:
         items = _extract_json_array(out)
     except (ValueError, json.JSONDecodeError):
-        # 1회 재시도: 형식 교정 요청
+        items = None
+    if items is None or _scene_count(items) != count:
+        got = "없음" if items is None else f"{_scene_count(items)}개"
+        # 1회 재시도: 무엇이 틀렸는지 숫자로 말한다(형식 교정 + 개수 교정 공용).
         retry = orch_chat([
             {"role": "user", "content": instruction},
             {"role": "assistant", "content": out},
-            {"role": "user", "content": "위 응답에서 JSON 배열만, 다른 텍스트 없이 다시 출력하라."},
+            {"role": "user", "content": f"장면이 정확히 {count}개여야 하는데 {got}이다. "
+                                        f"빠진 장면을 채워 {count}개짜리 JSON 배열 하나만, "
+                                        "다른 텍스트 없이 다시 출력하라."},
         ], temperature=0.2)
         try:
             items = _extract_json_array(retry)
         except (ValueError, json.JSONDecodeError):
-            raise VNError("장면 JSON 파싱 실패 — 스토리라인을 조금 더 구체화해 다시 시도하세요.")
+            raise VNError("장면 JSON 파싱 실패 — 스토리라인을 조금 더 구체화해 다시 시도하세요. "
+                          "또는 [✍ 직접 입력]에서 지시문을 복사해 쓰세요.")
+    got = _scene_count(items)
+    if got != count:
+        raise VNError(f"모델이 {count}개 중 {got}개만 돌려줬습니다 — 장면을 바꾸지 않았습니다. "
+                      "다시 시도하거나, [✍ 직접 입력]에서 지시문을 복사해 받은 JSON 을 "
+                      "붙여넣으세요(개수를 눈으로 확인할 수 있습니다).")
     return _create_scenes_from_items(items, force, expected=count)
 
 
