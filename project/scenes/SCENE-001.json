@@ -14,7 +14,7 @@
   "action_beat": "창가에서 지혜가 밝게 손을 흔든다",
   "emotion": "설렘",
   "camera": {
-    "shot": "medium",
+    "shot": "wide",
     "angle": "eye-level",
     "framing": "창가 지혜",
     "focus": "지혜의 미소"
@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, medium shot, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving brightly from a window seat as he walks up to the table, seen past his shoulder, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, cozy warm wood-toned cafe near a school, afternoon sunlight through the window, afternoon",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, full body, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving brightly from a window seat as he walks up to the table, seen past his shoulder, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, cozy warm wood-toned cafe near a school, afternoon sunlight through the window, afternoon",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -40,14 +40,20 @@
   ],
   "assets": {
     "raw_images": [
+      "images/raw/SCENE-001/cf_074ce4_1.png",
       "images/raw/SCENE-001/cf_281e4c_1.png",
       "images/raw/SCENE-001/cf_314370_1.png",
+      "images/raw/SCENE-001/cf_868a7f_2.png",
+      "images/raw/SCENE-001/cf_86c997_3.png",
       "images/raw/SCENE-001/cf_aa71d6_2.png",
       "images/raw/SCENE-001/cf_bee157_1.png",
+      "images/raw/SCENE-001/cf_cc7945_4.png",
       "images/raw/SCENE-001/cf_e8ab70_2.png",
+      "images/raw/SCENE-001/cf_f54da4_2.png",
+      "images/raw/SCENE-001/cf_faeebf_1.png",
       "images/raw/SCENE-001/cf_fc363d_2.png"
     ],
-    "selected_image": "images/raw/SCENE-001/cf_281e4c_1.png"
+    "selected_image": "images/raw/SCENE-001/cf_868a7f_2.png"
   },
   "review": {
     "auto": "PASS",
@@ -56,8 +62,9 @@
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
       "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
-      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 여는 컷이 샴페인 금발(0.781) — 승인 시드로 재렌더. 셔츠 별무늬 혼입도 확인 대상"
+      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 여는 컷이 샴페인 금발(0.781) — 승인 시드로 재렌더. 셔츠 별무늬 혼입도 확인 대상",
+      "[2026-09-15] REVISE → IMAGE: E1 반복 구도: 1화가 가슴 위 컷으로 열리고 카페를 한 번도 보여주지 않는다 — camera.shot 을 실측대로 wide 로 바꾸고 다시 렌더(동작 문장은 그대로)"
     ]
   },
-  "version": 4
+  "version": 5
 }

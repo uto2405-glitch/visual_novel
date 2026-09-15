@@ -14,7 +14,7 @@
   "action_beat": "지혜가 환하게 웃으며 손을 내민다",
   "emotion": "따뜻한 여운",
   "camera": {
-    "shot": "close-up",
+    "shot": "two-shot",
     "angle": "eye-level",
     "framing": "내민 손과 미소",
     "focus": "지혜의 미소"
@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, close-up shot, 1girl, 1boy, 2people, couple, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, reaching out her open hand toward him with a bright warm smile, orange and violet sunset sky reflecting on the water, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, two-shot, 1girl, 1boy, 2people, couple, both characters fully visible, facing each other, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, reaching out her open hand toward him with a bright warm smile, orange and violet sunset sky reflecting on the water, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset, golden hour",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -42,12 +42,18 @@
     "raw_images": [
       "images/raw/SCENE-006/cf_22216d_1.png",
       "images/raw/SCENE-006/cf_45e7ff_2.png",
+      "images/raw/SCENE-006/cf_539744_4.png",
+      "images/raw/SCENE-006/cf_66b333_3.png",
       "images/raw/SCENE-006/cf_772ae1_2.png",
       "images/raw/SCENE-006/cf_8b0019_2.png",
+      "images/raw/SCENE-006/cf_8e1f5e_1.png",
+      "images/raw/SCENE-006/cf_a1dfd8_2.png",
+      "images/raw/SCENE-006/cf_aaa004_2.png",
       "images/raw/SCENE-006/cf_cf0792_1.png",
-      "images/raw/SCENE-006/cf_dab999_1.png"
+      "images/raw/SCENE-006/cf_dab999_1.png",
+      "images/raw/SCENE-006/cf_ebc407_1.png"
     ],
-    "selected_image": "images/raw/SCENE-006/cf_22216d_1.png"
+    "selected_image": "images/raw/SCENE-006/cf_a1dfd8_2.png"
   },
   "review": {
     "auto": "PASS",
@@ -56,8 +62,9 @@
     "notes": [
       "[2026-09-15] REVISE → IMAGE: 원본 이미지 유실 — ComfyUI 로 재생성",
       "[2026-09-15] REVISE → PROMPT: 인물 태그 도입 — 앵커 바로 앞 태그로 의상·머리색 드리프트 교정",
-      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 클로즈업인데 샴페인(0.757) — 같은 클로즈업 SCENE-011(0.238)과 3.2배 차이. 승인 시드로 재렌더"
+      "[2026-09-15] REVISE → IMAGE: A1 앨범 일관성: 클로즈업인데 샴페인(0.757) — 같은 클로즈업 SCENE-011(0.238)과 3.2배 차이. 승인 시드로 재렌더",
+      "[2026-09-15] REVISE → IMAGE: E1 반복 구도: 저장된 close-up 은 도달 불가(3/3 미디엄 투샷)이고 그림은 001 과 같은 오버숄더였다 — camera.shot 을 two-shot 으로 바로잡고 다시 렌더"
     ]
   },
-  "version": 4
+  "version": 5
 }
