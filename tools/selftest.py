@@ -1110,6 +1110,43 @@ def a2_required_keys(b: Box) -> list[str]:
     raise Failed("check_protocol 에서 A2 필수 키 목록을 찾지 못했습니다(구조가 바뀌었습니다)")
 
 
+# 사람이 읽는 표면과, 이름과 뜻이 갈린 것을 아는 유일한 자리(SCHEMA §2.3).
+_FACING = ("tools/studio.html", "tools/studio.js", "templates/scene-brief.md",
+           "templates/prompt-frames-ko.md")
+_RETIRED = ("그록", "Grok", "grok.com", "grok-input", "XAI_API_KEY")
+
+
+@test("arch", "L09 은퇴한 공급자 이름은 사람이 읽는 표면으로 돌아오지 않는다 · 레거시 키는 설명된다")
+def l09(b: Box):
+    """이 사이클은 공급자 하나를 이름까지 내렸지만, **필드 이름 하나는 남겼다** —
+    `prompt.grok_output`. 검사기(`tools/check_protocol.py`)가 수정 금지 상태로 그 키를
+    이름으로 읽기 때문이고(A6), 바꾸면 승인된 장면이 전부 FAIL 이 된다.
+
+    그래서 두 방향을 함께 지킨다. ① 화면·틀 문서에는 은퇴한 이름이 다시 나타나지 않는다
+    (이름이 남아 있으면 사람은 그 경로가 아직 있는 줄 안다). ② 남은 키가 **왜** 남았는지는
+    SCHEMA §2.3 에 적혀 있어야 한다 — 설명이 없으면 다음 사이클이 그 줄을 살아 있는
+    의존으로 읽고 이름을 고치려다 교착한다. 유출 탐지기(A8·secret_scan)의 `xai-` 패턴은
+    공급자 연동이 아니라 **탐지기**이므로 이 검사의 대상이 아니다.
+    """
+    for rel in _FACING:
+        p = b.p(rel)
+        if not p.exists():
+            raise Failed(f"{rel} 이 없습니다 — 이름을 바꿨다면 이 검사도 함께 고치세요")
+        text = p.read_text(encoding="utf-8")
+        # 파비콘 base64 안의 우연한 'XAI' 같은 것까지 잡지 않게 줄 단위로 본다.
+        for i, line in enumerate(text.splitlines(), 1):
+            if "base64," in line:
+                continue
+            for name in _RETIRED:
+                ok(name not in line, f"{rel}:{i} 에 은퇴한 이름 '{name}' 이 있다 — {line.strip()[:90]}")
+    doc = doc_text(b)
+    row = doc_field_row(doc, "`grok_output`", "scene_ops.set_prompt")
+    ok(row, "SCHEMA §2.3 에 grok_output 줄이 없다")
+    has(doc, "레거시 이름", "grok_output 이 왜 그 이름인지 SCHEMA 가 설명하지 않는다")
+    has(doc, "check_protocol.py", "레거시 설명이 근거(수정 금지 검사기)를 대지 않는다")
+    has(doc, "이미지 프롬프트", "사람이 부르는 이름(이미지 프롬프트)이 SCHEMA 에 없다")
+
+
 @test("arch", "L06 문서↔코드 상수 동기화 — SCHEMA.md 가 코드를 복제한 자리를 기계가 지킨다")
 def l06(b: Box):
     """SCHEMA.md 는 코드 상수 열 몇 개를 산문으로 복제한다(편집 가능 필드·보호 필드·A2 필수
@@ -4871,6 +4908,37 @@ def approved_scene(b: Box):
         yield sid
 
 
+@test("viewer", "V06 감상본이 떨어뜨린 컷의 이름을 돌려준다 — 조용한 누락은 없다")
+def v06(b: Box):
+    """스튜디오 뷰어는 승인 전 컷까지 재생하고 감상본은 승인된 컷만 싣는다. 두 목록이
+    달라지는 것 자체는 정상이다 — **다르다는 사실을 말하지 않는 것**이 결함이다.
+    실제로 1화 엔딩이 빠진 파일을 친구에게 보내고도 보낸 사람이 몰랐다.
+
+    바로 아래 ``prune_dangling_gotos`` 의 docstring 이 이미 같은 규칙을 적어 두고 있었다:
+    "무엇을 떨어뜨렸는지 반드시 호출자가 알리게 한다". 이 한 곳만 예외였다.
+    """
+    ev = b.mod("export_viewer")
+    with approved_scene(b) as kept, fresh_scene(b) as dropped:
+        with quiet():
+            data = ev.build_data(False, 320, 60)
+        sk = data.get("skipped")
+        ok(isinstance(sk, list), f"skipped 가 목록이 아님 — {type(sk).__name__}")
+        ok(dropped in sk, f"승인 전 컷 {dropped} 가 조용히 빠졌다 — {sk}")
+        ok(kept not in sk, f"실린 컷이 빠졌다고 보고된다 — {sk}")
+        ids = [s.get("id") for s in data["scenes"]]
+        ok(dropped not in ids, "승인 전 컷이 감상본에 실렸다(판정이 vn_core 와 갈렸다)")
+        ok(kept in ids, "승인된 컷이 감상본에 없다")
+        # --all 이어도 선택 이미지가 없는 컷은 빠진다 — 그 경우에도 이름은 남아야 한다
+        with quiet():
+            data_all = ev.build_data(True, 320, 60)
+        ok(dropped in data_all.get("skipped", []),
+           "--all 경로에서는 빠진 컷의 이름이 사라진다")
+        # 보고용 칸은 남에게 건네는 파일 안으로 따라가지 않는다
+        with quiet():
+            _d, html = ev.build_html(False, 320, 60)
+        hasnt(html, dropped, "미승인 컷의 id 가 감상본 파일 안에 실렸다")
+
+
 @test("viewer", "V01 타임캡슐 감상본 — 단일 HTML·이미지 내장·스크롤 모드·주입 API 0")
 def v01(b: Box):
     tcm = b.mod("export_viewer")
@@ -5558,6 +5626,8 @@ function scBtnGenPrompt(){return el("button","btn","GENPROMPT")}
 function scBtnGenImage(){return el("button","btn","GENIMAGE")}
 function scBtnGenImageAlt(){return null}
 function scAddUpload(act){act.appendChild(el("button","btn ghost","UPLOAD"))}
+let played="";
+function playFrom(id){played=id}
 __FUNCS__
 function buttons(node,out){out=out||[];
  for(const k of (node.kids||[])){
@@ -5598,6 +5668,21 @@ function copyBtns(prompt){scDraft.clear();
  await scan.onclick();
  out.scanMsg=msg.textContent;
  out.scanSurvives=scActions(sc).msg.textContent;   // 카드를 다시 그린 뒤에도 남아 있는가
+ // 승인 직후: 결과 한 줄이 몇 컷째인지 말하고, [▶ 지금 보기]가 카드 재생성 뒤에도 남는가
+ scDraft.clear();apiReply={};
+ S.scenes=[{scene_id:"SCENE-001",status:"REVIEW_HUMAN"},{scene_id:"SCENE-002",status:"APPROVED"}];
+ const apMsg=el("span");
+ await scBtnApprove(scene("REVIEW_HUMAN",true),apMsg).onclick();
+ out.approveMsg=apMsg.textContent;
+ const after=scActions(scene("APPROVED",true));
+ out.approveAgain=buttons(after.act).map(x=>x.t);
+ out.approveMsgSurvives=after.msg.textContent;
+ const watch=buttons(after.act).filter(x=>x.t.indexOf("지금 보기")>=0)[0];
+ out.watchClickable=!!(watch&&watch.click);
+ // 승인하지 않은 카드에는 붙지 않는다(서버가 아직 컷을 감상본에 싣지 않는다)
+ scDraft.clear();
+ out.watchOnUnapproved=buttons(scActions(scene("REVIEW_HUMAN",true)).act)
+  .map(x=>x.t).filter(t=>t.indexOf("지금 보기")>=0).length;
  console.log(JSON.stringify(out));
 })();
 """
@@ -5692,7 +5777,7 @@ def j10(b: Box):
        "엔딩 이름표가 그 엔딩의 대사보다 뒤에 온다 — 독자는 이미 다 읽은 뒤에야 알게 된다")
 
 
-@test("js", "J08 장면 카드는 서버가 거절할 일을 권하지 않는다 · 결과 한 줄이 카드 재생성보다 오래 산다")
+@test("js", "J08 장면 카드 — 거절될 일을 권하지 않고, 결과 한 줄과 [▶ 지금 보기]가 재생성보다 오래 산다")
 def j08(b: Box):
     """화면이 사실과 다른 말을 하던 자리들의 잠금장치(브라우저 없이 함수를 실제로 굴린다).
 
@@ -5712,6 +5797,16 @@ def j08(b: Box):
                       "mfToken", "draftOf", "say", "scPromptBlock", "scBtnScan",
                       "scBtnApprove", "scBtnUpscale", "scActions", "scThumbs")
     r = _node_json(b, _J08_HARNESS.replace("__FUNCS__", funcs), "studio_card")
+
+    # 승인 뒤의 다음 한 걸음이 '감상' 이어야 한다. 예전에는 "갤러리에 모입니다" 라고만
+    # 말했고, 방금 만든 컷을 보려면 탭을 건너가 ▶ 를 찾아야 했다(폰에서 두 탭 더).
+    has(r["approveMsg"], "승인됨", "승인 결과 한 줄이 없다")
+    has(r["approveMsg"], "2/2", f"승인 결과가 몇 컷째인지 말하지 않는다 — {r['approveMsg']}")
+    ok(any("지금 보기" in t for t in r["approveAgain"]),
+       f"승인 직후 카드에서 바로 볼 수 없다(갤러리 탭까지 건너가야 한다) — {r['approveAgain']}")
+    ok(r["watchClickable"], "[▶ 지금 보기] 가 눌리지 않는다")
+    eq(r["approveMsgSurvives"], r["approveMsg"], "승인 문구가 카드 재생성에서 사라진다")
+    eq(r["watchOnUnapproved"], 0, "아직 승인하지 않은 컷에도 [▶ 지금 보기] 가 붙는다")
 
     seal = "승인 도장 찍기"
     ok(seal in r["review"], f"시사 단계인데 승인 도장이 없다 — {r['review']}")
