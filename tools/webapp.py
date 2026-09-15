@@ -721,6 +721,8 @@ def r_talk_status(b):
     """
     st = dict(local_llm.status())
     raw = str(st.get("url", "") or "")
+    # remote=True 면 이 PC 에서 serve.ps1 을 실행해도 소용이 없다(서버는 저쪽에 있다).
+    st["remote"] = local_llm.is_remote(raw) if raw else False
     shown = _shown_url(raw)
     st["url"] = shown
     err = st.get("error")
@@ -1559,7 +1561,8 @@ def _orch_line() -> str:
     orch = mf.get("orchestrator") if isinstance(mf.get("orchestrator"), dict) else {}
     if str(orch.get("mode", "")) != "local":
         return "직접 입력(붙여넣기) — manifest.orchestrator.mode 가 local 이 아닙니다"
-    return f"로컬 LLM ({local_llm.base_url()})"
+    url = local_llm.base_url()
+    return f"로컬 LLM ({url}{' · 다른 기기' if local_llm.is_remote(url) else ''})"
 
 
 def main() -> int:

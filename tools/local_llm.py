@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """로컬 LLM 전송 계층 — 캐릭터와 '실제 대화'하기 위한 통로.
 
-C:\\Users\\USER\\claude\\local_llm 의 llama.cpp 서버(OpenAI 호환, 기본 http://127.0.0.1:8080/v1)에 붙는다.
-오케스트레이터(스토리·장면 구성·이미지 프롬프트)와 인물 대화가 같은 이 통로를 쓴다. 키 불필요(로컬).
+llama.cpp 서버(OpenAI 호환, 기본 http://127.0.0.1:8080/v1)에 붙는다. **이 PC 안일 필요는 없다** —
+같은 공유기 아래 다른 기기(예: 노트북 http://192.168.0.7:8080/v1)도 주소 한 줄이면 된다.
+오케스트레이터(스토리·장면 구성·이미지 프롬프트)와 인물 대화가 같은 이 통로를 쓴다.
 
 **이 모듈에는 프롬프트 문자열이 없다.** 인물 페르소나·말투 규칙·장기 기억·앨범 사진 규칙은
 prompt_build 가 조립한다(저장소 규약: 모델 프롬프트는 prompt_build 와 vn_compose 에만 둔다).
@@ -14,6 +15,10 @@ prompt_build 를 함수 안에서 되받아 `prompt_build → local_llm → prom
 
 설정 우선순위: 환경변수 LOCAL_LLM_URL > manifest.talk.base_url >
 manifest.orchestrator.api.base_url > 기본값 (정본 표는 docs/SCHEMA.md §1.2).
+API 키도 같은 모양이다: LOCAL_LLM_KEY > api.key_env 가 가리키는 환경변수 > talk.api_key >
+orchestrator.api.api_key > 빈 문자열(키를 요구하지 않는 서버). llama.cpp 를 ``--api-key`` 로
+띄우면 /v1/models 는 키 없이 열려 있고 /v1/chat/completions 만 401 이 된다 — 키가 틀리면
+'연결됨' 으로 보이면서 네 기능만 죽는다. :func:`status` 가 그 구멍을 따로 막는다.
 
 전송 방식: :func:`chat` 은 기본이 비스트리밍(응답 전문을 한 번에 받는다)이고, ``on_token``
 콜백을 주면 SSE 스트리밍으로 바뀌어 **첫 글자가 나오는 즉시** 조각을 흘려 준다. 콜백이
@@ -58,8 +63,52 @@ def serve_script() -> Path:
     return Path(home) / "runtime" / "serve.ps1"
 
 
+def is_remote(url: str | None = None) -> bool:
+    """이 주소가 **다른 기기**를 가리키는가(루프백이 아니면 원격).
+
+    이 한 줄이 갈라 주는 것은 안내 문구다. LLM 이 노트북에 있는데 "이 PC 에서
+    serve.ps1 을 실행하세요" 라고 말하면, 사용자는 없는 파일을 찾아 헤매다가
+    **이 데스크톱에 두 번째 서버를 띄우려 든다** — 정확히 하지 말아야 할 일이다.
+    """
+    u = urllib.parse.urlparse(str(url if url is not None else base_url()))
+    host = (u.hostname or "").strip().lower()
+    if host in _LOOPBACK_NAMES:
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
+
+
+def where_hint(url: str | None = None) -> str:
+    """주소를 **어디서** 바꾸는가 — 두 자리를 모두 이름으로 부른다.
+
+    노트북 IP 는 DHCP 라 옮겨 다닌다. 그때 사람이 고쳐야 할 곳이 어디인지 모르면
+    manifest 를 고치고도 환경변수가 이기고 있는 상태에서 한참을 헤맨다(또는 그 반대).
+    그래서 우선순위가 높은 쪽을 먼저, 두 자리를 한 줄에 함께 적는다.
+    """
+    u = (url or base_url()).rstrip("/")
+    if os.environ.get("LOCAL_LLM_URL", "").strip():
+        # 환경변수가 이기는 동안 매니페스트를 고쳐도 아무 일도 안 일어난다 — 그 사실을
+        # 말하지 않으면 사람은 맞는 파일을 고치고도 틀린 주소를 계속 보게 된다.
+        return (f'지금은 환경변수 LOCAL_LLM_URL 이 매니페스트를 덮고 있습니다 — '
+                f'setx LOCAL_LLM_URL "{u}" 로 바꾸거나, 지우고(setx LOCAL_LLM_URL "") '
+                f'project/manifest.json 의 talk.base_url · orchestrator.api.base_url 을 쓰세요.')
+    return ('project/manifest.json 의 talk.base_url 과 orchestrator.api.base_url 두 줄을 고치세요 '
+            f'(또는 setx LOCAL_LLM_URL "{u}" · 환경변수가 항상 우선).')
+
+
 def serve_hint() -> str:
-    """서버를 켜는 한 줄 안내 — 설치본을 못 찾으면 어디를 알려 줘야 하는지까지 말한다."""
+    """서버를 어떻게 살리는가 — **주소가 가리키는 기기에 따라 문장이 달라진다**.
+
+    원격이면 켜는 방법을 알려 줄 수 없다(그 기기는 여기 없다). 대신 '거기서 떠 있는가'
+    와 '주소를 어디서 고치는가' 두 가지만 말한다. 로컬이면 예전 그대로 serve.ps1 이다.
+    """
+    url = base_url()
+    if is_remote(url):
+        host = urllib.parse.urlparse(url).hostname or url
+        return (f"LLM 은 이 PC 가 아니라 {host} 에 있습니다 — 그 기기에서 llama-server 가 떠 있는지, "
+                f"IP 가 바뀌지 않았는지 확인하세요. " + where_hint(url))
     path = serve_script()
     cmd = f'powershell -File "{path}" 을 실행하세요.'
     if path.exists():
@@ -95,6 +144,40 @@ def base_url() -> str:
         if isinstance(u, str) and u.strip():
             return u.strip().rstrip("/")
     return DEFAULT_URL
+
+
+def api_key() -> str:
+    """서버가 요구하는 API 키. base_url() 과 **같은 모양의 우선순위**를 쓴다.
+
+    llama.cpp 를 ``--api-key`` 없이 띄웠으면 빈 문자열이 정답이고, 그때는 헤더를 아예
+    붙이지 않는다(예전과 한 바이트도 다르지 않다). 키가 있는 서버에서는 이것이 없으면
+    /v1/chat/completions 만 401 로 죽는다 — /v1/models 는 llama.cpp 가 키 없이 열어
+    두기 때문에 '연결됨' 으로 보이면서 스토리·장면 구성·프롬프트·대화 네 기능이 전부
+    실패한다. 값을 저장소에 적기 싫으면 key_env 에 **환경변수 이름**을 적으면 된다.
+    """
+    env = os.environ.get("LOCAL_LLM_KEY", "").strip()
+    if env:
+        return env
+    mf = vn_core.load_manifest()
+    talk = mf.get("talk") if isinstance(mf.get("talk"), dict) else {}
+    orch = mf.get("orchestrator") if isinstance(mf.get("orchestrator"), dict) else {}
+    api = orch.get("api") if isinstance(orch.get("api"), dict) else {}
+    name = api.get("key_env", "")
+    if isinstance(name, str) and name.strip():
+        v = os.environ.get(name.strip(), "").strip()
+        if v:
+            return v
+    for src in (talk, api):
+        v = src.get("api_key", "")
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _auth_headers() -> dict:
+    """키가 있을 때만 Authorization 을 붙인다(없으면 빈 dict — 하위호환)."""
+    key = api_key()
+    return {"Authorization": f"Bearer {key}"} if key else {}
 
 
 _warned: set[str] = set()
@@ -135,18 +218,68 @@ def _validate(url: str) -> None:
     raise VNError(f"로컬 LLM base_url 이 안전하지 않습니다({url}). 로컬/사설망만 허용합니다.")
 
 
+def _server_root(url: str) -> str:
+    """OpenAI 경로(``/v1``)를 벗겨 서버 자체의 뿌리를 얻는다."""
+    u = url.rstrip("/")
+    return u[: -len("/v1")] if u.endswith("/v1") else u
+
+
+def _auth_probe(url: str):
+    """키가 받아들여지는가만 묻는다 — True(맞음) · False(거부) · None(알 수 없음).
+
+    llama.cpp 의 ``/tokenize`` 는 인증 미들웨어 **아래**에 있으면서 생성을 하지 않는다.
+    그래서 키 검사에 드는 비용이 사실상 0 이다 — 헤더 칩이 주기적으로 부르는 자리라
+    이 점이 중요했다(1토큰 생성으로 확인하면 매번 1초씩 멈춘다).
+    이 엔드포인트가 없는 서버(404 등)에서는 판단하지 않는다 — **모르면 막지 않는다**.
+    """
+    req = urllib.request.Request(
+        _server_root(url) + "/tokenize", data=b'{"content":""}',
+        headers={"Content-Type": "application/json", **_auth_headers()}, method="POST")
+    try:
+        with _OPENER.open(req, timeout=5):
+            return True
+    except urllib.error.HTTPError as exc:
+        return False if exc.code in (401, 403) else None
+    except Exception:
+        return None
+
+
+def _auth_error(url: str, code: int) -> str:
+    """키가 거부됐을 때의 한 줄 — 무엇이 틀렸고 어느 칸을 고치는지."""
+    where = ("환경변수 LOCAL_LLM_KEY" if os.environ.get("LOCAL_LLM_KEY", "").strip()
+             else "매니페스트 talk.api_key / orchestrator.api.api_key")
+    return (f"{url} 는 응답하지만 API 키를 거부했습니다(HTTP {code}) — 서버가 --api-key 로 떠 있고 "
+            f"{where} 의 값이 그것과 다릅니다.")
+
+
 def status() -> dict:
-    """서버가 떠 있고 모델이 로드됐는지."""
+    """서버가 떠 있고 모델이 로드됐는지 — 그리고 **키가 맞는지**까지.
+
+    ``reason`` 이 고장을 갈라 준다: ``unreachable``(주소가 틀렸거나 서버가 꺼짐) ·
+    ``auth``(주소는 맞는데 키가 틀림) · ``ok``. 예전에는 ``/models`` 하나만 보고 up 을
+    정했는데, llama.cpp 는 ``--api-key`` 로 띄워도 그 엔드포인트만은 키 없이 열어 둔다 —
+    칩이 초록인데 네 기능이 전부 401 로 죽는, 가장 알아내기 어려운 고장이 거기서 났다.
+    """
     url = base_url()
     try:
         _validate(url)
-        req = urllib.request.Request(url + "/models")
+        req = urllib.request.Request(url + "/models", headers=_auth_headers())
         with _OPENER.open(req, timeout=5) as r:
             data = json.loads(r.read().decode("utf-8"))
         models = [m.get("id") for m in data.get("data", []) if isinstance(m, dict)]
-        return {"up": True, "url": url, "models": models}
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return {"up": False, "url": url, "models": [], "reason": "auth",
+                    "error": _auth_error(url, exc.code)}
+        return {"up": False, "url": url, "models": [], "reason": "unreachable",
+                "error": f"HTTP {exc.code}"}
     except Exception as exc:
-        return {"up": False, "url": url, "error": str(exc)}
+        return {"up": False, "url": url, "models": [], "reason": "unreachable",
+                "error": str(exc)}
+    if _auth_probe(url) is False:
+        return {"up": False, "url": url, "models": models, "reason": "auth",
+                "error": _auth_error(url, 401)}
+    return {"up": True, "url": url, "models": models, "reason": "ok"}
 
 
 def _chunk_text(chunk) -> str:
@@ -229,7 +362,7 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
     stream = on_token is not None
     body = json.dumps({"messages": messages, "temperature": temperature,
                        "max_tokens": max_tokens, "stream": stream}).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", **_auth_headers()}
     if stream:
         headers["Accept"] = "text/event-stream"
     req = urllib.request.Request(url + "/chat/completions", data=body,
@@ -243,9 +376,13 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
                 return content
             raw = r.read()
     except urllib.error.HTTPError as e:
-        raise VNError(f"로컬 LLM HTTP {e.code} — 서버/모델 상태를 확인하세요.")
+        # 401/403 은 '서버가 이상하다' 가 아니라 '키가 다르다' 다 — 두 문장을 섞으면
+        # 사용자는 멀쩡히 떠 있는 서버를 껐다 켜며 시간을 버린다.
+        if e.code in (401, 403):
+            raise VNError(_auth_error(url, e.code))
+        raise VNError(f"로컬 LLM HTTP {e.code}({url}) — 서버/모델 상태를 확인하세요.")
     except urllib.error.URLError as e:
-        raise VNError(f"로컬 LLM 에 연결할 수 없습니다({e.reason}). {serve_hint()}")
+        raise VNError(f"로컬 LLM({url}) 에 연결할 수 없습니다({e.reason}). {serve_hint()}")
     try:
         data = json.loads(raw.decode("utf-8"))
         content = data["choices"][0]["message"]["content"]

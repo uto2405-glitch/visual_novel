@@ -212,10 +212,17 @@ def check_env() -> None:
 
     url = os.environ.get("LOCAL_LLM_URL", "").strip()
     if url:
-        add("환경변수", "LOCAL_LLM_URL", OK, f"{_shown(url)} (매니페스트 talk.base_url 보다 우선)")
+        add("환경변수", "LOCAL_LLM_URL", OK,
+            f"{_shown(url)} — 매니페스트의 talk.base_url · orchestrator.api.base_url **둘 다**를 덮습니다")
     else:
         add("환경변수", "LOCAL_LLM_URL", OK,
             "미설정 — 매니페스트 talk.base_url → orchestrator.api.base_url → 기본값 순으로 씁니다")
+    # 키는 주소와 함께 틀리는 값이다. 값은 절대 찍지 않고 '어디서 왔는가'만 말한다.
+    if os.environ.get("LOCAL_LLM_KEY", "").strip():
+        add("환경변수", "LOCAL_LLM_KEY", OK, "설정됨 — 매니페스트 api_key/key_env 보다 우선")
+    else:
+        add("환경변수", "LOCAL_LLM_KEY", OK,
+            "미설정 — 매니페스트 orchestrator.api.key_env → talk.api_key → orchestrator.api.api_key 순으로 씁니다")
 
 
 # ------------------------------------------------------------------ 3. 로컬 LLM
@@ -225,19 +232,37 @@ def check_local_llm() -> None:
     except Exception as exc:
         add("로컬 LLM", "모듈 로드", ERR, f"tools/local_llm.py 를 불러올 수 없습니다: {exc}")
         return
+    url = local_llm.base_url()
+    # 성공이든 실패든 **해석된 주소를 먼저 한 줄로 못 박는다**. 노트북 IP 는 DHCP 라
+    # 옮겨 다니고, 그때 사람이 가장 먼저 알아야 할 것은 "스튜디오가 지금 어디를 보고
+    # 있는가" 다 — 그것이 안 보이면 멀쩡한 서버를 껐다 켜며 시간을 버린다.
+    src = ("환경변수 LOCAL_LLM_URL" if os.environ.get("LOCAL_LLM_URL", "").strip()
+           else "매니페스트 talk.base_url / orchestrator.api.base_url")
+    where = "다른 기기(원격)" if local_llm.is_remote(url) else "이 PC(로컬)"
+    add("로컬 LLM", "해석된 주소", OK, f"{_shown(url)} · {where} · 출처: {src}")
+
     st = local_llm.status()
     if st.get("up"):
         models = ", ".join(m for m in st.get("models", []) if m) or "(모델명 미표시)"
         add("로컬 LLM", "서버 응답", OK, f"{_shown(st['url'])} · 모델 {models}")
+    elif st.get("reason") == "auth":
+        # 주소는 맞았다. 이 둘을 한 문장으로 뭉뚱그리면 사용자는 서버를 껐다 켠다.
+        add("로컬 LLM", "서버 응답", WARN,
+            f"{_shown(str(st.get('url', '')))} 는 응답하지만 **API 키가 거부**됐습니다 — 주소는 맞고 키만 틀립니다"
+            " (스토리 채팅·장면 구성·자동 프롬프트·인물 대화가 전부 401 로 실패합니다)",
+            "서버를 띄운 --api-key 값을 매니페스트 orchestrator.api.api_key 에 적거나 "
+            'setx LOCAL_LLM_KEY "그-키" 로 넣으세요.')
     else:
         # 꺼져 있다고 작업이 멈추는 것은 아니다 — 무엇이 막히고 무엇이 되는지를 함께 말한다.
         # (브리프 조립에는 모델이 필요 없어서 직접 입력 경로는 이때도 그대로 돈다.)
         add("로컬 LLM", "서버 응답", WARN,
-            f"{_shown(str(st.get('url', '')))} 에 응답 없음 — 스토리 채팅·자동 프롬프트·인물 대화가 막힙니다"
-            " (장면 작업은 [✍ 직접 입력]으로 계속할 수 있습니다: python tools/scene_brief.py SCENE-001)",
-            # 경로는 local_llm.serve_hint() 하나에서만 만든다 — 예전에는 여기에 개발 PC 경로가
-            # 박혀 있어서, 다른 기기에서 doctor 를 돌린 사람에게 없는 파일을 알려 줬다.
-            "start_studio.ps1 로 함께 켜거나, " + local_llm.serve_hint())
+            f"{_shown(str(st.get('url', '')))} 에 응답 없음 — 서버가 꺼졌거나 **주소가 틀렸습니다**"
+            " (스토리 채팅·장면 구성·자동 프롬프트·인물 대화가 막힙니다;"
+            " 장면 작업은 [✍ 직접 입력]으로 계속할 수 있습니다: python tools/scene_brief.py SCENE-001)",
+            # 경로·문구는 local_llm.serve_hint() 하나에서만 만든다 — 예전에는 여기에 개발 PC
+            # 경로가 박혀 있어서, 다른 기기에서 doctor 를 돌린 사람에게 없는 파일을 알려 줬다.
+            # 원격 주소면 serve_hint 가 '거기서 켜라 + 주소를 어디서 고쳐라' 로 바뀐다.
+            local_llm.serve_hint())
 
 
 # ------------------------------------------------------------------ 3b. 이미지 엔진

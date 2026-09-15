@@ -93,8 +93,12 @@ async function api(path,body){
 // 초록이면 사용자는 버튼부터 누르고 20~90초를 기다린다(폰에서 유일한 상태 표시가 이 칩이다).
 // null = 아직 모른다. 모르는 동안에는 단정하지 않는다(초록도 빨강도 아닌 기본 칩).
 let llmUp=null,engUp=null;
+// 고장은 두 가지다: 주소가 틀렸거나(unreachable) 키가 틀렸거나(auth). 둘을 같은 문장으로
+// 덮으면 사용자는 멀쩡히 떠 있는 서버를 껐다 켠다 — 그래서 사유를 따로 들고 다닌다.
+let llmReason="",llmRemote=false;
 async function probeEngines(){
- try{const d=await api("/api/talk-status",{});llmUp=!!(d&&d.up)}catch(e){llmUp=null}
+ try{const d=await api("/api/talk-status",{});llmUp=!!(d&&d.up);
+  llmReason=(d&&d.reason)||"";llmRemote=!!(d&&d.remote)}catch(e){llmUp=null}
  try{const d=await api("/api/image-engine",{});engUp=!!(d&&d.ok)}catch(e){engUp=null}
  renderChips()}
 // 오케스트레이터는 로컬 LLM 하나뿐이다 — 칩은 '키가 있는가' 가 아니라 '지금 답하는가',
@@ -102,7 +106,12 @@ async function probeEngines(){
 function renderChips(){
  $("chipTitle").textContent=S.title||"제목 미정";
  const c=$("chipLLM");
- c.textContent=(llmUp===false)?"스토리: 로컬 LLM 꺼짐 · 직접 입력":"스토리: 로컬 LLM";
+ // typeof 로 감싸는 이유: 이 함수는 함수 하나만 떼어 내 실행하는 검사 하네스에서도 돌아야
+ // 한다(바깥 let 이 없는 자리). 없으면 '모르는 것'이고, 모를 때는 평소 문구를 쓴다.
+ const authFail=(typeof llmReason!=="undefined"&&llmReason==="auth");
+ c.textContent=(llmUp===false)
+  ?(authFail?"스토리: 로컬 LLM 키 거부 · 직접 입력":"스토리: 로컬 LLM 꺼짐 · 직접 입력")
+  :"스토리: 로컬 LLM";
  c.className="chip"+(llmUp===false?" bad":(llmUp?" ok":""));
  // 칩 하나로는 폰에서 놓치기 쉽다. LLM 이 필요한 화면은 **그 화면에서** 말하고,
  // 대신 쓸 수 있는 길의 이름을 함께 준다(모른다=null 일 때는 단정하지 않는다).
@@ -1139,11 +1148,20 @@ async function talkStatus(){const c=$("talkStatus");
  try{st=await api("/api/talk-status",{});
   llmUp=!!st.up;renderChips();   // 머리말 칩과 이 칩이 서로 다른 말을 하지 않게
   if(st.up){c.textContent="로컬 LLM 연결됨";c.className="chip ok"}
-  else{c.textContent="로컬 LLM 꺼짐 — serve.ps1 실행 필요";c.className="chip bad";
+  else{const auth=(st.reason==="auth");
+   c.textContent=auth?"로컬 LLM 키 거부 — 주소는 맞습니다":"로컬 LLM 꺼짐";
+   c.className="chip bad";
    // 칩만 빨갛게 두면 사용자는 보내 보고 2초 뒤에야 안다. 여기서 먼저 말한다 —
    // 인물 대화는 모델이 있어야만 되는 유일한 화면이라 대체 경로가 없다(장면 작업은 있다).
-   $("talkMsg").textContent="로컬 LLM 이 꺼져 있어 지금은 대화할 수 없습니다 — "
-    +"start_studio.ps1 로 켠 뒤 이 탭에 다시 들어오세요. "
+   // 켜는 방법은 서버가 어디 있느냐로 갈린다: 이 PC 가 아니면 start_studio.ps1 은 답이 아니다.
+   $("talkMsg").textContent=(auth
+     ?"로컬 LLM 이 API 키를 거부했습니다 — 주소는 맞고 키만 틀립니다. "
+      +"서버를 띄운 --api-key 값을 매니페스트 orchestrator.api.api_key 에 맞추세요. "
+     :(llmRemote
+       ?"로컬 LLM 이 다른 기기에 있고 지금 응답하지 않습니다 — 그 기기에서 서버가 떠 있는지, "
+        +"IP 가 바뀌지 않았는지 확인하세요(매니페스트 talk.base_url · orchestrator.api.base_url). "
+       :"로컬 LLM 이 꺼져 있어 지금은 대화할 수 없습니다 — "
+        +"start_studio.ps1 로 켠 뒤 이 탭에 다시 들어오세요. "))
     +"(장면 작업은 [장면] 탭의 [✍ 직접 입력]으로 계속할 수 있습니다.)"}}
  catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}
  await restoreTalk(st)}

@@ -38,6 +38,34 @@ $llmPort = 8080
 
 function Write-Step($text) { Write-Output "  $text" }
 
+# LLM 주소 해석 — 순서는 tools/local_llm.py 의 base_url() 과 **같아야 한다**.
+# (여기서만 다르게 고르면 기동 배너와 스튜디오가 서로 다른 서버를 가리키고,
+#  그 어긋남은 "켰다는데 왜 안 되지" 로만 드러난다.)
+function Get-LlmUrl {
+    if ($env:LOCAL_LLM_URL) { return ([string]$env:LOCAL_LLM_URL).TrimEnd('/') }
+    $mf = Join-Path $repo "project\manifest.json"
+    if (Test-Path $mf) {
+        try {
+            $j = Get-Content $mf -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($u in @($j.talk.base_url, $j.orchestrator.api.base_url)) {
+                if ($u) { return ([string]$u).TrimEnd('/') }
+            }
+        } catch { }
+    }
+    return "http://127.0.0.1:$llmPort/v1"
+}
+
+# 이 주소가 다른 기기인가. 루프백이 아니면 원격이고, 원격이면 **여기서 켤 수 없다**.
+function Test-RemoteLlm($url) {
+    try { $h = ([uri]$url).Host } catch { return $false }
+    if ($h -eq "localhost" -or $h -eq "::1") { return $false }
+    $ip = [System.Net.IPAddress]::None
+    if ([System.Net.IPAddress]::TryParse($h, [ref]$ip)) {
+        return (-not [System.Net.IPAddress]::IsLoopback($ip))
+    }
+    return $true
+}
+
 Write-Output "============================================================"
 Write-Output " AI 비주얼노벨 스튜디오 기동"
 Write-Output "============================================================"
@@ -139,6 +167,26 @@ if ($engine -ne "comfyui") {
 if ($NoLlm) {
     Write-Output "[2/3] 로컬 LLM: 건너뜀 (-NoLlm)"
 } else {
+  $llmUrl = Get-LlmUrl
+  if (Test-RemoteLlm $llmUrl) {
+    # LLM 이 다른 기기(노트북)에 있다. 여기서 serve.ps1 을 부르면 **이 PC 에 두 번째
+    # 서버가 뜬다** — 모델 파일도 없고 VRAM 만 먹으며, 정작 스튜디오가 보는 주소는
+    # 노트북 쪽이라 아무것도 고쳐지지 않는다. 그래서 켜지 않고 응답만 확인한다.
+    Write-Output "[2/3] 로컬 LLM: 다른 기기에 있습니다 ($llmUrl) — 여기서 켜지 않고 응답만 확인합니다"
+    $llmOk = $false
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 4 -Uri "$llmUrl/models"
+        if ($r.StatusCode -eq 200) { $llmOk = $true }
+    } catch { }
+    if ($llmOk) {
+        Write-Step "응답 정상 — 스토리·장면 구성·프롬프트·대화 탭을 쓸 수 있습니다."
+    } else {
+        Write-Step "응답 없음 — 그 기기에서 llama-server 가 떠 있는지, IP 가 바뀌지 않았는지 확인하세요."
+        Write-Step "주소를 바꾸는 곳은 두 군데뿐입니다: project\manifest.json 의 talk.base_url ·"
+        Write-Step "orchestrator.api.base_url, 또는 그 둘을 덮는 setx LOCAL_LLM_URL \"http://새IP:8080/v1\""
+        Write-Step "확인: python tools\doctor.py"
+    }
+  } else {
     $running = Get-Process llama-server -ErrorAction SilentlyContinue
     if ($running) {
         # serve.ps1 은 기존 프로세스를 죽이고 다시 띄운다 → 이미 떠 있으면 호출하지 않는다.
@@ -172,6 +220,7 @@ if ($NoLlm) {
             Write-Step "확인: python tools\doctor.py"
         }
     }
+  }
 }
 
 # ---------------------------------------------------------------- 3) 웹 스튜디오
