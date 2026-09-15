@@ -50,6 +50,10 @@ OUT_DIR = vn_core.OUTPUT / "viewer"
 # 스튜디오 뷰어와 공용인 VN 재생 엔진. 감상본은 이 파일을 인라인해 자기완결을 유지한다.
 RUNTIME_JS = vn_core.TOOLS / "vn_runtime.js"
 
+# build_data 가 실어 보내지만 **감상본 payload 에는 빠지는** 칸 — 사람에게 보고할 내용이다.
+# (재생기는 읽지 않고, 소장본은 남에게 건네는 파일이라 미승인 컷 목록이 따라가면 안 된다.)
+META_KEYS = ("skipped", "warnings")
+
 # 재인코딩 캐시 — 같은 원본·같은 옵션이면 다시 굽지 않는다(output/ 안, 점 폴더라 목록에서 감춰짐).
 CACHE_DIR = vn_core.OUTPUT / ".cache" / "viewer"
 # 상한은 **바이트**다. 예전에는 개수(160)였는데, 한 항목이 원본 컷 하나를 통째로 담은
@@ -335,10 +339,17 @@ def build_data(include_all: bool, max_edge: int, quality: int, cover_id: str | N
     fmt = "webp" if webp else "jpeg"
     scenes = []
     missing = []
+    skipped: list[str] = []
     # 장면 훑기와 "감상본에 실릴 컷인가" 판정은 vn_core 단일 출처를 쓴다 —
     # 인화(print_export)·프리플라이트·진단이 같은 함수를 보므로 목록이 서로 갈리지 않는다.
     for f, sc in vn_core.iter_scenes():
         if not vn_core.is_deliverable(sc, include_all):
+            # 떨어뜨린 컷의 이름을 **모은다**. 예전에는 조용한 continue 뿐이어서, 스튜디오
+            # 뷰어가 12컷을 재생한 직후 내보낸 파일에는 11컷만 들어가도 아무도 그것을
+            # 말해 주지 않았다 — 친구에게 보낸 1화에 엔딩이 없다는 사실을 본인도 몰랐다.
+            # 바로 아래 prune_dangling_gotos 는 이미 같은 규칙을 지키고 있다:
+            # "무엇을 떨어뜨렸는지 반드시 호출자가 알리게 한다".
+            skipped.append(str(sc.get("scene_id") or f.stem))
             continue
         sel = vn_core.selected_of(sc)
         lines = []
@@ -370,13 +381,16 @@ def build_data(include_all: bool, max_edge: int, quality: int, cover_id: str | N
     scenes.sort(key=lambda s: s.get("order") or 0)
     if not scenes:
         raise VNError("내보낼 장면이 없습니다. (selected_image 있는 APPROVED 장면 — --all 로 전체)")
-    for w in missing + prune_dangling_gotos(scenes):
+    warnings = missing + prune_dangling_gotos(scenes)
+    for w in warnings:
         print(f"  ⚠ {w}")
     if use_cache:
         prune_cache()
     dating = mf.get("dating") if isinstance(mf.get("dating"), dict) else None
     return {"title": mf.get("title") or "무제", "scenes": scenes, "dating": dating,
-            "episodes": episode_list(mf, scenes), "cover": pick_cover(scenes, cover_id)}
+            "episodes": episode_list(mf, scenes), "cover": pick_cover(scenes, cover_id),
+            # 아래 두 칸은 **내보내기 보고용**이다. 감상본 payload 에는 싣지 않는다(META_KEYS).
+            "skipped": skipped, "warnings": warnings}
 
 
 def pick_cover(scenes: list, cover_id: str | None) -> int | None:
@@ -689,11 +703,17 @@ def load_runtime() -> str:
 def build_html(include_all: bool, max_edge: int, quality: int,
                cover_id: str | None = None, font_spec: str | None = None,
                webp: bool = False, use_cache: bool = True):
-    """(data, html) 반환 — 단일 파일 export 와 PWA 번들이 공유."""
+    """(data, html) 반환 — 단일 파일 export 와 PWA 번들이 공유.
+
+    data 에는 보고용 칸(META_KEYS)이 섞여 있고 payload 에서는 빠진다.
+    """
     data = build_data(include_all, max_edge, quality, cover_id, webp, use_cache)
     # 자리표시자 토큰이 작품 텍스트에 섞여 있어도 치환 대상이 되지 않게 중화한다
     # (JSON 의 \\u005f 는 '_' 로 되살아나므로 내용은 그대로다 — "</" 를 다루는 방식과 같다).
-    payload = (json.dumps(data, ensure_ascii=False)
+    # 보고용 칸은 감상본에 싣지 않는다. 소장본은 남에게 건네는 파일이라 '내가 아직
+    # 승인하지 않은 컷의 목록' 이 따라갈 이유가 없다(재생기도 읽지 않는다).
+    payload_data = {k: v for k, v in data.items() if k not in META_KEYS}
+    payload = (json.dumps(payload_data, ensure_ascii=False)
                .replace("</", "<\\/")
                .replace("__RUNTIME__", "__RUNTIME\\u005f_"))
     fcss = font_css(find_font(font_spec), used_text(data))
@@ -717,11 +737,16 @@ def safe_name(title: str) -> str:
 
 def export(include_all: bool, max_edge: int, quality: int,
            cover_id: str | None = None, font_spec: str | None = None,
-           webp: bool = False, use_cache: bool = True) -> Path:
+           webp: bool = False, use_cache: bool = True) -> tuple[Path, dict]:
+    """(저장 경로, data) — data 의 skipped·warnings 를 **호출자가 사람에게 전해야 한다**.
+
+    경로만 돌려주던 시절에는 웹 UI 가 전할 것이 파일 이름과 MB 뿐이었고, 빠진 컷은
+    서버 콘솔로만 갔다 — 스튜디오가 곧 제품인 지금 그 콘솔을 읽는 사람은 없다.
+    """
     data, html = build_html(include_all, max_edge, quality, cover_id, font_spec, webp, use_cache)
     out = OUT_DIR / f"{safe_name(data['title'])}.html"
     atomic_write_text(out, html)      # 저장 도중 끊겨도 반쯤 잘린 감상본이 남지 않는다
-    return out
+    return out, data
 
 
 def main() -> int:
@@ -740,8 +765,8 @@ def main() -> int:
     if args.webp and not has_pillow():
         print("  · Pillow 가 없어 WebP 대신 원본 이미지를 그대로 내장합니다 (pip install pillow).")
     try:
-        out = export(args.all, args.max_edge, args.quality, args.cover, args.embed_font,
-                     args.webp, not args.no_cache)
+        out, data = export(args.all, args.max_edge, args.quality, args.cover, args.embed_font,
+                           args.webp, not args.no_cache)
     except RuntimeError as exc:      # VNError 포함
         print(f"오류: {exc}")
         return 1
@@ -749,6 +774,9 @@ def main() -> int:
         print("  · 폰트 파일을 찾지 못해 시스템 폰트로 폴백했습니다 (assets/fonts/*.woff2|ttf|otf).")
     size = out.stat().st_size
     print(f"감상본 저장: {out.relative_to(ROOT).as_posix()}  ({size / 1_000_000:.2f} MB)")
+    if data.get("skipped"):
+        sk = data["skipped"]
+        print(f"  ⚠ 승인되지 않아 빠진 컷 {len(sk)}개: {', '.join(sk)}  (--all 로 포함)")
     if size > 15_000_000:
         print("  ⚠ 15MB 초과 — 폰 전송/아티팩트 게시가 어려울 수 있음. "
               "--max-edge/--quality 를 낮추거나 --webp 를 쓰세요.")

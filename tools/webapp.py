@@ -259,6 +259,27 @@ def save_favorites(ids: list[str]) -> None:
     vn_core.atomic_write_json(FAVORITES, {"scene_ids": ids})
 
 
+def last_viewer_export() -> dict | None:
+    """가장 최근에 만든 감상본 파일 (경로·크기·시각). 없으면 None.
+
+    감상 탭이 "이 감상본은 얼마나 낡았나" 를 말할 수 있는 유일한 근거다 — 승인 세 컷을
+    더 하고도 예전 파일을 친구에게 보내는 일은 여기서만 막을 수 있다.
+    """
+    best = None
+    try:
+        for f in (OUTPUT_DIR / "viewer").glob("*.html"):
+            st = f.stat()
+            if best is None or st.st_mtime > best[1]:
+                best = (f, st.st_mtime, st.st_size)
+    except OSError:
+        return None
+    if best is None:
+        return None
+    f, mtime, size = best
+    return {"file": f.relative_to(ROOT).as_posix(), "mtime": int(mtime),
+            "mb": round(size / 1_000_000, 2)}
+
+
 def state() -> dict:
     mf = _load_json_safe(MANIFEST) if MANIFEST.exists() else None
     scenes = []
@@ -305,6 +326,7 @@ def state() -> dict:
             "characters": [{"id": c.get("character_id"), "name": c.get("name", "")}
                            for c in (mf or {}).get("characters", [])],
             "favorites": load_favorites(),
+            "last_export": last_viewer_export(),
             # 폰 접속 QR 은 반드시 폰에서 열리는 주소여야 한다(127.0.0.1 은 폰 자신을 가리킨다).
             "lan_urls": list(LAN_URLS),
             "episodes": [e for e in (mf or {}).get("episodes", []) if isinstance(e, dict)],
@@ -824,10 +846,15 @@ def r_upload_image(b):
 def r_export_viewer(b):
     # 타임캡슐 감상본: 승인 장면+이미지+뷰어를 단일 HTML 로 (Pillow 있으면 용량 최적화)
     import export_viewer
-    out = export_viewer.export(bool(b.get("all")),
-                               int(b.get("max_edge", 1600)), int(b.get("quality", 85)))
+    out, data = export_viewer.export(bool(b.get("all")),
+                                     int(b.get("max_edge", 1600)), int(b.get("quality", 85)))
+    # 빠진 컷·경고를 **브라우저까지** 올려 보낸다. 예전에는 서버 콘솔로만 갔고,
+    # 스튜디오가 곧 제품인 지금 그 콘솔을 읽는 사람은 없다.
     return {"file": out.relative_to(ROOT).as_posix(),
-            "mb": round(out.stat().st_size / 1_000_000, 2)}
+            "mb": round(out.stat().st_size / 1_000_000, 2),
+            "count": len(data.get("scenes") or []),
+            "skipped": list(data.get("skipped") or []),
+            "warnings": list(data.get("warnings") or [])}
 
 
 def r_export_pwa(b):

@@ -4840,8 +4840,11 @@ def approved_scene(b: Box):
 def v01(b: Box):
     tcm = b.mod("export_viewer")
     with approved_scene(b):
-        out = tcm.export(False, 800, 80)
+        out, data = tcm.export(False, 800, 80)
         html = out.read_text(encoding="utf-8")
+    # 보고용 칸은 호출자에게는 오지만 감상본 안에는 실리지 않는다(남에게 건네는 파일이다)
+    ok(isinstance(data.get("skipped"), list), "export 가 빠진 컷 목록을 돌려주지 않음")
+    hasnt(html, '"skipped"', "보고용 칸이 감상본 payload 에 실림")
     ok(out.exists(), "산출물 없음")
     has(html, "data:image", "이미지 내장")
     has(html, "bScroll", "스크롤 모드")
@@ -4976,7 +4979,7 @@ def j01(b: Box):
 def j02(b: Box):
     tcm = b.mod("export_viewer")
     with approved_scene(b), quiet():
-        html = tcm.export(False, 640, 70).read_text(encoding="utf-8")
+        html = tcm.export(False, 640, 70)[0].read_text(encoding="utf-8")
     _node_check(b, html, "viewer")
 
 
@@ -5005,7 +5008,7 @@ def j04(b: Box):
         raise Gap("tools/vn_runtime.js 아직 없음 — 감상본 인라인 대상이 없다")
     ev = b.mod("export_viewer")
     with approved_scene(b), quiet():
-        html = ev.export(False, 640, 70).read_text(encoding="utf-8")
+        html = ev.export(False, 640, 70)[0].read_text(encoding="utf-8")
     hasnt(html, "__RUNTIME__", "치환되지 않은 자리표시자가 감상본에 그대로 남음")
     if "VNRuntime" not in html:
         raise Gap("export_viewer 가 아직 tools/vn_runtime.js 를 인라인하지 않음 "
@@ -5706,8 +5709,8 @@ def j08(b: Box):
 
 _J09_HARNESS = """
 const TAB_KEY="vn:studio:tab";
-let curTab="",scStale=false,galStale=false,S={};
-let nScenes=0,nGallery=0,partial=false;
+let curTab="",scStale=false,galStale=false,vwStale=false,S={};
+let nScenes=0,nGallery=0,nAlbum=0,partial=false;
 const localStorage={setItem:function(){},getItem:function(){return ""}};
 const stub={value:"",open:false,src:"",style:{},
  classList:{add:function(){},remove:function(){},toggle:function(){}}};
@@ -5727,9 +5730,10 @@ function setHash(){}
 function renderScene(){return partial}
 function renderScenes(){nScenes++}
 function renderGallery(){nGallery++}
+function renderAlbum(){nAlbum++}
 __FUNCS__
 function count(){return {scenes:nScenes,gallery:nGallery}}
-function zero(){nScenes=0;nGallery=0}
+function zero(){nScenes=0;nGallery=0;nAlbum=0}
 (async function(){
  const out={};
  curTab="viewer";zero();await refresh();out.hiddenRefresh=count();
@@ -5740,6 +5744,11 @@ function zero(){nScenes=0;nGallery=0}
  curTab="viewer";partial=true;zero();await refresh({scene:"SCENE-001"});
  out.partialHidden=count();
  zero();selectTab("scenes");out.partialThenEnter=count();
+ // 감상 탭 머리말도 같은 규칙을 지켜야 한다 — 표지 썸네일은 보이지 않는 탭에 붙지 않는다.
+ curTab="scenes";zero();await refresh();out.albumHidden=nAlbum;
+ zero();selectTab("viewer");out.albumEnter=nAlbum;
+ zero();selectTab("viewer");out.albumAgain=nAlbum;
+ curTab="viewer";zero();await refresh();out.albumVisible=nAlbum;
  out.sized=[imgSized("/img/raw/S/a.png",1000),imgSized("/img/raw/S/a.png?w=224",1000)];
  stub.src="";vnSetCG("/img/raw/S/cg.png");out.cg=stub.src;
  console.log(JSON.stringify(out));
@@ -5779,6 +5788,13 @@ def j09(b: Box):
        "보이는 탭을 refresh 가 그리지 않는다(화면이 멈춘다)")
     eq(r["galleryRefresh"], {"scenes": 0, "gallery": 1},
        "갤러리 탭에서 갤러리가 갱신되지 않는다")
+
+    # 감상 탭 머리말(표지 썸네일 1장)도 같은 규칙 위에 있다 — 규칙이 하나만 있어야
+    # 다음 화면을 붙이는 사람이 어느 쪽을 본떠야 할지 헷갈리지 않는다.
+    eq(r["albumHidden"], 0, "보이지 않는 감상 탭의 표지를 refresh 가 받아 온다")
+    eq(r["albumEnter"], 1, "감상 탭에 들어왔는데 뒤처진 머리말을 갚지 않는다(빈 표지가 남는다)")
+    eq(r["albumAgain"], 0, "이미 최신인 감상 탭을 들어올 때마다 표지를 다시 받는다")
+    eq(r["albumVisible"], 1, "보이는 감상 탭에서 승인·내보내기 뒤에도 머리말이 그대로다")
 
     eq(r["sized"], ["/img/raw/S/a.png?w=1000", "/img/raw/S/a.png?w=224"],
        "축소본 요청 규칙이 깨졌다(원본을 받거나 부르는 쪽이 정한 폭을 덮어쓴다)")

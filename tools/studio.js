@@ -104,6 +104,19 @@ function renderChips(){
  const c=$("chipLLM");
  c.textContent=(llmUp===false)?"스토리: 로컬 LLM 꺼짐 · 직접 입력":"스토리: 로컬 LLM";
  c.className="chip"+(llmUp===false?" bad":(llmUp?" ok":""));
+ // 칩 하나로는 폰에서 놓치기 쉽다. LLM 이 필요한 화면은 **그 화면에서** 말하고,
+ // 대신 쓸 수 있는 길의 이름을 함께 준다(모른다=null 일 때는 단정하지 않는다).
+ const sn=$("storyNotice");
+ if(sn){sn.hidden=llmUp!==false;
+  if(!sn.hidden)sn.textContent="⚠ 로컬 LLM 이 꺼져 있어 [전송]이 실패합니다 — "
+   +"아래 [프롬프트 틀]을 복사해 직접 쓰거나 다른 AI 에 물어보고, 받은 결과를 "
+   +"오른쪽 스토리라인 칸에 붙여넣으면 그대로 다음 단계로 갑니다."}
+ const cn=$("composeNotice");
+ if(cn){cn.hidden=llmUp!==false;
+  if(!cn.hidden)cn.textContent="⚠ 로컬 LLM 이 꺼져 있어 [스토리라인 → 장면 구성]과 "
+   +"장면 카드의 [프롬프트 생성]이 실패합니다 — 아래 [✍ 직접 입력]과 각 장면 카드의 "
+   +"[✍ 직접 입력]으로 그대로 진행할 수 있습니다(브리프는 모델 없이 만들어집니다). "
+   +"이미지 생성(ComfyUI)·선택·승인·감상은 영향을 받지 않습니다."}
  imageChip()}
 // ---- 이미지 엔진(ComfyUI 로컬·무료가 기본, MakeFun 유료는 보조) ----
 // 서버가 /api/state 에 image{engine,provider,url,engines,mf_token} 를 실으면 그것을 따르고,
@@ -138,14 +151,16 @@ async function refresh(opts){
  syncFav();syncResume();
  if(o.scene&&renderScene(o.scene)){
   if(curTab==="gallery")renderGallery();else galStale=true;
+  if(curTab==="viewer")renderAlbum();else vwStale=true;   // 승인 하나로 '승인 N/M' 이 바뀐다
   return}
  renderChat();renderLan();
  // 보이지 않는 탭은 다시 그리지 않는다 — display:none 안의 <img> 도 브라우저는 내려받는다.
  // 폰 실측: refresh() 한 번이 장면·갤러리 썸네일 86MB 를 끌어왔고 그 탭은 화면에 없었다.
  // 대신 '다시 그려야 한다' 는 표시만 남겨 그 탭에 들어올 때 한 번 그린다(selectTab).
  if(curTab==="scenes")renderScenes();else scStale=true;
- if(curTab==="gallery")renderGallery();else galStale=true}
-let scStale=false,galStale=false;   // 숨은 탭이 뒤처져 있는가(selectTab 이 갚는다)
+ if(curTab==="gallery")renderGallery();else galStale=true;
+ if(curTab==="viewer")renderAlbum();else vwStale=true}
+let scStale=false,galStale=false,vwStale=false;   // 숨은 탭이 뒤처져 있는가(selectTab 이 갚는다)
 function renderChat(){const box=$("chatlog");box.replaceChildren();
  // /api/state 는 챗로그를 싣지 않는다(폰 전송량) — 없을 수 있으므로 반드시 가드.
  for(const m of (S.chat||[]))box.appendChild(el("div","msg "+m.role,m.content));
@@ -415,9 +430,9 @@ async function pollGenUntilDone(sid,msg){
 // 카드가 다시 그려져도 사용자가 입력하던 것은 살아남아야 한다(붙여넣던 프롬프트, 펼침 상태).
 // note 는 유료 작업(업스케일)의 결과 한 줄이다 — 성공하면 곧바로 refresh 가 카드를 갈아끼우므로
 // 여기 두지 않으면 "새 후보가 생겼다"는 안내가 만들어지자마자 지워진다.
-const scDraft=new Map();   // scene_id → {gen, set, open, note, msg}
+const scDraft=new Map();   // scene_id → {gen, set, open, note, msg, watch}
 function draftOf(sid){let d=scDraft.get(sid);
- if(!d){d={gen:"",set:"",open:null,note:"",msg:""};scDraft.set(sid,d)}
+ if(!d){d={gen:"",set:"",open:null,note:"",msg:"",watch:false};scDraft.set(sid,d)}
  return d}
 // 결과 한 줄(msg)도 카드 재생성보다 오래 살아야 한다. 성공하면 곧바로 refresh 가 카드를
 // 갈아끼우므로, 예전에는 "승인됨"·"후보 n장" 이 만들어진 지 0.2초 만에 덮여 사라졌다 —
@@ -576,7 +591,12 @@ function scBtnApprove(sc,msg){
  const b=el("button","btn seal","승인 도장 찍기");
  b.onclick=async()=>{b.disabled=true;msg.textContent="승인 중…";
   try{await api("/api/approve",{scene_id:sc.scene_id});
-   say(sc.scene_id,msg,"승인됨 — 갤러리에 모입니다");await refresh({scene:sc.scene_id})}
+   const all=(S.scenes||[]).length;
+   // 방금 찍은 이 컷은 아직 S 에 반영되지 않았다(refresh 는 아래에서 한다) — 세어서 더한다
+   const done=(S.scenes||[]).filter(s=>s.status==="APPROVED").length+1;
+   draftOf(sc.scene_id).watch=true;
+   say(sc.scene_id,msg,"승인됨 · "+done+"/"+all+"컷");
+   await refresh({scene:sc.scene_id})}
   catch(e){msg.textContent="실패: "+e.message;b.disabled=false}};
  return b}
 
@@ -610,6 +630,11 @@ function scActions(sc){
  const act=el("div","row");act.style.marginTop="8px";
  const msg=el("span","small");msg.setAttribute("role","status");
  const dr0=draftOf(sc.scene_id);if(dr0.msg)msg.textContent=dr0.msg;   // 지난 결과 한 줄을 되살린다
+ // 방금 승인한 컷에는 '보러 가기' 를 바로 옆에 둔다. 예전에는 "갤러리에 모입니다" 라고만
+ // 말했고, 그 컷을 실제로 보려면 갤러리 탭으로 건너가 ▶ 를 찾아야 했다(폰에서 두 탭).
+ // dr0 에 남겨 두므로 카드가 다시 그려져도 사라지지 않는다.
+ if(dr0.watch&&sc.status==="APPROVED"){const w=el("button","btn ghost","▶ 지금 보기");
+  w.onclick=()=>playFrom(sc.scene_id);act.appendChild(w)}
  const gen=sc.status!=="APPROVED"&&!!sc.prompt;
  if(sc.status!=="APPROVED"&&!sc.prompt)act.appendChild(scBtnGenPrompt(sc,msg));
  if(gen){act.appendChild(scBtnGenImage(sc,msg));
@@ -1108,7 +1133,12 @@ async function talkStatus(){const c=$("talkStatus");
  try{st=await api("/api/talk-status",{});
   llmUp=!!st.up;renderChips();   // 머리말 칩과 이 칩이 서로 다른 말을 하지 않게
   if(st.up){c.textContent="로컬 LLM 연결됨";c.className="chip ok"}
-  else{c.textContent="로컬 LLM 꺼짐 — serve.ps1 실행 필요";c.className="chip bad"}}
+  else{c.textContent="로컬 LLM 꺼짐 — serve.ps1 실행 필요";c.className="chip bad";
+   // 칩만 빨갛게 두면 사용자는 보내 보고 2초 뒤에야 안다. 여기서 먼저 말한다 —
+   // 인물 대화는 모델이 있어야만 되는 유일한 화면이라 대체 경로가 없다(장면 작업은 있다).
+   $("talkMsg").textContent="로컬 LLM 이 꺼져 있어 지금은 대화할 수 없습니다 — "
+    +"start_studio.ps1 로 켠 뒤 이 탭에 다시 들어오세요. "
+    +"(장면 작업은 [장면] 탭의 [✍ 직접 입력]으로 계속할 수 있습니다.)"}}
  catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}
  await restoreTalk(st)}
 // 50 · 전송 중에는 입력창·전송 버튼을 잠가 중복 전송을 막는다
@@ -1127,7 +1157,11 @@ async function talkSend(){if(talkWaiting)return;
   talkReset=false;
   talkChat.push({role:"assistant",content:d.reply,photos:d.photos||[]});
   talkLock(false);renderTalk();vnType(d.reply)}
- catch(e){talkLock(false);$("vnText").textContent="(대화 실패) "+e.message}
+ // 실패 사유는 상태 줄로 보낸다. 예전에는 인물의 대사창에 WinError 와 PowerShell 경로가
+ // 그대로 찍혔다 — 이지혜가 윈도우 경로를 말하는 화면이었다.
+ catch(e){talkLock(false);
+  $("vnText").textContent="(지금은 이야기할 수 없습니다)";
+  $("talkMsg").textContent="대화 실패 — "+e.message}
  $("talkInput").focus()}
 $("btnTalk").onclick=talkSend;
 // 56 · 오터치로 대화 전체가 날아가지 않게 확인 단계를 둔다
@@ -1216,17 +1250,73 @@ async function renderDl(){const box=$("dlList");if(!box)return;
   const row=el("div","dlrow");
   const a=el("a",null,f.path);a.href=f.url;a.setAttribute("download","");
   a.title="내려받기";
-  row.appendChild(a);row.appendChild(el("span","small",(f.mb||0)+"MB"));
+  // 서버는 mtime 을 이미 실어 보낸다. 크기만 보여 주던 시절에는 방금 만든 감상본과
+  // 승인 세 번 전에 만든 감상본이 목록에서 구분되지 않았다 — 공짜로 있는 신호였다.
+  row.appendChild(a);row.appendChild(el("span","small",
+   (f.mb||0)+"MB"+(f.mtime?" · "+fmtWhen(f.mtime):"")));
   box.appendChild(row)}}
 $("btnDlRefresh").onclick=renderDl;
 $("dlBox").addEventListener("toggle",()=>{if($("dlBox").open)renderDl()});
+// 시각 표기는 한 곳에서만 만든다(앨범 머리말·내려받기 목록이 같은 말을 하게).
+function fmtWhen(ts){if(!ts)return "";
+ try{return new Date(ts*1000).toLocaleString()}catch(e){return ""}}
+
+// ---- 감상 탭 머리말: 지금 무엇을 보게 되는가 ----
+// 이 탭은 nav 에서 '감상' 이라는 이름표를 단 첫 화면인데, 오랫동안 재생기 사용법 세 문단으로
+// 시작했고 작품에 대해서는 한 줄도 말하지 않았다. 정작 **내보낸 파일의 표지는** 제목·컷 수·
+// 화 수를 말해 준다 — 스튜디오가 자기가 만든 파일보다 덜 알려 주고 있었다.
+// 여기서 말하는 것 중 셋은 감상본 표지와 같고, 나머지 둘(승인 수·마지막 감상본 시각)은
+// 스튜디오만 알 수 있는 것이다. 모두 /api/state 에 이미 실려 오는 값이다.
+function renderAlbum(){
+ const head=$("albumHead"),meta=$("albumMeta");
+ if(!head||!meta)return;
+ head.replaceChildren();
+ const all=S.scenes||[];
+ // 감상본에 실리는 기준은 서버와 같다(vn_core.is_deliverable: APPROVED + 선택된 이미지).
+ const done=all.filter(s=>s.status==="APPROVED"&&s.selected_image);
+ const cover=done.find(s=>s.image_url)||all.find(s=>s.image_url)||null;
+ if(cover){const im=el("img");im.src=cover.image_url+"?w=160";
+  im.alt=(S.title||"작품")+" 표지 — "+(cover.purpose||cover.scene_id);
+  head.appendChild(im)}
+ const box=el("div");
+ box.appendChild(el("div","t",S.title||"제목 미정"));
+ const eps=(S.episodes||[]).length;
+ box.appendChild(el("div","small",all.length?
+  (all.length+"개 장면"+(eps>1?" · "+eps+"화":"")+" · 승인 "+done.length+"/"+all.length)
+  :"아직 장면이 없습니다"));
+ head.appendChild(box);
+ const parts=[];
+ if(!all.length)parts.push("[장면] 탭에서 먼저 만드세요");
+ else{
+  // 스튜디오 재생기는 승인 전 컷도 보여 준다(그게 스튜디오의 쓸모다). 감상본은 아니다 —
+  // 두 수가 다르면 그 자리에서 말한다. 예전에는 같은 엔진이라는 안내만 있었다.
+  if(done.length!==all.length)
+   parts.push("여기서는 "+all.length+"컷 전부 재생 · 감상본에 실릴 컷 "+done.length);
+  const ex=S.last_export;
+  parts.push(ex?("마지막 감상본 "+fmtWhen(ex.mtime)+" · "+(ex.mb||0)+"MB")
+   :"아직 감상본을 만들지 않았습니다");}
+ meta.textContent=parts.join("  ·  ")}
+// 버튼 이름이 [감상본 만들어 열기]이므로 만든 뒤 연다. 팝업 차단기에 막힐 수 있어서
+// (await 뒤의 window.open) 결과 줄의 [▶ 다시 열기] 링크는 그대로 남긴다 —
+// 자동으로 열리는 것은 덤이지 유일한 길이 아니다.
+function openInline(rel){const u=dlUrl(rel);if(!u)return;
+ try{window.open(u+"?inline=1","_blank","noopener")}catch(e){}}
 $("btnExportViewer").onclick=async()=>{const m=$("exportViewerMsg");
- const bz=busy(m,"내보내는 중… 이미지를 파일 하나에 넣고 있습니다");
+ const bz=busy(m,"만드는 중… 이미지를 파일 하나에 넣고 있습니다");
  try{const d=await api("/api/export-viewer",exportOpts());
   const s=bz.stop();
-  setMsgWithLinks(m,d.file+" ("+d.mb+"MB"+took(s)+") — 이 파일 하나로 폰에서도 재생됩니다 ",
-   [dlLink(d.file,"⬇ 내려받기"),dlLink(d.file,"▶ 지금 열기",true)]);
-  if($("dlBox").open)renderDl()}
+  let text=d.file+" ("+d.mb+"MB"+took(s)+") — 이 파일 하나로 폰에서도 재생됩니다 ";
+  // 빠진 컷을 말한다. 예전에는 뷰어가 12컷을 재생한 직후 11컷짜리 파일을 내주면서도
+  // 파일 이름과 MB 만 말했다 — 1화에 엔딩이 없다는 것을 보낸 사람도 몰랐다.
+  const sk=Array.isArray(d.skipped)?d.skipped:[];
+  if(sk.length)text+="· ⚠ 승인 안 된 "+sk.length+"컷이 빠졌습니다("+sk.join(", ")
+   +") — 넣으려면 아래 [감상본 내보내기 옵션]에서 [승인 안 된 장면도 포함] ";
+  const w=Array.isArray(d.warnings)?d.warnings:[];
+  if(w.length)text+="· ⚠ "+w[0]+(w.length>1?" 외 "+(w.length-1)+"건":"")+" ";
+  setMsgWithLinks(m,text,[dlLink(d.file,"⬇ 내려받기"),dlLink(d.file,"▶ 다시 열기",true)]);
+  openInline(d.file);
+  if($("dlBox").open)renderDl();
+  await refresh()}          // '마지막 감상본' 시각을 앨범 머리말에 반영
  catch(e){bz.stop("실패: "+e.message)}};
 // 86 · PWA 내보내기 — 서버가 아직 지원하지 않으면 CLI 안내만
 $("btnExportPwa").onclick=async()=>{const m=$("exportViewerMsg");
@@ -1314,7 +1404,8 @@ function selectTab(name,quiet){const sec=$("tab-"+name);if(!sec)return;
  if(name==="gallery"){galStale=false;renderGallery()}
  if(name==="talk")talkStatus();
  if(name==="story")loadChatHistory();
- if(name==="viewer"){syncResume();renderLan();if($("dlBox").open)renderDl()}}
+ if(name==="viewer"){if(vwStale){vwStale=false;renderAlbum()}
+  syncResume();renderLan();if($("dlBox").open)renderDl()}}
 window.addEventListener("hashchange",()=>{const t=tabFromHash();
  if(t&&t!==curTab)selectTab(t)});
 // 첫 화면: 주소의 탭 > 마지막으로 보던 탭 > 스토리
