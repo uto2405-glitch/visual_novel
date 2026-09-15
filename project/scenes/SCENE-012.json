@@ -22,7 +22,7 @@
   "visual_style": "",
   "prompt": {
     "grok_input_version": 1,
-    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, full body, 1girl, 1boy, 2people, couple, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, waving once and turning away first, walking off down the path while he stays where he is, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset",
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, portrait 2:3, wide shot, full body, 1girl, 1boy, 2people, both characters visible, light brown hair, half updo, pink cardigan, star earrings, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings, wearing pastel knit cardigan over a white blouse, pleated beige skirt, seen from behind him in the foreground as she walks away down the path, her back to the camera, one hand half lowered, with black hair, white shirt, short sleeves, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, wearing plain white casual shirt, dark slim jeans, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset, golden hour",
     "external_generator": "ComfyUI",
     "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
@@ -43,15 +43,25 @@
   "assets": {
     "raw_images": [
       "images/raw/SCENE-012/cf_1ba7fa_2.png",
+      "images/raw/SCENE-012/cf_3049e7_2.png",
+      "images/raw/SCENE-012/cf_35a7e4_1.png",
+      "images/raw/SCENE-012/cf_9bc6fc_1.png",
+      "images/raw/SCENE-012/cf_e6ecbe_2.png",
       "images/raw/SCENE-012/cf_ffa74b_1.png"
     ],
-    "selected_image": "images/raw/SCENE-012/cf_ffa74b_1.png"
+    "selected_image": "images/raw/SCENE-012/cf_3049e7_2.png"
   },
   "review": {
     "auto": "PASS",
     "human": "PASS",
     "score": null,
-    "notes": []
+    "notes": [
+      "[2026-09-15] REVISE → IMAGE: C2 거리 비트 · C3 노을 · C1 의상 고정 · 동작 문장 주어 하나로 — 재생성"
+    ]
   },
-  "version": 1
+  "version": 2,
+  "wardrobe": {
+    "CHAR-001": "default",
+    "CHAR-002": "default"
+  }
 }

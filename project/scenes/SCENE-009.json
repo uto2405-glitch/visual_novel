@@ -59,9 +59,13 @@
     "raw_images": [
       "images/raw/SCENE-009/cf_0421a8_1.png",
       "images/raw/SCENE-009/cf_3f0987_1.png",
+      "images/raw/SCENE-009/cf_674456_1.png",
       "images/raw/SCENE-009/cf_825b42_2.png",
       "images/raw/SCENE-009/cf_8ee383_2.png",
-      "images/raw/SCENE-009/cf_9b1923_1.png"
+      "images/raw/SCENE-009/cf_9b1923_1.png",
+      "images/raw/SCENE-009/cf_a2e4d0_2.png",
+      "images/raw/SCENE-009/cf_ed1729_2.png",
+      "images/raw/SCENE-009/cf_f73781_1.png"
     ],
     "selected_image": "images/raw/SCENE-009/cf_825b42_2.png"
   },
@@ -71,8 +75,9 @@
     "score": null,
     "notes": [
       "[2026-09-15] REVISE → SCENE_PLAN: 외부 요청이 남긴 후보 파일(evil.png) 제거 후 계획 단계로 복원",
-      "[2026-09-15] REVISE → PROMPT: A1 앨범 일관성: 머리색 네거티브 이전 프롬프트(인물 태그 없음) 갱신 후 재렌더"
+      "[2026-09-15] REVISE → PROMPT: A1 앨범 일관성: 머리색 네거티브 이전 프롬프트(인물 태그 없음) 갱신 후 재렌더",
+      "[2026-09-15] REVISE → IMAGE: C2 거리 비트 · C1 의상 고정 · 동작 문장(앉은 채 vs 일어선다 충돌) — 재생성"
     ]
   },
-  "version": 3
+  "version": 4
 }
