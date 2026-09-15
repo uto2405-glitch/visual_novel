@@ -214,7 +214,8 @@ def check_env() -> None:
     if url:
         add("환경변수", "LOCAL_LLM_URL", OK, f"{_shown(url)} (매니페스트 talk.base_url 보다 우선)")
     else:
-        add("환경변수", "LOCAL_LLM_URL", OK, "미설정 — 매니페스트 talk.base_url 또는 기본값을 씁니다")
+        add("환경변수", "LOCAL_LLM_URL", OK,
+            "미설정 — 매니페스트 talk.base_url → orchestrator.api.base_url → 기본값 순으로 씁니다")
 
 
 # ------------------------------------------------------------------ 3. 로컬 LLM
@@ -229,8 +230,11 @@ def check_local_llm() -> None:
         models = ", ".join(m for m in st.get("models", []) if m) or "(모델명 미표시)"
         add("로컬 LLM", "서버 응답", OK, f"{_shown(st['url'])} · 모델 {models}")
     else:
+        # 꺼져 있다고 작업이 멈추는 것은 아니다 — 무엇이 막히고 무엇이 되는지를 함께 말한다.
+        # (브리프 조립에는 모델이 필요 없어서 직접 입력 경로는 이때도 그대로 돈다.)
         add("로컬 LLM", "서버 응답", WARN,
-            f"{_shown(str(st.get('url', '')))} 에 응답 없음 — 스토리·프롬프트·대화 탭이 막힙니다",
+            f"{_shown(str(st.get('url', '')))} 에 응답 없음 — 스토리 채팅·자동 프롬프트·인물 대화가 막힙니다"
+            " (장면 작업은 [✍ 직접 입력]으로 계속할 수 있습니다: python tools/scene_brief.py SCENE-001)",
             # 경로는 local_llm.serve_hint() 하나에서만 만든다 — 예전에는 여기에 개발 PC 경로가
             # 박혀 있어서, 다른 기기에서 doctor 를 돌린 사람에게 없는 파일을 알려 줬다.
             "start_studio.ps1 로 함께 켜거나, " + local_llm.serve_hint())

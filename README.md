@@ -10,7 +10,7 @@
 | **스토리 · 장면 구성 · 이미지 프롬프트 · 인물 대화** | **로컬 LLM** (llama.cpp, OpenAI 호환 `http://127.0.0.1:8080/v1`) | **0원** | 내 PC (`c:\Users\USER\claude\local_llm`) |
 | **이미지 생성 (기본)** | **ComfyUI** — 내 PC 의 로컬 서버 (`tools/comfyui_client.py`) | **0원** | `http://127.0.0.1:8188` (`COMFYUI_URL` 로 변경) |
 | 이미지 생성 (보조) · 업스케일 · 크레딧 | **MakeFun AI** (`tools/makefun_client.py`) | **유료 종량제** | `MAKEFUN_API_TOKEN` 환경변수 |
-| 그록(xAI) | **예비 경로** — grok.com 수동 복붙 또는 API | 구독/종량제 | `XAI_API_KEY` (선택) |
+| 로컬 LLM 이 꺼져 있을 때 | **직접 입력(붙여넣기)** — 브리프를 복사해 직접 쓰거나 다른 AI 에 물어보고, 받은 결과를 붙여넣는다 | **0원** | 키·계정 불필요 |
 
 창작 텍스트와 인물 대화는 **내 PC 를 벗어나지 않는다.** 외부로 나가는 것은 이미지 생성 프롬프트와,
 **이미지 쪽 기능을 쓸 때의 이미지 파일**이다 — 캐릭터 레퍼런스(로컬 파일일 때)와 업스케일할
@@ -144,8 +144,7 @@ python tools/check_protocol.py
 | 환경 점검 | `python tools/doctor.py` |
 | 장면 구성 | `python tools/vn_compose.py 10` (스토리라인 → 장면 10개) |
 | 장면 생성 | `python tools/advance_scene.py new` |
-| 프롬프트 (수동) | `python tools/make_grok_input.py SCENE-001` → 붙여넣기 → `advance_scene.py set-prompt SCENE-001 --file out.txt` |
-| 프롬프트 (그록 API) | `python tools/grok_api.py SCENE-001` |
+| 프롬프트 (직접 입력) | `python tools/scene_brief.py SCENE-001` → 받은 출력을 `advance_scene.py set-prompt SCENE-001 --file out.txt` |
 | **이미지 생성 (무료 · ComfyUI)** | `python tools/comfyui_client.py SCENE-001 --n 2` — `--seed` 로 재현 · `--check --online` 으로 연결·체크포인트 확인 |
 | **이미지 생성 (유료 · MakeFun)** | `python tools/makefun_client.py SCENE-001 --n 2` — **호출 1회 = 과금** |
 | **인화용 확대 (유료)** | `python tools/makefun_client.py --upscale SCENE-001` — 승인한 그림 그대로 픽셀만 키워 **새 후보로** 저장 |
@@ -178,13 +177,15 @@ APPROVED 장면만 감상본·인화 대상이 된다.
 
 ## 키·토큰 보안 (3원칙)
 
-1. **환경변수 전용.** `MAKEFUN_API_TOKEN` · `XAI_API_KEY` 를 저장소의 어떤 파일에도 쓰지 않는다
+1. **환경변수 전용.** `MAKEFUN_API_TOKEN` 을 저장소의 어떤 파일에도 쓰지 않는다
    (`.env` 포함 금지). 매니페스트에는 값이 아니라 변수 이름(`token_env`)만 적는다.
+   오케스트레이터는 로컬이라 키 자체가 없다 — 지금 남은 비밀값은 이 토큰 하나뿐이다.
 2. **서드파티 CLI·에이전트에 제공 금지.** 근거: 2026-07 Grok Build CLI 가 `.env` 의 키를
-   평문으로 서버에 전송한 사고.
+   평문으로 서버에 전송한 사고. 공급자가 바뀌어도 조항은 남는다.
 3. **브라우저로 전달 금지.** 서버가 알려주는 건 "설정됨/미설정" 불리언뿐이다.
 
-검사기 **A8** 이 저장소 내 `xai-` 패턴을 판정하고, `python tools/secret_scan.py` 가
+검사기 **A8** 이 저장소 내 `xai-` 패턴을 판정하고(유출 탐지기라 공급자 은퇴와 무관하게 남는다),
+`python tools/secret_scan.py` 가
 MakeFun `sk_`·Bearer·JWT·클라우드 키까지 넓게 훑는다(**발견해도 실제 값은 출력하지 않는다**).
 영구 등록 방법은 **[docs/ENV_SETUP.md](docs/ENV_SETUP.md)**.
 
@@ -230,7 +231,7 @@ python tools/makefun_client.py --upscale SCENE-001   # 유료 · 한 장으로 �
 | [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) | 감상본을 인터넷에 올릴까 고민될 때 |
 | [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md) | 뭔가 깨졌을 때, PC 를 새로 세팅할 때 (백업·복원 절차) |
 | [templates/free-assets-ko.md](templates/free-assets-ko.md) | 폰트·BGM·효과음을 무료로 구할 때 (라이선스 등급별) |
-| [templates/grok-prompts-ko.md](templates/grok-prompts-ko.md) | 그록에 붙여넣을 한글 프롬프트 틀이 필요할 때 |
+| [templates/prompt-frames-ko.md](templates/prompt-frames-ko.md) | 직접 쓰거나 다른 AI 에 물어볼 한글 프롬프트 틀이 필요할 때 |
 | [CLAUDE.md](CLAUDE.md) | 제작 프로토콜 원칙·금지 조항 |
 | [protocol/SCORECARD.md](protocol/SCORECARD.md) | 판정 기준 원문 (수정 금지) |
 | [NO_TOKEN_TASKS.md](NO_TOKEN_TASKS.md) | **다음에 할 일 · 진행 상태** (상태의 단일 출처) |

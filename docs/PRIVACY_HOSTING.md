@@ -31,7 +31,7 @@
 
 지금 이 저장소의 기본 이미지 엔진은 **로컬 ComfyUI** 다(`image_generator.engine: "comfyui"` ·
 `comfyui.api.base_url: http://127.0.0.1:8188`). 코드를 훑어 확인한 사실: 네트워크를 쓰는
-도구는 넷뿐이고(`makefun_client` · `comfyui_client` · `local_llm` · `xai_client`),
+도구는 셋뿐이고(`makefun_client` · `comfyui_client` · `local_llm`),
 그중 `comfyui_client` 의 바깥 요청은 **한 군데**뿐이며 그 주소는 `base_url()` 이다.
 즉 **기본 설정에서 그림을 굽는 동안 프롬프트도 이미지도 PC 를 떠나지 않는다.**
 오케스트레이터(로컬 LLM)도 같다 — 대사·스토리는 `127.0.0.1` 안에서만 돈다.

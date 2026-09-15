@@ -9,7 +9,7 @@
       "base_url": "http://127.0.0.1:8080/v1",
       "model": "local-qwen",
       "key_env": "",
-      "note": "스토리·장면구성·프롬프트 담당. 로컬이라 키 불필요·무료. 그록으로 바꾸려면 mode 를 api 로 두고 base_url=https://api.x.ai/v1, key_env=XAI_API_KEY 로 기입"
+      "note": "스토리·장면구성·프롬프트 담당. 로컬이라 키 불필요·무료. 유일한 오케스트레이터이며 원격 API 경로는 없다 — 꺼져 있을 때는 직접 입력(붙여넣기)으로 진행한다. base_url 은 LOCAL_LLM_URL·talk.base_url 다음 순위로 읽힌다(docs/SCHEMA.md §1.2)"
     }
   },
   "image_generator": {

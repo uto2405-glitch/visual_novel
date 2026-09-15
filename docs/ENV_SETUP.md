@@ -14,17 +14,17 @@
 | 변수 | 쓰는 곳 | 없으면 | 필수? |
 |---|---|---|---|
 | `MAKEFUN_API_TOKEN` | `tools/makefun_client.py` — MakeFun 이미지 생성 · 인화용 업스케일 · 파일 업로드 · 크레딧 조회 | 그 네 가지만 막힘(안내 메시지). 기본 엔진 ComfyUI·감상·검사·대화는 정상 | MakeFun 으로 만들거나 키울 때만 |
-| `XAI_API_KEY` | `tools/xai_client.py` — 그록 API(예비 경로) | 그록 API 경로만 막힘. 로컬 LLM 이 기본이라 보통 불필요 | 아니오 |
-| `LOCAL_LLM_URL` | `tools/local_llm.py` — 로컬 LLM 주소 | 매니페스트 `talk.base_url` → 없으면 `http://127.0.0.1:8080/v1` | 아니오(주소를 바꿀 때만) |
+| `LOCAL_LLM_URL` | `tools/local_llm.py` — 로컬 LLM 주소 | 매니페스트 `talk.base_url` → `orchestrator.api.base_url` → 없으면 `http://127.0.0.1:8080/v1` | 아니오(주소를 바꿀 때만) |
 | `COMFYUI_URL` | `tools/comfyui_client.py` — 로컬 ComfyUI 주소 | 매니페스트 `image_generator.comfyui.api.base_url` → 없으면 `http://127.0.0.1:8188` | 아니오(주소를 바꿀 때만) |
 | `COMFYUI_HOME` | `start_studio.ps1` — ComfyUI **설치 폴더**(`main.py` 가 있는 곳) | 저장소 옆 `..\ComfyUI` 만 찾는다. 다른 곳에 설치했으면 자동 기동을 건너뛴다(직접 켜면 그대로 쓴다) | 아니오(저장소 옆에 없을 때만) |
 | `LOCAL_LLM_HOME` | `start_studio.ps1` — 로컬 LLM(llama.cpp) **설치 폴더**(`runtime\serve.ps1` 이 있는 곳) | `%USERPROFILE%\claude\local_llm` 을 찾는다. 없으면 LLM 기동만 건너뛰고 스튜디오는 그대로 뜬다 | 아니오(그 경로가 아닐 때만) |
 
-`LOCAL_LLM_URL` · `COMFYUI_URL` 은 비밀이 아니라 그냥 주소다. 나머지 둘은 **비밀값**이다.
+`LOCAL_LLM_URL` · `COMFYUI_URL` 은 비밀이 아니라 그냥 주소다. **비밀값은 `MAKEFUN_API_TOKEN` 하나뿐이다** —
+오케스트레이터가 내 PC 의 로컬 LLM 이라 키 자체가 없고, 그것이 꺼져 있을 때의 경로(직접 입력·붙여넣기)도
+계정을 요구하지 않는다.
 
 발급처
-- MakeFun: makefun.ai → Account → API Token
-- xAI: console.x.ai (SuperGrok 구독과는 **별도 결제 트랙**이다. 구독에 API 크레딧이 포함되지 않는다.)
+- MakeFun: makefun.ai → Account → API Token (보조 이미지 엔진을 쓸 때만 필요)
 
 ---
 
@@ -102,7 +102,7 @@ $env:MAKEFUN_API_TOKEN = $null        # 지금 창에서도 즉시 제거
 3. 저장소 전체를 다시 훑는다:
    ```
    python tools/secret_scan.py
-   python tools/check_protocol.py     # A8 이 xai- 패턴을 판정
+   python tools/check_protocol.py     # A8 이 xai- 패턴을 판정(유출 탐지기 — 공급자 은퇴와 무관하게 남는다)
    ```
 4. **커밋된 적이 있으면** 파일을 고쳐도 git 이력에는 남아 있다. 이 경우 반드시 사용자에게
    보고한다(이력 재작성은 되돌릴 수 없는 작업이라 에이전트가 임의로 하지 않는다).
@@ -112,7 +112,7 @@ $env:MAKEFUN_API_TOKEN = $null        # 지금 창에서도 즉시 제거
 ## 6. 하지 말 것
 
 - `.env` 파일에 쓰기 — `.gitignore` 에 있어도 **금지**다. 근거: 2026-07 Grok Build CLI 가
-  `.env` 의 키를 평문으로 서버에 전송한 사고.
+  `.env` 의 키를 평문으로 서버에 전송한 사고. 공급자가 바뀌어도 조항은 남는다.
 - 서드파티 CLI·에이전트 도구에 토큰 붙여넣기.
 - 매니페스트·장면 JSON·문서·스크립트·주석에 값 적기. 매니페스트에는 **변수 이름만** 적는다:
   ```json

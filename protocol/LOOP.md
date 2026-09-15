@@ -4,11 +4,13 @@
 
 | 역할 | 무엇 | 비용 |
 |---|---|---|
-| 스토리 · 장면 구성 · 이미지 프롬프트 · 인물 대화 | **로컬 LLM** (llama.cpp, `http://127.0.0.1:8080/v1`) | 0원 |
-| 이미지 생성 | **MakeFun AI** (`tools/makefun_client.py`, `MAKEFUN_API_TOKEN`) | **유료 종량제 — 호출 1회 = 과금** |
-| 그록(xAI) | **예비 경로** — grok.com 수동 복붙 또는 `tools/grok_api.py` | 구독/종량제 |
+| 스토리 · 장면 구성 · 이미지 프롬프트 · 인물 대화 | **로컬 LLM** (llama.cpp, `http://127.0.0.1:8080/v1`) — 유일한 오케스트레이터 | 0원 |
+| 이미지 생성 (기본) | **ComfyUI** (`tools/comfyui_client.py`, `http://127.0.0.1:8188`) | 0원 |
+| 이미지 생성 (보조) · 업스케일 | **MakeFun AI** (`tools/makefun_client.py`, `MAKEFUN_API_TOKEN`) | **유료 종량제 — 호출 1회 = 과금** |
+| 로컬 LLM 이 꺼져 있을 때 | **직접 입력(붙여넣기)** — `tools/scene_brief.py` 또는 스튜디오 [✍ 직접 입력] | 0원 |
 
-교체는 매니페스트 `orchestrator` / `image_generator` 만 바꾸면 된다.
+이미지 엔진 교체는 매니페스트 `image_generator` 만 바꾸면 된다.
+오케스트레이터는 로컬 LLM 하나뿐이라 바꿀 대상이 없다 — 꺼져 있으면 직접 입력으로 간다.
 
 ---
 
@@ -67,19 +69,20 @@ python tools/advance_scene.py new
 # 2. 장면 계획을 채운다 — 스튜디오 장면 편집 또는 파일 직접 편집
 #    (purpose / action_beat / emotion / time / camera / dialogue)
 
-# 3. 이미지 프롬프트 — 셋 중 하나
+# 3. 이미지 프롬프트 — 둘 중 하나
 #   [로컬 LLM · 기본] 스튜디오 장면 카드의 프롬프트 버튼 (앵커는 코드가 조립)
-#   [수동 · 그록] 출력 통째로 grok.com 에 붙여넣기
-python tools/make_grok_input.py SCENE-XXX
-python tools/advance_scene.py set-prompt SCENE-XXX --file grok_out.txt
-#   [API · 그록] XAI_API_KEY 환경변수 설정 후
-python tools/grok_api.py SCENE-XXX
+#   [직접 입력] LLM 이 꺼져 있을 때. 브리프는 모델 없이 조립되므로 이 경로는 항상 산다.
+python tools/scene_brief.py SCENE-XXX
+#     → 브리프를 직접 쓰거나 다른 AI(폰 앱도 OK)에 붙여넣고, 받은 출력을 파일로 저장한 뒤
+python tools/advance_scene.py set-prompt SCENE-XXX --file prompt_out.txt
 
-# 4. 이미지 — 유료. 사용자가 그 시점에 허가한 만큼만.
+# 4. 이미지 — 기본은 로컬 ComfyUI(무료).
+python tools/comfyui_client.py SCENE-XXX --n 2
+#   보조(유료 종량제) — 사용자가 그 시점에 허가한 만큼만:
 python tools/makefun_client.py SCENE-XXX --n 2
 #   다운로드만 실패했을 때는 재생성하지 말고 재수령(무과금):
 python tools/makefun_client.py SCENE-XXX --refetch
-#   외부 이미지 AI 를 쓴다면 캐릭터·장소 레퍼런스를 반드시 첨부하고 결과를 등록:
+#   다른 이미지 AI 를 쓴다면 캐릭터·장소 레퍼런스를 반드시 첨부하고 결과를 등록:
 python tools/advance_scene.py add-images SCENE-XXX 다운로드1.png 다운로드2.png
 
 # 5. 시사 후 1장 선택 → 승인 (검사 FAIL 이면 자동 롤백)
