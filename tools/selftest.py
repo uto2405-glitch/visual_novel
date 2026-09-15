@@ -6446,6 +6446,8 @@ def u21(b: Box):
     text = pb.compose_image_prompt(dict(sc, time="노을"), action="walking along the river")
     ok(text.rstrip().endswith("sunset, golden hour"),
        f"시간대 낱말이 프롬프트 꼬리에 그대로 붙지 않음: …{text[-60:]!r}")
+    eq(pb.SEGMENT_ORDER[-1], "time",            # 꼬리 검사가 '우연히' 맞는 일이 없도록
+       "시간대 조각이 마지막 자리를 떠났다 — 끝에 붙는 것은 실측으로 산 자리다")
     hasnt(pb.compose_image_prompt(dict(sc, time="오후"), action="walking along the river"),
           "golden hour", "노을이 아닌 컷에 golden hour 가 새어 들어감")
 
@@ -6514,6 +6516,52 @@ def u22(b: Box):
         eq([f for f in out["findings"]
             if f["rule"] in ("intimacy-value", "wardrobe-shape")], [],
            "살아 있는 저장소에 새 경고가 떠 있다(장면 파일이 실제로 잘못 적혀 있다)")
+
+
+@test("unit", "U23 prompt_build — 프롬프트 순서를 아는 곳은 SEGMENT_ORDER 하나뿐(조립은 순수 함수)")
+def u23(b: Box):
+    """실측으로 산 순서가 'append 가 몇 번째 줄이냐' 로만 남아 있던 자리의 잠금장치.
+
+    조립부는 **이름 붙은 조각의 목록**이다 — 순서는 `prompt_build.SEGMENT_ORDER`,
+    조각은 `prompt_segments`, 잇기는 `assemble`. 여기서 잠그는 것은 셋이다 —
+    ① 실측이 정한 자리(샷 뒤 거리 태그 → 인원수 태그 → 앵커, 시간대는 맨 끝)가 **상수 하나**에 있다,
+    ② `assemble` 은 매니페스트도 LLM 도 보지 않는 **순수 함수**다(장면 없이 순서를 되물을 수 있다),
+    ③ 부수효과는 `action_for` 하나뿐이다 — 문장을 주면 서버를 부르지 않는다.
+    """
+    pb = b.mod("prompt_build")
+    eq(pb.SEGMENT_ORDER,
+       ("style", "shot", "camera", "composition", "subject", "action", "others", "location", "time"),
+       "세그먼트 순서가 바뀌었다 — 실측으로 산 자리다(바꾸려면 다시 재 볼 것)")
+    order = list(pb.SEGMENT_ORDER)
+    ok(order.index("shot") < order.index("composition"),
+       "거리 태그가 구도 태그 뒤로 밀렸다 — 실측에서 그 자리는 두 번째 인물을 지웠다")
+    ok(order.index("shot") < order.index("camera") < order.index("composition"),
+       "카메라 조각이 측정한 자리(샷 뒤 · 인원수 앞)를 떠났다")
+    ok(order.index("composition") < order.index("subject"),
+       "인원수는 묘사가 시작되기 전에 정해져야 한다")
+    eq(order[-1], "time",
+       "시간대 낱말이 꼬리를 떠났다 — 앞으로 옮기면 노을이 더 나빠졌다(.255 → .309)")
+
+    # ② 순수 함수 — 장면도 매니페스트도 없이 그 자리에서 되물을 수 있다
+    eq(pb.assemble({}), "", "빈 조각 묶음이 빈 문자열이 아니다")
+    eq(pb.assemble({"style": " ", "action": "x"}), "x", "공백뿐인 조각이 쉼표만 남기고 들어갔다")
+    eq(pb.assemble({"time": "night", "style": "anime"}), "anime, night",
+       "조각을 넣은 순서가 결과 순서를 바꿨다 — 정본은 SEGMENT_ORDER 하나여야 한다")
+    eq(pb.assemble({"style": "a", "zzz": "b"}), "a", "이름 없는 조각이 프롬프트에 새어 들어갔다")
+
+    # ③ 부수효과는 한 곳뿐
+    def boom(*_a, **_k):
+        raise Failed("동작 문장을 줬는데도 로컬 LLM 을 불렀다")
+
+    sc = read_json(b.root / "examples" / "scenes" / "SCENE-001.json")
+    with patched(pb.local_llm, "chat", boom):
+        eq(pb.action_for({}, " she waits" + chr(10) + "by the window "), "she waits by the window",
+           "동작 문장 정규화(줄바꿈·앞뒤 공백)가 달라졌다")
+        eq(pb.action_for({}, '"quoted"'), "quoted", "따옴표가 그대로 프롬프트에 실린다")
+        eq(len(pb.action_for({}, "가" * 400)), 220, "동작 문장 길이 상한(220자)이 풀렸다")
+        eq(pb.compose_image_prompt(sc, action="walking side by side"),
+           pb.assemble(pb.prompt_segments(sc, pb.action_for(sc, "walking side by side"))),
+           "compose_image_prompt 가 조립 삼단(action_for → prompt_segments → assemble)과 갈라졌다")
 
 
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")

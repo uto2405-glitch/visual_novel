@@ -515,6 +515,21 @@ angle: eye-level / high-angle / low-angle / overhead /
 (또는 `character_id` 문자열이) 들어 있는가, 장소 앵커가 들어 있는가. 이게 컷 간 일관성의 근거다.
 `scene_lint` 는 그 역방향 — **등장 목록에 없는** 인물의 앵커가 섞였는지도 경고한다.
 
+#### 프롬프트 조각의 순서 — 정본은 `prompt_build.SEGMENT_ORDER`
+
+프롬프트는 **이름 붙은 조각의 목록**이다. 조각을 만드는 곳은 `prompt_build.prompt_segments`
+하나, 순서를 아는 곳은 상수 `SEGMENT_ORDER` 하나, 잇는 곳은 순수 함수 `assemble` 하나다.
+
+```
+style → shot → camera → composition → subject → action → others → location → time
+```
+
+자리는 전부 실측으로 산 것이다(바꾸려면 다시 재 볼 것): 거리 태그는 샷 이름 **바로 뒤**,
+인원수 태그는 **앵커보다 앞**, 시간대 낱말은 **맨 끝**. 비었거나 공백뿐인 조각은 조용히
+빠지므로 `camera`·`subject`·`others`·`location`·`time` 의 '없으면 안 넣는다' 는 한 규칙이다.
+새 조각을 더할 때는 함수 본문에 줄을 끼워 넣지 말고 **이름 하나를 여기에 더한다**.
+동작 문장(로컬 LLM 호출)은 `action_for` 하나에만 남아 있다 — 조립은 네트워크를 모른다.
+
 #### 인원수·구도 태그 — 앵커 **앞**에 붙는 한 줄
 
 A6 를 통과해도 그림에 사람이 하나만 나오는 사고가 있었다(1차 렌더: SCENE-005 에는 두 번째

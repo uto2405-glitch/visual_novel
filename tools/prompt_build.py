@@ -348,45 +348,100 @@ def _character_block(ch: dict, variant: dict | None = None) -> str:
     return ", ".join(p for p in parts if p)
 
 
-def compose_image_prompt(sc: dict, action: str | None = None) -> str:
-    """장면 dict → 이미지 프롬프트 문자열.
+# ------------------------------------------------------------- 세그먼트 조립
+# 프롬프트는 **이름 붙은 조각의 목록**이다. 순서를 아는 곳은 SEGMENT_ORDER 하나뿐이고,
+# 조각을 만드는 곳은 prompt_segments 하나뿐이다. 새 조각(카메라·의상·시간)을 더할 때
+# 함수 본문에 append 를 끼워 넣지 않는다 — 여기에 이름 하나를 더한다.
+#
+# 자리는 실측으로 정해진 것이다(바꾸려면 다시 재 볼 것):
+#   shot 뒤 거리 태그 → composition 앞  : 구도 힌트 뒤로 밀면 두 번째 인물이 사라졌다
+#   composition → subject 앞            : 인원수는 묘사가 시작되기 전에 정해져야 한다
+#   time 은 맨 끝                        : 앞으로 옮기면 노을이 더 나빠졌다(.255 → .309)
+SEGMENT_ORDER = ("style", "shot", "camera", "composition",
+                 "subject", "action", "others", "location", "time")
 
-    LLM 응답이 비거나 이상해도 앵커·화풍·구도는 코드가 넣으므로 프롬프트가 무너지지 않는다.
-    ``action`` 을 주면 그 문장을 그대로 쓴다 — 로컬 LLM 이 꺼져 있을 때 프롬프트를 다시
-    만들거나 사람이 동작 문장을 직접 고를 때의 경로다(앵커·화풍·구도는 그대로 코드가 넣는다).
+
+def assemble(segments: dict, order: tuple = SEGMENT_ORDER) -> str:
+    """이름 붙은 조각 → 프롬프트 한 줄. 비었거나 공백뿐인 조각은 조용히 빠진다.
+
+    **순수 함수다** — 매니페스트도 LLM 도 보지 않는다. 그래서 순서를 바꾼 결과를
+    장면 없이 그 자리에서 되물을 수 있다.
     """
-    mf = vn_core.load_manifest()
-    chars = {c.get("character_id"): c for c in mf.get("characters", []) if isinstance(c, dict)}
-    locs = {l.get("location_id"): l for l in mf.get("locations", []) if isinstance(l, dict)}
+    out = []
+    for key in order:
+        val = str(segments.get(key, "") or "").strip()
+        if val:
+            out.append(val)
+    return ", ".join(out)
+
+
+def action_for(sc: dict, action: str | None = None) -> str:
+    """이 컷의 동작 문장 하나 — 주면 그대로, 안 주면 로컬 LLM 에 묻는다.
+
+    **조립부에서 떼어 낸 유일한 부수효과다**(LLM 호출). 조립(:func:`assemble`)은 이제
+    네트워크를 모르고, 이 함수만 서버가 꺼져 있는지 신경 쓴다.
+    """
     if action is None:
         ask = ("아래 장면을 그림으로 그릴 때의 '동작과 구도'만 영어 한 문장(20단어 이내)으로 써라. "
                "인물 외모나 장소 묘사는 쓰지 마라. 설명 없이 그 문장만 출력하라.\n"
                f"목적: {sc.get('purpose', '')}\n동작: {sc.get('action_beat', '')}\n"
                f"감정: {sc.get('emotion', '')}\n시간: {sc.get('time', '')}")
         action = local_llm.chat([{"role": "user", "content": ask}], temperature=0.4, max_tokens=120)
-    action = " ".join(str(action).strip().splitlines()).strip().strip('"')[:220]
+    return " ".join(str(action).strip().splitlines()).strip().strip('"')[:220]
+
+
+def camera_segment(sc: dict) -> str:
+    """camera.angle · framing · focus → 프롬프트 조각(지금은 빈 문자열).
+
+    세 필드는 SCHEMA §2.2 에 '프롬프트 입력' 으로 적혀 있지만 실제로는 어디에도 닿지
+    않는다. 자리만 먼저 뚫어 둔다 — 무엇을 넣을지는 D1 측정이 정한다.
+    """
+    return ""
+
+
+def prompt_segments(sc: dict, action: str, mf: dict | None = None) -> dict:
+    """장면 + 동작 문장 → 이름 붙은 조각들. LLM 을 부르지 않는다(결정적).
+
+    `others` 는 두 번째 인물부터의 덩어리를 한 조각으로 묶은 것이다 — 인원이 몇이든
+    조각 이름의 수는 변하지 않는다.
+    """
+    mf = vn_core.load_manifest() if mf is None else mf
+    chars = {c.get("character_id"): c for c in mf.get("characters", []) if isinstance(c, dict)}
+    locs = {l.get("location_id"): l for l in mf.get("locations", []) if isinstance(l, dict)}
     cam = sc.get("camera", {}) if isinstance(sc.get("camera"), dict) else {}
-    # 구도 태그는 **앵커보다 앞**에 온다 — 인원수는 묘사가 시작되기 전에 정해져야 한다.
-    parts = [visual_style(sc) + ", portrait 2:3", _shot_phrase(cam.get("shot", "medium")),
-             composition_tags(sc, mf)]
     ids = scene_cast(sc, mf)
 
     def block(cid: str) -> str:
         ch = chars[cid]
         return _character_block(ch, wardrobe_variant(ch, scene_wardrobe(sc, cid)))
 
-    # 인물 태그는 **그 인물의 앵커 바로 앞**에 붙는다(character_tags) — 앵커 원문은 그대로다.
-    if ids:
-        parts.append(block(ids[0]))
-    parts.append(action)
-    for cid in ids[1:]:
-        parts.append("with " + block(cid))
-    if sc.get("location_id") in locs:
-        parts.append(locs[sc["location_id"]].get("prompt_anchor", ""))
     t = str(sc.get("time", "")).strip()
-    if t:
-        parts.append(TIME_EN.get(t, t))
-    return ", ".join(str(p).strip() for p in parts if p and str(p).strip())
+    return {
+        "style": visual_style(sc) + ", portrait 2:3",
+        "shot": _shot_phrase(cam.get("shot", "medium")),
+        "camera": camera_segment(sc),
+        "composition": composition_tags(sc, mf),
+        # 인물 태그는 **그 인물의 앵커 바로 앞**에 붙는다(character_tags) — 앵커 원문은 그대로다.
+        "subject": block(ids[0]) if ids else "",
+        "action": action,
+        "others": ", ".join("with " + block(cid) for cid in ids[1:]),
+        "location": (locs[sc["location_id"]].get("prompt_anchor", "")
+                     if sc.get("location_id") in locs else ""),
+        "time": TIME_EN.get(t, t) if t else "",
+    }
+
+
+def compose_image_prompt(sc: dict, action: str | None = None) -> str:
+    """장면 dict → 이미지 프롬프트 문자열.
+
+    LLM 응답이 비거나 이상해도 앵커·화풍·구도는 코드가 넣으므로 프롬프트가 무너지지 않는다.
+    ``action`` 을 주면 그 문장을 그대로 쓴다 — 로컬 LLM 이 꺼져 있을 때 프롬프트를 다시
+    만들거나 사람이 동작 문장을 직접 고를 때의 경로다(앵커·화풍·구도는 그대로 코드가 넣는다).
+
+    세 걸음뿐이다: 동작 한 문장(:func:`action_for`) → 이름 붙은 조각(:func:`prompt_segments`)
+    → 순서대로 잇기(:func:`assemble`).
+    """
+    return assemble(prompt_segments(sc, action_for(sc, action)))
 
 
 # ============================================================= 인물 대화 페르소나
