@@ -404,7 +404,7 @@ FAIL 이 아니다.
 
 | | 필드 | 쓰는 방법 |
 |---|---|---|
-| **편집 가능** | `purpose` · `action_beat` · `emotion` · `time` · `camera` · `dialogue` · `characters` · `location_id` · `episode` · `choices` · `branch` · `ending` · `ending_label` · `print` | 스튜디오 장면 편집(`POST /api/set-scene` — 이 목록만 병합) 또는 직접 편집 |
+| **편집 가능** | `purpose` · `action_beat` · `emotion` · `intimacy` · `time` · `camera` · `dialogue` · `characters` · `location_id` · `episode` · `choices` · `branch` · `ending` · `ending_label` · `print` | 스튜디오 장면 편집(`POST /api/set-scene` — 이 목록만 병합) 또는 직접 편집 |
 | **도구 전용** (`PROTECTED_FIELDS` 7개) | `status` · `review` · `assets` · `prompt` · `scene_id` · `scene_order` · `version` | `scene_ops`/`advance_scene` 만. 편집 경로는 **"건드리면 안 되는 필드"** 로 거부한다 |
 | **직접 편집만** | `props` · `visual_style` | 편집 경로의 화이트리스트에 **없어서** `set-scene` 이 "모르는 필드" 로 거부한다. 파일을 직접 고친다 |
 
@@ -444,6 +444,7 @@ FAIL 이 아니다.
 | `purpose` | str | ⬜ | 프롬프트 입력 · 스튜디오 카드 · 컨택트시트 라벨 · 감상본 | — |
 | `action_beat` | str | ⬜ | 프롬프트 입력 · 직전 장면 연속성 | — |
 | `emotion` | str | ⬜ | 프롬프트 입력 · `scene_lint` 감정 반복 | — |
+| `intimacy` | str | ⬜ | **애정 태그 억제**(`prompt_build.is_distance_beat`) — `"distant"` / `"close"` / 빈 값(=`emotion` 에서 자동 판정) | — |
 | `camera.shot` | str | ⬜ | 프롬프트 입력 · **프롬프트 구도 힌트·거리 태그**(`prompt_build`) · `scene_lint` 컷 반복·어휘 | — |
 | `camera.angle` | str | ⬜ | 프롬프트 입력 · `scene_lint` 어휘 | — |
 | `camera.framing` | str | ⬜ | 프롬프트 입력 | — |
@@ -504,7 +505,7 @@ both characters visible, <인물 앵커…>, <동작>, <장소 앵커>, <시간�
 
 | 무엇에서 나오나 | 규칙 |
 |---|---|
-| `characters[]` + 각 인물의 `profile.gender_presentation` (§1.6) | 성별 수 → `1girl` · `1boy` · `2girls` …, 성별 미상은 `1person`/`N people`. 2인 이상이면 총원 `N people` 을 덧붙이고, 여성 1 + 남성 1 이면 `couple` |
+| `characters[]` + 각 인물의 `profile.gender_presentation` (§1.6) | 성별 수 → `1girl` · `1boy` · `2girls` …, 성별 미상은 `1person`/`N people`. 2인 이상이면 총원 `N people` 을 덧붙이고, 여성 1 + 남성 1 이면 `couple` — **단 그 컷이 '거리' 비트가 아닐 때만**(바로 아래) |
 | `camera.shot` (§2.2 표준 어휘) | 2인 이상일 때만 구도 힌트: `two-shot` → `both characters fully visible, facing each other` · `over-the-shoulder` → `over-the-shoulder view, both characters visible` · 그 밖 → `both characters visible`(3인 이상은 `all characters visible`) |
 | 좁게 잡은 컷(`close-up`·`extreme-close-up`·`medium-close-up`·`insert`·`pov`) | 구도 힌트를 **넣지 않는다** — 연출 의도를 뒤집지 않기 위해 |
 | `camera.shot` 이 `wide`·`extreme-wide`·`full` | 샷 이름 **바로 뒤**에 거리 태그를 한 번 붙인다: `full body`(`extreme-wide` 는 `full body, from a distance`) — 정본 `prompt_build.SHOT_DISTANCE`. 이름만으로는 거리가 지켜지지 않는다(실측: `wide shot` 만 쓴 6장 중 넓게 잡힌 것은 1장, 프로덕션 832×1248·30steps 에서는 0/3 → 거리 태그 하나를 더하면 3/3). 인원수가 몇이든 붙는다 |
@@ -513,6 +514,43 @@ both characters visible, <인물 앵커…>, <동작>, <장소 앵커>, <시간�
 한 줄(`image_generator.engine`)로 바뀌므로, 엔진별 문구를 굳혀 두면 엔진을 바꾼 순간 저장된
 프롬프트가 전부 틀린 문구가 된다. `1girl, 1boy, couple` 은 애니 계열 체크포인트가 가장 잘 따르는
 표기이면서 자연어로 읽어도 뜻이 통해 MakeFun 쪽에도 그대로 실린다.
+
+#### `couple` 은 **빼기만 한다** — 감정이 '거리'인 컷 (실측)
+
+`couple` 은 여성 1 + 남성 1 이면 **비트를 보지 않고** 붙던 태그였다. 그래서 오해가 시작되는
+컷(SCENE-009 · 감정 `서운함`), 한 걸음 떨어져 걷는 컷(SCENE-010 · `어색한 침묵` · 목적
+"좁혀지지 않는 간격"), 먼저 돌아서는 엔딩(SCENE-012 · `서먹함`)이 전부 **붙어 있는 연인**으로
+그려졌다 — 분기를 결정하는 바로 그 컷에서 이야기가 뒤집혔다.
+
+SCENE-010 을 3시드 × 5안으로 구워 본 결과:
+
+| 안 | 간격 | 두 인물 유지 |
+|---|---|---|
+| 지금(`couple`) | 0/3 | 3/3 — 어깨가 닿거나 손이 거의 잡혀 있다 |
+| **`couple` 을 뺀다** | **3/3** | **3/3** |
+| 거리 문구로 **교체**(`two people standing apart, not touching…`) | 2/3 | **1/3 — 두 번째 인물이 사라지거나 배경 크기로 밀렸다** |
+| 위 + 애정 네거티브 | 3/3 | **0/3 — 남자가 사라지거나 여자 둘이 됐다** |
+| 빼기 + `, not touching` | 3/3 | 3/3 (한 장은 남자가 배경까지 밀렸다) |
+
+**긴 자연어 문구를 인원수 태그 줄 한가운데 밀어 넣으면 그 줄이 희석된다** — 사람 수를 세어
+주던 태그가 힘을 잃고 두 번째 인물이 지워진다. 그래서 처방은 교체가 아니라 **삭제**다.
+거리는 동작 문장과 샷이 만든다.
+
+판정은 `prompt_build.is_distance_beat` 하나다.
+
+| 무엇을 보나 | 규칙 |
+|---|---|
+| `intimacy` | 값이 있으면 **그것이 이긴다** — `"distant"` 면 거리 비트, 그 밖의 값(`"close"` 등)이면 아니다 |
+| `emotion` | `intimacy` 가 비었을 때만. `prompt_build.DISTANCE_WORDS` 가 부분문자열로 걸리면 거리 비트 |
+| `purpose` · `action_beat` | **보지 않는다** |
+
+`purpose` 를 훑지 않는 이유가 이 규칙에서 가장 중요하다 — SCENE-011(호감 엔딩)의 목적이
+"**오해**가 풀리고 한 걸음의 간격이 사라진다" 라서, 목적을 훑으면 앨범에서 **가장 따뜻한 컷**의
+애정 태그가 빠진다. 12장의 실제 `emotion` 으로 확인했을 때 감정만 보면 정확히 009 · 010 · 012
+세 장만 걸리고 `아쉬움과 설렘`(008) · `안도와 설렘`(011) 은 걸리지 않는다.
+
+`scene_ops.has_composition_cue` 는 손댈 것이 없다 — `couple` 이 빠져도 `1girl` · `2people` 로
+단서를 알아보므로 `composition-cue` 경고가 새로 뜨지 않는다.
 
 이미 만들어 둔 프롬프트에는 이 줄이 없다 — **프롬프트를 다시 만들 때 붙는다.** 그 사이를
 `scene_lint` 가 자문으로 알려 준다(PASS/FAIL 아님): `composition-cue`(2인 이상인데 인원수 단서

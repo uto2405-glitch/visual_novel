@@ -1627,7 +1627,7 @@ def tpl01(b: Box):
 def tpl02(b: Box):
     """템플릿에 선택 필드를 박아 두면 모든 새 장면이 그 값을 갖고 태어난다 — 인화 기준점을
     한 번도 고르지 않았는데 crop_anchor 가 정해져 있는 식이다. 비어 있거나 없어야 한다."""
-    optional = ("print", "episode", "ending", "ending_label", "choices", "branch")
+    optional = ("print", "episode", "ending", "ending_label", "choices", "branch", "intimacy")
 
     def leaked(sc: dict) -> list[str]:
         return [k for k in optional if sc.get(k) not in (None, "", [], {}, False)]
@@ -6102,6 +6102,21 @@ def u17(b: Box):
             eq(pb.compose_image_prompt(sc, action="walking side by side"), text,
                "action 경로가 LLM 경로와 다른 프롬프트를 만듦")
 
+        # 감정이 '거리' 인 컷에서는 애정 태그를 **빼기만** 한다(실측: 교체하면 인원수 태그
+        # 줄이 희석돼 두 번째 인물이 사라졌다 — 문구 2/3 · 문구+네거티브 3/3 손상).
+        far = pb.composition_tags(dict(sc, emotion="어색한 침묵"))
+        hasnt(far, "couple", "거리 비트인데 애정 태그가 남았다(분기 컷에서 이야기가 뒤집힌다)")
+        for want in ("1girl", "1boy", "2people", "facing each other"):
+            has(far, want, f"애정 태그를 빼면서 {want!r} 까지 사라짐 — 인원수는 남아야 한다")
+        ok(so.has_composition_cue(far),
+           f"couple 이 빠지자 판정부가 단서를 못 알아봄(린터가 영영 경고한다): {far!r}")
+        has(pb.composition_tags(dict(sc, emotion="안도와 설렘")), "couple",
+            "따뜻한 컷에서 애정 태그가 사라졌다")
+        hasnt(pb.composition_tags(dict(sc, emotion="설렘", intimacy="distant")), "couple",
+              "intimacy='distant' 가 감정을 이기지 못했다")
+        has(pb.composition_tags(dict(sc, emotion="서먹함", intimacy="close")), "couple",
+            "intimacy='close' 가 감정을 이기지 못했다")
+
         eq(pb.composition_tags(read_json(b.root / "examples" / "scenes" / "SCENE-001.json")),
            "1girl", "1인 장면 태그")
         hasnt(pb.composition_tags(dict(sc, camera={"shot": "close-up"})), "visible",
@@ -6178,6 +6193,45 @@ def u18(b: Box):
             hasnt(plain, "pink cardigan, 18-year-old", f"prompt_tags={bad!r} 인데 태그가 붙음")
     finally:
         mfp.write_text(keep, encoding="utf-8")
+
+
+@test("unit", "U20 prompt_build.is_distance_beat — 감정만 본다(목적을 훑으면 가장 따뜻한 컷이 걸린다)")
+def u20(b: Box):
+    """애정 태그(`couple`)를 언제 빼는지의 단일 판정. 여기서 잠그는 것은 셋이다.
+
+    ① **목적·동작은 보지 않는다.** 이 작품의 호감 엔딩(SCENE-011)은 목적이
+       "**오해**가 풀리고 한 걸음의 간격이 사라진다" 라서, 목적을 훑으면 앨범에서
+       가장 따뜻한 컷의 애정 태그가 빠진다 — 규칙이 정반대로 작동한다.
+    ② 12컷의 실제 감정으로 재면 정확히 셋(서운함 · 어색한 침묵 · 서먹함)만 걸린다.
+       `아쉬움과 설렘`·`안도와 설렘` 처럼 '설렘' 이 든 감정을 끌어들이면 안 된다.
+    ③ `intimacy` 는 **양방향 수동 스위치**다 — 사람이 적으면 감정을 이긴다.
+       그 필드가 `scene_ops.EDITABLE_FIELDS` 에 없으면 스튜디오가 저장을 거부한다.
+    """
+    pb, so = b.mod("prompt_build"), b.mod("scene_ops")
+    for emo in ("서운함", "어색한 침묵", "서먹함"):
+        ok(pb.is_distance_beat({"emotion": emo}), f"거리 비트를 못 알아봄: {emo}")
+    for emo in ("설렘", "포근함", "설렘과 평온", "두근거림", "잔잔한 두근거림", "따뜻한 여운",
+                "아쉬움과 설렘", "안도와 설렘", "결연함, 약간의 긴장"):
+        ok(not pb.is_distance_beat({"emotion": emo}), f"따뜻한 컷이 거리 비트로 걸림: {emo}")
+
+    ok(not pb.is_distance_beat({"emotion": "안도와 설렘",
+                                "purpose": "오해가 풀리고 한 걸음의 간격이 사라진다",
+                                "action_beat": "어색한 침묵을 깨고 팔짱을 낀다"}),
+       "목적·동작을 훑고 있다 — 호감 엔딩에서 애정 태그가 빠진다")
+
+    ok(pb.is_distance_beat({"emotion": "설렘", "intimacy": "DISTANT"}),
+       "intimacy='distant' 가 감정을 이기지 못함(대소문자 포함)")
+    ok(not pb.is_distance_beat({"emotion": "서먹함", "intimacy": "close"}),
+       "intimacy='close' 가 감정을 이기지 못함")
+    ok(not pb.is_distance_beat({"emotion": "서먹함", "intimacy": "가까움"}),
+       "'distant' 가 아닌 값은 전부 '거리 아님' 이어야 한다")
+    ok("intimacy" in so.EDITABLE_FIELDS,
+       "intimacy 가 편집 화이트리스트에 없다 — 스튜디오가 '알 수 없는 장면 필드' 로 거부한다")
+
+    for bad in (None, 7, [], {"a": 1}):          # 손편집 JSON 방탄 — 판정이 죽으면 안 된다
+        ok(not pb.is_distance_beat({"emotion": bad, "intimacy": bad}),
+           f"이상한 값에서 판정이 흔들림: {bad!r}")
+    ok(not pb.is_distance_beat({}), "빈 장면이 거리 비트로 걸림")
 
 
 @test("unit", "U21 prompt_build — '노을' 은 두 낱말이다(golden hour) · 린터는 한 버킷으로 읽는다")

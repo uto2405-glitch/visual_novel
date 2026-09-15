@@ -81,6 +81,17 @@ SHOT_DISTANCE = {"wide": "full body", "extreme-wide": "full body, from a distanc
 # 둘 다 프레임에 있어야 하는 컷의 구도 힌트(2인 장면에서만). 어휘는 scene_lint.STD_SHOTS.
 SHOT_COMPOSITION = {"two-shot": "both characters fully visible, facing each other",
                     "over-the-shoulder": "over-the-shoulder view, both characters visible"}
+# 감정이 '거리'인 컷에서는 애정을 함의하는 태그를 **빼고** 센다. `couple` 이 비트를 보지
+# 않고 붙는 바람에, 오해가 시작되는 컷도 한 걸음 떨어져 걷는 컷도 먼저 돌아서는 엔딩도
+# 전부 '붙어 있는 연인' 으로 그려졌다 — 분기를 결정하는 컷에서 이야기가 뒤집혔다.
+#
+# 실측(SCENE-010 · 3시드 × 5안): **지우는 것만** 통했다(3/3 간격 · 3/3 두 인물 유지).
+# 거리 문구로 **교체**하면 인원수 태그 줄이 희석돼 두 번째 인물이 사라졌다(문구 2/3 ·
+# 문구+네거티브 3/3 손상). 거리는 동작 문장과 샷이 만든다 — 태그는 빼기만 한다.
+DISTANCE_WORDS = ("서운", "서먹", "어색", "침묵", "냉랭", "거리감", "불편", "원망",
+                  "실망", "체념", "다툼", "갈등", "이별", "결별", "오해")
+AFFECTION_TAGS = ("couple",)      # 지금 조립부가 내는 애정 함의 태그는 이것 하나뿐이다
+
 PAIR_VISIBLE = "both characters visible"      # 2인 · 그 밖의 샷
 GROUP_VISIBLE = "all characters visible"      # 3인 이상
 
@@ -206,6 +217,24 @@ def scene_cast(sc: dict, mf: dict | None = None) -> list:
     return ids
 
 
+def is_distance_beat(sc: dict) -> bool:
+    """이 컷이 '사이가 벌어진' 장면인가 — 애정 태그를 뺄지의 단일 판정(LLM 없음 · 결정적).
+
+      (1) `intimacy` 가 적혀 있으면 **그 값이 이긴다** — `"distant"` 면 참, 그 밖이면 거짓.
+      (2) 비어 있으면 `emotion` 안에 DISTANCE_WORDS 가 있는지만 본다.
+
+    **`purpose`·`action_beat` 는 보지 않는다.** SCENE-011(호감 엔딩)의 목적이
+    "**오해**가 풀리고 한 걸음의 간격이 사라진다" 라서, 목적을 훑으면 앨범에서 가장 따뜻한
+    컷의 애정 태그가 빠진다. 12장의 실제 감정으로 재 보면 감정만 볼 때 정확히
+    009(서운함) · 010(어색한 침묵) · 012(서먹함) 세 장만 걸린다.
+    """
+    val = str(sc.get("intimacy", "") or "").strip().lower()
+    if val:
+        return val == "distant"
+    emo = str(sc.get("emotion", "") or "")
+    return any(w in emo for w in DISTANCE_WORDS)
+
+
 def composition_tags(sc: dict, mf: dict | None = None) -> str:
     """장면 → 인원수·구도 태그 한 줄. 등장인물이 없으면 빈 문자열.
 
@@ -233,8 +262,8 @@ def composition_tags(sc: dict, mf: dict | None = None) -> str:
         tags.append("1person" if u == 1 else f"{u}people")
     if n >= 2:
         tags.append(f"{n}people")            # 총원 — 성별을 모르는 인물이 섞여도 수는 남는다
-        if n == 2 and f == 1 and m == 1:
-            tags.append("couple")
+        if n == 2 and f == 1 and m == 1 and not is_distance_beat(sc):
+            tags.extend(AFFECTION_TAGS)      # 거리 비트에서는 **빼기만 한다**(§ 위 주석)
         cam = sc.get("camera") if isinstance(sc.get("camera"), dict) else {}
         key = _shot_key(cam.get("shot", ""))
         if key not in {_shot_key(s) for s in TIGHT_SHOTS}:   # 좁게 잡은 컷은 그대로 둔다
