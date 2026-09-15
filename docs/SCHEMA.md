@@ -474,9 +474,9 @@ FAIL 이 아니다.
 | `emotion` | str | ⬜ | 프롬프트 입력 · `scene_lint` 감정 반복 | — |
 | `intimacy` | str | ⬜ | **애정 태그 억제**(`prompt_build.is_distance_beat`) — `"distant"` / `"close"` / 빈 값(=`emotion` 에서 자동 판정). 그 밖의 값은 조용히 `close` 로 읽혀 연출이 뒤집히므로 `scene_lint` 가 `intimacy-value` 로 알려 준다 | — |
 | `camera.shot` | str | ⬜ | 프롬프트 입력 · **프롬프트 구도 힌트·거리 태그**(`prompt_build`) · `scene_lint` 컷 반복·어휘 | — |
-| `camera.angle` | str | ⬜ | 프롬프트 입력 · `scene_lint` 어휘 | — |
-| `camera.framing` | str | ⬜ | 프롬프트 입력 | — |
-| `camera.focus` | str | ⬜ | 프롬프트 입력 | — |
+| `camera.angle` | str | ⬜ | **프롬프트 카메라 조각**(`prompt_build.ANGLE_EN` — `eye-level`·`front` 은 아무것도 내지 않는다 · 아래 표) · `scene_lint` 어휘 | — |
+| `camera.framing` | str | ⬜ | **사람이 읽는 연출 메모** · `make_grok_input` 브리프 — 프롬프트에는 닿지 않는다(실측: 영어로 옮겨 실어도 구도가 바뀐 컷 0/6 · 한국어 원문은 0/6 + 의상 오염 1/6. 실제로 구도를 만드는 것은 동작 문장이다) | — |
+| `camera.focus` | str | ⬜ | **사람이 읽는 연출 메모** · `make_grok_input` 브리프 — 프롬프트에는 닿지 않는다(실측: 영어 구절은 초점이 바뀐 컷 0/6, Danbooru 식 `hand focus, depth of field` 는 샷을 덮어써 두 번째 인물 3/3·불꽃 2/3 을 지웠다) | — |
 | `visual_style` | str | ⬜ | 프롬프트 화풍 (매니페스트 값이 있으면 무시됨) | — |
 
 #### 카메라 표준 어휘 (`scene_lint` 권고 — PASS/FAIL 아님)
@@ -491,12 +491,48 @@ angle: eye-level / high-angle / low-angle / overhead /
        birds-eye / worms-eye / dutch-angle / front / side / rear
 ```
 
-> **정본은 코드다** — `scene_lint.STD_SHOTS` / `STD_ANGLES`. 위 목록은 그 사본이므로,
-> 어휘를 늘릴 때는 코드를 먼저 고치고 이 표를 맞춘다.
+> **정본은 코드다** — `vn_core.STD_SHOTS` / `vn_core.STD_ANGLES`(린터·조립부·장면 구성이
+> 같은 목록을 본다. `scene_lint.STD_SHOTS` 는 그 별칭이다). 위 목록은 그 사본이므로,
+> 어휘를 늘릴 때는 코드를 먼저 고치고 이 표를 맞춘다 — **각도를 늘리면 `prompt_build.ANGLE_EN`
+> 에도 그 낱말의 프롬프트 표기를 정해야 한다**(안 정하면 selftest 가 잡는다).
 > (`insert` = 손·시계·쪽지 같은 사물만 채우는 삽입 컷.)
 
 `"medium shot"` → `"medium"`, `"eye level"` → `"eye-level"` 처럼 **군더더기 접미와 공백을 뺀
 형태**가 표준이다. 표준 어휘 밖 값은 `info`, 표준으로 정규화 가능한 흔들림은 `warn` 이 뜬다.
+
+#### `camera.angle` → 프롬프트 낱말 (`prompt_build.ANGLE_EN` · 실측)
+
+각도는 **샷 이름 바로 뒤, 인원수 태그 앞**에 낱말 하나로 들어간다(`SEGMENT_ORDER` 의
+`camera` 자리 — 측정한 자리다).
+
+| `camera.angle` | 프롬프트에 실리는 말 |
+|---|---|
+| `eye-level` · `front` | *(아무것도 안 넣는다)* |
+| `high-angle` | `from above` |
+| `overhead` | `from above, directly from above` |
+| `birds-eye` | `from above, bird's-eye view` |
+| `low-angle` | `from below` |
+| `worms-eye` | `from below, worm's-eye view` |
+| `dutch-angle` | `dutch angle` |
+| `side` | `from side` |
+| `rear` | `from behind` |
+| 그 밖 · 빈 값 | *(아무것도 안 넣는다 — `scene_lint` 가 `camera-vocab` 으로 알려 준다)* |
+
+**`eye-level` 이 아무것도 안 내는 것은 실측 결과다.** `eye level` 을 실어 본 컷의 변화량은
+시드 노이즈의 0.23~0.61배였고 카메라가 움직인 컷은 0/6 이었다 — 뜻 없는 토큰 하나를 12장면
+전부에 더하는 대신 **빈 문자열**을 내보낸다(덕분에 승인된 앨범 12장의 저장된 프롬프트가
+글자 하나 바뀌지 않는다). 어휘 자체에는 힘이 있다: `from above` 는 6/6, `from below` 는
+4/6 에서 카메라가 실제로 움직였다. 즉 **이 배선은 작가가 `eye-level` 이 아닌 값을 쓰기
+시작할 때부터 값을 한다.**
+
+> **`camera.framing` · `camera.focus` 는 일부러 배선하지 않았다**(2026-09 실측 · 832×1248 ·
+> 30스텝 · 시드 짝지음 78장): framing 을 영어로 옮겨 실어도 구도가 바뀐 컷은 0/6(변화량은
+> 시드 노이즈의 0.43배)이었고 — 이미 **동작 문장이 그 구도를 말하고 있기 때문이다**(SCENE-008
+> "from behind, walking away…") — 한국어 원문은 아무것도 조종하지 못하면서 의상 앵커를
+> 1/6 에서 오염시켰다. focus 는 영어 구절이 0/6, Danbooru 식(`hand focus, depth of field`)은
+> 샷을 덮어써 두 번째 인물을 3/3, 불꽃을 2/3 지웠다(`both characters visible` 과 한 프롬프트
+> 안에서 충돌한다). **초점에 걸고 싶은 사물은 동작 문장에 쓴다** — 이 앨범이 이미 그렇게 한다.
+> 다시 따지기 전에 이 문단을 먼저 반증할 것.
 
 ### 2.3 `prompt`
 

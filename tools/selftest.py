@@ -6564,6 +6564,59 @@ def u23(b: Box):
            "compose_image_prompt 가 조립 삼단(action_for → prompt_segments → assemble)과 갈라졌다")
 
 
+@test("unit", "U24 prompt_build.ANGLE_EN — 각도만 배선한다(eye-level 은 아무것도 안 낸다 · framing·focus 는 안 실린다)")
+def u24(b: Box):
+    """카메라 네 필드 중 **하나만** 프롬프트에 닿는다 — 실측이 그렇게 정했다.
+
+    여기서 잠그는 것은 넷이다.
+    ① 린터가 아는 각도(`vn_core.STD_ANGLES`)는 전부 프롬프트 표기가 정해져 있다 —
+       어휘만 늘리고 표기를 안 정하면 작가가 적은 각도가 조용히 사라진다.
+    ② `eye-level`·`front` 는 **빈 문자열**이다. 실측에서 0/6(변화량 = 시드 노이즈의 0.23~0.61배)
+       이었고, 빈 문자열이라야 승인된 앨범 12장의 저장된 프롬프트가 글자 하나 안 바뀐다.
+    ③ 각도 낱말의 **자리** — 샷 이름·거리 태그 뒤, 인원수 태그 앞(측정한 자리).
+    ④ `framing`·`focus` 는 프롬프트에 **실리지 않는다**. focus 를 Danbooru 표기로 실었을 때
+       샷을 덮어써 두 번째 인물을 3/3 지웠다 — 되살리려면 SCHEMA §2.2 각주부터 반증할 것.
+    """
+    pb, vc, sl = b.mod("prompt_build"), b.mod("vn_core"), b.mod("scene_lint")
+
+    # ① 린터 어휘 ↔ 조립부 표기가 갈리지 않는다(정본은 vn_core 하나)
+    eq(sl.STD_ANGLES, vc.STD_ANGLES, "린터가 vn_core 와 다른 각도 목록을 본다")
+    missing = [a for a in vc.STD_ANGLES if a not in pb.ANGLE_EN]
+    eq(missing, [], f"표준 각도인데 프롬프트 표기가 없다 — 조용히 사라진다: {missing}")
+
+    # ② 측정된 무효값
+    eq(pb.angle_phrase("eye-level"), "", "eye-level 이 낱말을 냈다 — 실측 0/6, 12장면 전부가 이 값이다")
+    eq(pb.angle_phrase("front"), "", "front 가 낱말을 냈다(인원수 태그가 이미 함의한다)")
+    eq(pb.angle_phrase("high-angle"), "from above", "측정으로 고른 표기(6/6 에서 카메라가 움직였다)")
+    eq(pb.angle_phrase("low-angle"), "from below", "측정으로 고른 표기(4/6)")
+    eq(pb.angle_phrase("Low Angle"), "from below", "표기 흔들림을 린터와 같은 함수로 펴지 않는다")
+    eq(pb.angle_phrase("low"), "from below", "린터가 표준으로 고쳐 주는 약칭을 조립부가 못 알아본다")
+    eq(pb.angle_phrase("옆에서"), "", "표준 밖 값이 프롬프트에 새어 들어갔다(린터가 말할 몫이다)")
+    eq(pb.angle_phrase(""), "", "빈 각도가 낱말을 냈다")
+
+    sc = read_json(b.root / "examples" / "scenes" / "SCENE-001.json")
+    sc["camera"] = {"shot": "wide", "angle": "eye-level", "framing": "테이블을 사이에 둔 두 사람",
+                    "focus": "식은 잔과 돌아간 시선"}
+    base = pb.compose_image_prompt(sc, action="walking side by side")
+
+    # ③ 자리 — 샷·거리 태그 뒤, 인원수 태그 앞
+    high = pb.compose_image_prompt(dict(sc, camera=dict(sc["camera"], angle="high-angle")),
+                                   action="walking side by side")
+    has(high, "wide shot, full body, from above", "각도가 샷·거리 태그 바로 뒤에 붙지 않았다")
+    ok(high.index("from above") < high.index("1girl"),
+       "각도가 인원수 태그 뒤로 밀렸다 — 인원수는 묘사가 시작되기 전에 정해져야 한다")
+
+    # ② 다시 — eye-level 은 배선 전과 **글자 하나** 다르지 않다
+    eq(base, pb.compose_image_prompt({k: v for k, v in sc.items() if k != "camera"}
+                                     | {"camera": {"shot": "wide"}}, action="walking side by side"),
+       "eye-level 이 프롬프트를 바꿨다 — 승인된 앨범 12장의 프롬프트가 전부 어긋난다")
+
+    # ④ framing·focus 는 닿지 않는다
+    for word in ("테이블을 사이에 둔", "식은 잔", "focus", "depth of field"):
+        hasnt(base, word, f"framing/focus 가 프롬프트에 실렸다({word!r}) — 실측에서 안 통했거나 해로웠다")
+    eq(pb.camera_segment(sc), "", "카메라 조각이 각도 말고 다른 것을 내고 있다")
+
+
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")
 def u08(b: Box):
     gj = need_mod(b, "gen_jobs")

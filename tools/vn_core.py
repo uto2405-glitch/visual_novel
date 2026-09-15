@@ -71,6 +71,24 @@ IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"})
 DEFAULT_VISUAL_STYLE = ("bright cel-shaded Korean romance webtoon, soft warm palette, "
                         "clean line art")
 
+# 카메라 표준 어휘 — **세 층이 같은 목록을 본다.** 린터(scene_lint 컷 반복·표기 경고) ·
+# 조립부(prompt_build.SHOT_DISTANCE·SHOT_COMPOSITION·ANGLE_EN) · 장면 구성(vn_compose 가
+# LLM 에게 알려 주는 어휘). 예전에는 린터가 혼자 들고 있었고 조립부는 자기 사본을 봤다 —
+# 목록이 갈리면 작가가 적은 각도가 린터는 통과하는데 프롬프트에는 안 실리는 일이 생긴다.
+# (조립부가 린터를 import 할 수는 없다: 린터는 저장된 프롬프트를 다시 조립해 비교하므로
+#  반대 방향 의존이 이미 있다. 그래서 공용 기반인 여기가 정본이다.)
+STD_SHOTS = ("extreme-wide", "wide", "full", "medium-wide", "medium",
+             "medium-close-up", "close-up", "extreme-close-up", "two-shot",
+             "over-the-shoulder", "pov", "insert")
+STD_ANGLES = ("eye-level", "high-angle", "low-angle", "overhead",
+              "birds-eye", "worms-eye", "dutch-angle", "front", "side", "rear")
+# 흔한 약칭 → 표준 어휘. 해당 필드의 표준 목록에 있을 때만 채택하므로 shot/angle 이 섞이지 않는다.
+CAM_SHORTHAND = {"close": "close-up", "cu": "close-up", "ecu": "extreme-close-up",
+                 "mcu": "medium-close-up", "ots": "over-the-shoulder",
+                 "pointofview": "pov", "eye": "eye-level", "high": "high-angle",
+                 "low": "low-angle", "dutch": "dutch-angle", "back": "rear",
+                 "behind": "rear", "overthehead": "overhead"}
+
 # 인화 크롭 규약 — 자르기 방식(print_export)과 입력 검증(webapp·scene_ops)이 같은 집합을 봐야 한다.
 # 두 벌로 갈리면 UI 에서 고른 값이 저장은 되고 출력에서만 조용히 무시된다.
 CROP_MODES = ("cover", "fit")
@@ -235,6 +253,33 @@ def visual_style(mf: dict | None = None, sc: dict | None = None) -> str:
     if not v and isinstance(sc, dict):
         v = str(sc.get("visual_style", "") or "").strip()
     return v or DEFAULT_VISUAL_STYLE
+
+
+def cam_key(v: str) -> str:
+    """표기 흔들림을 지운 비교용 키 — 'Eye Level' / 'eye-level' → 'eyelevel'."""
+    return re.sub(r"[^a-z0-9]+", "", str(v or "").lower())
+
+
+def cam_canon(value: str, std: tuple) -> str | None:
+    """카메라 표기를 표준 어휘로 정규화. 표준 밖이면 None.
+
+    'medium shot' 의 군더더기 접미와 'ots'·'low' 같은 약칭까지 한 곳에서 읽는다 —
+    린터가 '표준으로 고치라' 고 말하는 값과 조립부가 실제로 알아듣는 값이 **같아야** 하기
+    때문이다. 갈리면 린터는 통과시키는데 프롬프트에는 아무것도 안 실린다.
+    """
+    std_map = {cam_key(s): s for s in std}
+    key = cam_key(value)
+    cands = [key]
+    for suffix in ("shot", "angle", "view"):  # 'medium shot' 같은 군더더기 접미 제거
+        if key.endswith(suffix) and len(key) > len(suffix):
+            cands.append(key[:-len(suffix)])
+    for c in cands:
+        if c in std_map:
+            return std_map[c]
+        alias = CAM_SHORTHAND.get(c)
+        if alias and cam_key(alias) in std_map:
+            return std_map[cam_key(alias)]
+    return None
 
 
 def is_scene_id(sid: Any) -> bool:

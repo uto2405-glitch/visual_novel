@@ -78,6 +78,33 @@ TIGHT_SHOTS = ("close-up", "extreme-close-up", "medium-close-up", "insert", "pov
 # 밀면 프레임은 넓어져도 두 번째 인물이 사라졌다. 어휘는 엔진 중립(자연어로도 뜻이 통한다).
 SHOT_DISTANCE = {"wide": "full body", "extreme-wide": "full body, from a distance",
                  "full": "full body"}
+# 카메라 **각도** → 프롬프트 낱말. 키는 표준 어휘(vn_core.STD_ANGLES)이고, 값은 이미지
+# 모델이 알아듣는 표기다. 자리는 샷 이름 뒤 · 인원수 태그 앞(SEGMENT_ORDER 의 "camera").
+#
+# **`eye-level` 과 `front` 는 빈 문자열이다 — 실측 결과다**(832×1248 · 30스텝 · 시드 짝지음).
+# `eye level` 을 실어 본 컷의 변화량은 시드 노이즈의 0.23배(SCENE-004 MAD 16.6 / 노이즈 70.8)
+# ~0.61배(SCENE-010 34.6 / 56.4)였고 카메라가 움직인 컷은 0/6 이었다 — 지금 이 앨범은 12장면이
+# 전부 `eye-level` 이라, 낱말을 실으면 **뜻 없는 토큰 하나를 12장 전부에** 더하면서 승인된
+# 프롬프트를 전부 바꾼다. 빈 문자열을 내보내면 저장된 프롬프트가 글자 하나 안 바뀐다.
+#
+# 어휘 자체에는 힘이 있다(그래서 배선한다): `from above` 는 6/6(MAD 45.9 / 64.3),
+# `from below` 는 4/6 에서 카메라가 실제로 움직였다. 즉 **작가가 eye-level 이 아닌 값을
+# 쓰기 시작하는 순간부터** 값을 한다. 표준 어휘 밖 값은 조용히 빠지고(토큰 노이즈·의상
+# 오염 없이) scene_lint 가 `camera-vocab` 으로 시끄럽게 말한다 — 이 저장소가 의상
+# 배리에이션 오타에 쓰는 것과 같은 분담이다.
+#
+# framing·focus 는 **일부러 없다** — 실측에서 안 통했다(SCHEMA §2.2 각주). 되살리기 전에
+# 그 문단부터 반증할 것.
+ANGLE_EN = {"eye-level": "", "front": "",
+            "high-angle": "from above",
+            "overhead": "from above, directly from above",
+            "birds-eye": "from above, bird's-eye view",
+            "low-angle": "from below",
+            "worms-eye": "from below, worm's-eye view",
+            "dutch-angle": "dutch angle",
+            "side": "from side",
+            "rear": "from behind"}
+
 # 둘 다 프레임에 있어야 하는 컷의 구도 힌트(2인 장면에서만). 어휘는 scene_lint.STD_SHOTS.
 SHOT_COMPOSITION = {"two-shot": "both characters fully visible, facing each other",
                     "over-the-shoulder": "over-the-shoulder view, both characters visible"}
@@ -390,13 +417,26 @@ def action_for(sc: dict, action: str | None = None) -> str:
     return " ".join(str(action).strip().splitlines()).strip().strip('"')[:220]
 
 
-def camera_segment(sc: dict) -> str:
-    """camera.angle · framing · focus → 프롬프트 조각(지금은 빈 문자열).
+def angle_phrase(angle) -> str:
+    """camera.angle → 프롬프트 낱말(ANGLE_EN). 표준 밖이거나 eye-level·front 이면 ''.
 
-    세 필드는 SCHEMA §2.2 에 '프롬프트 입력' 으로 적혀 있지만 실제로는 어디에도 닿지
-    않는다. 자리만 먼저 뚫어 둔다 — 무엇을 넣을지는 D1 측정이 정한다.
+    표기 흔들림은 린터와 **같은 함수**로 편다(vn_core.cam_canon) — 'Low Angle'·'low' 도
+    `from below` 로 읽힌다. 린터가 고치라고 말하는 값과 여기가 알아듣는 값이 갈리면,
+    작가가 적은 각도가 경고는 없이 프롬프트에서만 사라진다.
     """
-    return ""
+    canon = vn_core.cam_canon(str(angle or ""), vn_core.STD_ANGLES)
+    return ANGLE_EN.get(canon or "", "")
+
+
+def camera_segment(sc: dict) -> str:
+    """장면의 카메라 조각 — 지금은 `camera.angle` 하나뿐이다.
+
+    `camera.framing` · `camera.focus` 는 여기 **없는 것이 측정 결과**다(SCHEMA §2.2):
+    framing 은 이미 동작 문장이 말하고 있어 0/6, focus 는 Danbooru 표기로 넣으면 샷을
+    덮어써 두 번째 인물과 불꽃을 지웠다. 사람이 읽는 연출 메모로 남는다.
+    """
+    cam = sc.get("camera") if isinstance(sc.get("camera"), dict) else {}
+    return angle_phrase(cam.get("angle", ""))
 
 
 def prompt_segments(sc: dict, action: str, mf: dict | None = None) -> dict:

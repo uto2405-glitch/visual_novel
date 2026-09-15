@@ -42,17 +42,11 @@ LONG_LINE = 60         # 대사 한 줄 권장 상한(글자)
 TEMPLATE_MANIFEST = vn_core.TEMPLATES / "manifest.json"
 
 # 카메라 표준 어휘 — 표기가 흔들리면 같은 샷 연속 감지(_runs)도, 프롬프트 문구도 함께 흔들린다.
-STD_SHOTS = ("extreme-wide", "wide", "full", "medium-wide", "medium",
-             "medium-close-up", "close-up", "extreme-close-up", "two-shot",
-             "over-the-shoulder", "pov", "insert")
-STD_ANGLES = ("eye-level", "high-angle", "low-angle", "overhead",
-              "birds-eye", "worms-eye", "dutch-angle", "front", "side", "rear")
-# 흔한 약칭 → 표준 어휘. 해당 필드의 표준 목록에 있을 때만 채택하므로 shot/angle 이 섞이지 않는다.
-CAM_SHORTHAND = {"close": "close-up", "cu": "close-up", "ecu": "extreme-close-up",
-                 "mcu": "medium-close-up", "ots": "over-the-shoulder",
-                 "pointofview": "pov", "eye": "eye-level", "high": "high-angle",
-                 "low": "low-angle", "dutch": "dutch-angle", "back": "rear",
-                 "behind": "rear", "overthehead": "overhead"}
+# **정본은 vn_core** 다(린터·조립부·장면 구성이 같은 목록을 본다). 여기 이름은 별칭일 뿐이다 —
+# 이 이름으로 부르는 곳(vn_compose·selftest)이 있어 남겨 둔다.
+STD_SHOTS = vn_core.STD_SHOTS
+STD_ANGLES = vn_core.STD_ANGLES
+CAM_SHORTHAND = vn_core.CAM_SHORTHAND
 SHOT_HINT = "표준: wide / medium / close-up / two-shot / over-the-shoulder 등"
 ANGLE_HINT = "표준: eye-level / high-angle / low-angle / overhead / dutch-angle 등"
 
@@ -118,26 +112,10 @@ def _runs(values):
     return runs
 
 
-def _loose(v: str) -> str:
-    """표기 흔들림을 지운 비교용 키 — 'Eye Level' / 'eye-level' → 'eyelevel'."""
-    return re.sub(r"[^a-z0-9]+", "", v.lower())
-
-
-def _cam_canon(value: str, std: tuple) -> str | None:
-    """카메라 표기를 표준 어휘로 정규화. 표준 밖이면 None."""
-    std_map = {_loose(s): s for s in std}
-    key = _loose(value)
-    cands = [key]
-    for suffix in ("shot", "angle", "view"):  # 'medium shot' 같은 군더더기 접미 제거
-        if key.endswith(suffix) and len(key) > len(suffix):
-            cands.append(key[:-len(suffix)])
-    for c in cands:
-        if c in std_map:
-            return std_map[c]
-        alias = CAM_SHORTHAND.get(c)
-        if alias and _loose(alias) in std_map:
-            return std_map[_loose(alias)]
-    return None
+# 표기 정규화도 vn_core 가 정본이다 — 린터가 '표준으로 고치라' 고 말하는 값과 조립부가
+# 실제로 알아듣는 값이 갈리면, 린터는 통과시키는데 프롬프트에는 아무것도 안 실린다.
+_loose = vn_core.cam_key
+_cam_canon = vn_core.cam_canon
 
 
 def _field_buckets(text: str) -> set:
