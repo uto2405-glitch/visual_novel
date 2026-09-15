@@ -5196,6 +5196,12 @@ def v05(b: Box):
         html = (out / "index.html").read_text(encoding="utf-8")
         has(html, "manifest.webmanifest", "매니페스트 링크")
         has(html, "serviceWorker", "서비스워커 등록")
+        # rel="icon" 이 없으면 브라우저가 서버 루트에서 /favicon.ico 를 찾는다(실측: 404).
+        # 감상본이 품고 있던 data: URI 아이콘은 걷어내고 **번들의 파일 아이콘**만 남아야 한다.
+        eq(len(re.findall(r'<link rel="icon"', html)), 2, "파비콘 선언(192·512)이 없다")
+        eq(len(re.findall(r'<link rel="apple-touch-icon"', html)), 1, "apple-touch-icon 이 하나가 아님")
+        ok('rel="icon" type="image/png" href="data:' not in html,
+           "감상본의 인라인 data URI 아이콘이 번들에 남았다")
         has(html, "data:image", "이미지 내장")
         ok(not re.search(r"<script\b[^>]*\ssrc=", html, re.I),
            "외부 스크립트를 참조 — 오프라인에서 재생이 죽는다")
@@ -5204,6 +5210,78 @@ def v05(b: Box):
         sw = (out / "sw.js").read_text(encoding="utf-8")
         hasnt(sw, "__VER__", "치환되지 않은 캐시 버전 자리표시자")
         has(sw, "index.html", "오프라인 캐시 목록")
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
+@test("viewer", "V07 PWA 아이콘 — 컷 아이콘은 any, maskable 은 여백을 준 별도 파일")
+def v07(b: Box):
+    """안드로이드는 maskable 아이콘을 런처 모양대로 깎는다(안전 영역은 한 변의 80% 원).
+    예전에는 **어떻게 만들었든** 두 파일에 purpose "any maskable" 을 붙였다 — --icon-from-cut
+    으로 만든 아이콘에서는 그 선언대로 인물의 머리와 턱이 잘린다.
+
+    기본 아이콘(피사체 없는 그라데이션)은 잘려도 잃을 것이 없으므로 한 파일이 둘 다 맡는다.
+    컷 아이콘은 "any" 로만 선언하고 maskable 은 여백본에 맡긴다 — **선언과 파일이 일치하는지**
+    (선언한 src 가 실제로 있고, sizes 가 그 PNG 의 실제 크기인지)까지 본다.
+    """
+    ep = b.mod("export_pwa")
+    out = b.p("output") / "pwa"
+
+    def png_size(path):
+        raw = path.read_bytes()
+        eq(raw[:8], bytes.fromhex("89504e470d0a1a0a"), f"{path.name} 이 PNG 가 아님")
+        return struct.unpack(">II", raw[16:24])
+
+    def audit(wm, label):
+        for ent in wm["icons"]:
+            f = out / ent["src"]
+            ok(f.is_file(), f"{label}: 선언한 아이콘 파일이 없다 — {ent['src']}")
+            w, h = png_size(f)
+            eq(f"{w}x{h}", ent["sizes"], f"{label}: {ent['src']} 의 sizes 선언이 실제 크기와 다름")
+            ok(set(ent["purpose"].split()) <= {"any", "maskable", "monochrome"},
+               f"{label}: 알 수 없는 purpose {ent['purpose']!r}")
+        return {ent["src"]: ent["purpose"] for ent in wm["icons"]}
+
+    try:
+        with approved_scene(b), quiet():
+            ep.export(False, 640, 70)                     # ① 기본 아이콘
+            wm1 = json.loads((out / "manifest.webmanifest").read_text(encoding="utf-8"))
+            files1 = sorted(p.name for p in out.glob("icon-*.png"))
+            sw1 = (out / "sw.js").read_text(encoding="utf-8")
+            purposes1 = audit(wm1, "기본")
+
+            ep.export(False, 640, 70, icon_from_cut=True)  # ② 대표 컷 아이콘
+            from_cut = bool(getattr(ep.export, "last_icon_from_cut", False))
+            wm2 = json.loads((out / "manifest.webmanifest").read_text(encoding="utf-8"))
+            files2 = sorted(p.name for p in out.glob("icon-*.png"))
+            sw2 = (out / "sw.js").read_text(encoding="utf-8")
+            purposes2 = audit(wm2, "컷")
+            pair = [(out / n).read_bytes() if (out / n).is_file() else None
+                    for n in ("icon-512.png", "icon-512-maskable.png")]
+
+            ep.export(False, 640, 70)                      # ③ 다시 기본 — 옛 아이콘이 남지 않는다
+            files3 = sorted(p.name for p in out.glob("icon-*.png"))
+            wm3 = json.loads((out / "manifest.webmanifest").read_text(encoding="utf-8"))
+
+        eq(files1, ["icon-192.png", "icon-512.png"], f"기본 아이콘 파일 {files1}")
+        eq(sorted(set(purposes1.values())), ["any maskable"], f"기본 아이콘 purpose {purposes1}")
+        for name in files1:
+            has(sw1, name, f"서비스워커 캐시 목록에 {name} 이 없다")
+
+        if not from_cut:
+            raise Skip("Pillow 없음 — 컷 아이콘을 만들 수 없다")
+        eq(files2, ["icon-192-maskable.png", "icon-192.png",
+                    "icon-512-maskable.png", "icon-512.png"], f"컷 아이콘 파일 {files2}")
+        eq(purposes2.get("icon-192.png"), "any", f"컷 아이콘이 maskable 을 겸함 — {purposes2}")
+        eq(purposes2.get("icon-512.png"), "any", f"컷 아이콘이 maskable 을 겸함 — {purposes2}")
+        eq(purposes2.get("icon-512-maskable.png"), "maskable", f"여백본 purpose — {purposes2}")
+        for name in files2:
+            has(sw2, name, f"서비스워커 캐시 목록에 {name} 이 없다")
+        ok(pair[0] is not None and pair[1] is not None and pair[0] != pair[1],
+           "maskable 판이 원본과 같은 파일이다 — 여백이 들어가지 않았다")
+
+        eq(files3, ["icon-192.png", "icon-512.png"], f"기본으로 되돌린 뒤 남은 파일 {files3}")
+        eq(sorted(e["src"] for e in wm3["icons"]), files3, "매니페스트가 없는 파일을 가리킨다")
     finally:
         shutil.rmtree(out, ignore_errors=True)
 

@@ -508,8 +508,12 @@ TEMPLATE = """<!DOCTYPE html>
 <title>__TITLE__</title>
 <!-- 앱 겉모습 — 폰에 복사해 '홈 화면에 추가'로 여는 소장본이라 스튜디오 문서와 같은
      차림을 준다: 상태바 색·홈 화면 아이콘·주소창 없는 전체화면.
-     아이콘은 인라인 data URI 다(외부 요청 0 — 파일 하나만 옮겨도 그대로 보인다). -->
+     아이콘은 인라인 data URI 다(외부 요청 0 — 파일 하나만 옮겨도 그대로 보인다).
+     rel="icon" 이 없으면 브라우저는 **선언되지 않은 파비콘을 서버 루트에서 찾는다** —
+     이 파일을 정적 호스팅하면 페이지를 열 때마다 /favicon.ico 404 가 로그에 쌓인다.
+     같은 data URI 를 rel="icon" 으로도 걸어 그 요청 자체를 없앤다. -->
 <meta name="theme-color" content="__THEME__">
+<link rel="icon" type="image/png" href="__APPICON__">
 <link rel="apple-touch-icon" href="__APPICON__">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
