@@ -4983,6 +4983,60 @@ def pr04(b: Box):
     has(row3["fix"] + row3["detail"], "min_long_edge_px", "무엇을 올려야 하는지 말하지 않음")
 
 
+@test("print", "PR07 실효 DPI 하한 — 인화소에 보내면 안 되는 규격은 마스터를 굽지 않는다")
+def pr07(b: Box):
+    """실측: 이 앨범의 원본(832×1248)을 8×10 에 앉히면 104DPI 다. 예전에는 ⚠ 한 줄과 함께
+    구웠고, 나온 파일은 2400×3000px 라 **파일만 보면 멀쩡했다** — 인화소도 거절하지 않는다.
+    뭉개졌다는 사실은 인화비를 쓴 뒤에 도착한다(실측: output/print 의 121MB 가 그 8×10 이었다).
+
+    막되 **과하게 막지 않는 것**이 조건이다. 4×6 208DPI 까지 거부하면 이 앨범은 아무것도
+    뽑을 수 없다 — 그래서 하한은 240(감상 하한)이 아니라 150 이고, 판정하는 도구와 굽는
+    도구가 vn_core 의 같은 수를 본다.
+    """
+    pfm, pem, vc = b.mod("print_preflight"), b.mod("print_export"), b.mod("vn_core")
+    eq(pfm.DPI_FLOOR, vc.PRINT_DPI_FLOOR, "판정 도구의 하한이 vn_core 와 다름")
+    eq(pem.DPI_FLOOR, vc.PRINT_DPI_FLOOR, "굽는 도구의 하한이 vn_core 와 다름 — 판정과 굽기가 갈린다")
+    eq(pfm.grade(vc.PRINT_DPI_FLOOR - 1, 300), "인화불가", "하한 바로 아래")
+    eq(pfm.grade(vc.PRINT_DPI_FLOOR, 300), "업스케일필요", "하한 값 자체는 통과해야 한다")
+    eq(pfm.grade(240, 300), "보통", "기존 등급이 바뀌었다")
+    eq(pfm.grade(300, 300), "좋음", "기존 등급이 바뀌었다")
+
+    rep = pfm.preflight_image(832, 1248, 300)          # 이 앨범의 실제 원본 크기
+    rows = {r["size"]: r for r in rep["rows"]}
+    eq(rows["8×10"]["dpi"], 104, "8×10 실효 DPI")
+    eq(rows["8×10"]["grade"], "인화불가", "8×10 104DPI 가 막히지 않는다")
+    eq(rows["엽서 4×6"]["grade"], "업스케일필요",
+       "4×6 208DPI 까지 막으면 이 앨범은 아무 규격도 뽑을 수 없다")
+    ok("8×10" in (rep.get("blocked") or []), f"blocked 목록 — {rep.get('blocked')}")
+    eq(rep.get("floor_dpi"), vc.PRINT_DPI_FLOOR, "보고서가 하한을 싣지 않음")
+
+    try:
+        from PIL import Image as _PImg            # noqa: F401
+    except Exception:
+        raise Skip("Pillow 미설치 — 굽기 거부는 확인 불가")
+    out = b.root / "_pe_floor"
+    msgs: list[str] = []
+    with approved_scene(b) as sid, patched(pem, "OUT", out):
+        write_png(b.root / f"images/raw/{sid}/v.png", 832, 1248)     # 앨범과 같은 원본
+        with quiet():
+            s1 = pem.export_batch(8.0, 10.0, 300, 0.0, "center", scene_filter=sid, emit=msgs.append)
+            s2 = pem.export_batch(8.0, 10.0, 300, 0.0, "center", scene_filter=sid,
+                                  emit=msgs.append, allow_lowres=True)
+            s3 = pem.export_batch(4.0, 6.0, 300, 0.0, "center", scene_filter=sid, emit=msgs.append)
+        baked = sorted(f.suffix for f in (out / "8x10").glob("*.tiff"))
+    text = chr(10).join(msgs)
+    eq(s1["count"], 0, "하한 미만인데 마스터가 구워졌다 — 그대로 인화소로 간다")
+    eq([r["dpi"] for r in s1["refused"]], [104], f"거부 기록 — {s1['refused']}")
+    eq(s1["needed_px"], [2400, 3600], "필요 픽셀이 없거나 프리플라이트와 수가 다름")
+    has(text, "2400×3600", "몇 픽셀이 필요한지 말하지 않음")
+    has(text, "--allow-lowres", "푸는 방법을 말하지 않음")
+    eq(s2["count"], 1, "--allow-lowres 로 명시했는데도 굽지 못했다")
+    eq(baked, [".tiff"], f"명시했을 때 실제 파일이 나와야 한다 — {baked}")
+    eq(s3["count"], 1, "4×6(208DPI)까지 막혔다")
+    eq(s3["refused"], [], "4×6 은 거부 대상이 아니다")
+    shutil.rmtree(out, ignore_errors=True)
+
+
 @test("print", "PR05 크롭 안내는 '어느 변이' 잘렸는지까지 말한다 · 저장소 밖 출력 경로에서 죽지 않는다")
 def pr05(b: Box):
     """총 크롭률만 찍으면 사용자는 파일을 열어 봐야 머리가 잘린 걸 안다. 8×10 의 16.7% 는

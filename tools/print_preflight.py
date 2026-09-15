@@ -62,6 +62,9 @@ SMALL_SIZES = [
 ]
 DPI_GOOD = 300   # 사진 인화 권장
 DPI_OK = 240     # 근거리 감상 허용 하한
+# 인화소에 보내면 안 되는 선 — 정본은 vn_core 다(print_export 의 굽기 거부가 같은 값을 본다).
+# 두 도구가 다른 수를 말하면 "판정은 ✗ 인데 마스터는 구워진다" 가 되고, 그 차이는 인화비로 드러난다.
+DPI_FLOOR = vn_core.PRINT_DPI_FLOOR
 
 
 # ------------------------------------------------------------- 이미지 크기 판독
@@ -199,11 +202,19 @@ def fill_dpi(px_w: int, px_h: int, short_in: float, long_in: float):
 
 
 def grade(dpi: float, target: int) -> str:
+    """실효 DPI → 네 단계. **'업스케일필요' 와 '인화불가' 를 가른다.**
+
+    예전에는 240 미만이 전부 '업스케일필요' 한 칸이었다 — 4×6 208DPI(업스케일하면 쓸 만하다)와
+    8×10 104DPI(2.9배 확대라 그림이 뭉개진다)가 같은 말을 들었다. 사용자는 그 한 칸을 보고
+    8×10 마스터를 굽고 인화소에 올린다. 결과는 돈을 쓴 뒤에야 보인다.
+    """
     if dpi >= target:
         return "좋음"
     if dpi >= DPI_OK:
         return "보통"
-    return "업스케일필요"
+    if dpi >= DPI_FLOOR:
+        return "업스케일필요"
+    return "인화불가"
 
 
 def _row(name: str, s_in: float, l_in: float, px_w: int, px_h: int, target: int) -> dict:
@@ -229,6 +240,8 @@ def preflight_image(px_w: int, px_h: int, target: int = DPI_GOOD) -> dict:
     max_long_in = round(long_px / target, 2)
     return {"px": [px_w, px_h], "target_dpi": target, "rows": rows, "small_rows": small,
             "max_size_at_target": best, "max_long_in_at_target": max_long_in,
+            "floor_dpi": DPI_FLOOR,          # 이 아래로는 print_export 가 굽기를 거부한다
+            "blocked": [r["size"] for r in rows if r["grade"] == "인화불가"],
             "printable": best is not None}
 
 
@@ -279,7 +292,7 @@ def _pad(s: str, width: int) -> str:
 
 def _row_line(r: dict) -> str:
     """규격 1줄 표시 — 인치 이름 옆에 mm 를 같이 보여 인화소 주문서와 맞춘다."""
-    mark = {"좋음": "OK ", "보통": "~  ", "업스케일필요": "✗  "}[r["grade"]]
+    mark = {"좋음": "OK ", "보통": "~  ", "업스케일필요": "✗  ", "인화불가": "⛔ "}[r["grade"]]
     mm = f"({r['mm'][0]}×{r['mm'][1]}mm)"
     crop = f" · 크롭 {r['crop_pct']}%" if r["crop_pct"] > 1 else ""
     return f"{mark}{_pad(r['size'], 18)}{_pad(mm, 14)}{r['dpi']:>4}DPI  {r['grade']}{crop}"
@@ -385,7 +398,7 @@ def report(target: int, scene_filter: str | None, include_all: bool, engine=None
         print("판정할 장면이 없습니다. (selected_image 가 있고 APPROVED 인 장면 대상 — --all 로 전체)")
         return 0
 
-    worst = 0
+    worst, blocked = 0, {}
     for sc, sel in scenes:
         sid = sc.get("scene_id", "?")
         p = ROOT / sel
@@ -409,11 +422,28 @@ def report(target: int, scene_filter: str | None, include_all: bool, engine=None
             print("     " + _row_line(r))
         for r in pf["small_rows"]:             # 굿즈 규격은 판정 밖 참고용
             print("     ·  " + _row_line(r))
+        for r in pf["rows"]:
+            if r["grade"] == "인화불가":       # 규격마다 '가장 나쁜 장면' 의 수치를 남긴다
+                blocked[r["size"]] = min(blocked.get(r["size"], 10 ** 9), r["dpi"])
         if not pf["printable"]:
             worst = max(worst, 1)
         print()
 
     print("-" * 60)
+    if blocked:
+        # '업스케일필요' 한 칸에 208DPI(4×6)와 104DPI(8×10)가 같이 들어 있던 시절에는,
+        # 사용자가 그 한 칸을 보고 8×10 마스터를 굽고 인화소에 올렸다. 돈이 나간 뒤에 안다.
+        print(f"⛔ 인화소에 보내면 안 되는 규격 — 실효 DPI 가 하한({DPI_FLOOR}DPI) 미만입니다.")
+        for name in sorted(blocked, key=lambda n: blocked[n]):
+            need = needed_px(name, target)
+            need_txt = f"최소 {need[0]}×{need[1]}px 필요" if need else "필요 픽셀 계산 불가"
+            print(f"  · {name}: 지금 {blocked[name]}DPI — {target}DPI 로 채우려면 {need_txt}")
+            if need:
+                for line in recipe_lines(need[1], engine):
+                    print(line)
+        print("  print_export 는 이 규격의 마스터를 굽지 않습니다 "
+              "(정말 필요하면 --allow-lowres — 화질은 그대로 나쁩니다).")
+        print()
     if worst == 0:
         print("판정 완료: 모든 대상 장면이 최소 한 규격 이상 인화 가능(≥목표DPI).")
     else:

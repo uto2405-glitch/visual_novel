@@ -86,6 +86,14 @@ def is_private_rel(rel: Any) -> bool:
     return any(fnmatch.fnmatch(r, pat) for pat in PRIVATE_PATTERNS)
 
 
+# 실물 인화의 **하한**. 실효 DPI 가 이보다 낮으면 인화 마스터를 굽지 않는다(사람이 명시로 풀 수 있다).
+# 240(print_preflight.DPI_OK)은 "액자에 넣어 조금 떨어져 보면 괜찮다" 의 하한이고, 이 값은 그보다
+# 훨씬 아래 — **돈이 나가는 주문을 막는 마지막 선**이다. 실측 근거: 이 앨범의 원본(832×1248)을
+# 8×10 으로 앉히면 104DPI 다. 그 마스터는 만들어지고, 크기도 3000×2400px 라 파일만 보면 멀쩡하며,
+# 인화소에 올려도 거절당하지 않는다 — 결과를 받아 본 뒤에야 안다(실측: output/print 의 121MB 가
+# 그 8×10 이었다). 판정은 print_preflight, 굽기 거부는 print_export 가 **같은 값**으로 한다.
+PRINT_DPI_FLOOR = 150
+
 # 장면 ID 형식 — 경로 탈출 차단과 order 무결성의 첫 관문(웹·CLI 공통).
 SCENE_ID_RE = re.compile(r"^SCENE-\d{3,}$")
 

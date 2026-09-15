@@ -79,6 +79,11 @@ OUT = ROOT / "output" / "print"          # 함수는 이 전역을 호출 시점
 # 지우는 것은 이 도구가 만든 폴더(spec_sheet.json 이 있는 폴더)뿐이고, 방금 구운 규격은
 # 절대 지우지 않는다.
 KEEP_SIZE_DIRS = 3
+# 인화 마스터를 굽지 않는 하한(실효 DPI). 정본은 vn_core — 판정하는 도구(print_preflight)와
+# 굽는 도구(여기)가 **같은 수**를 봐야 "판정은 ⛔ 인데 마스터는 나온다" 가 생기지 않는다.
+# 실측: 이 앨범 원본(832×1248)의 8×10 은 104DPI 다. 그런데도 3000×2400px 짜리 TIFF 가
+# 만들어지고, 파일만 보면 멀쩡하고, 인화소도 거절하지 않는다 — 결과물을 받아야 안다.
+DPI_FLOOR = vn_core.PRINT_DPI_FLOOR
 # 장면 폴더 상수는 두지 않는다 — 훑기는 vn_core.iter_scenes 하나뿐이다.
 
 MM_PER_IN = 25.4
@@ -358,6 +363,23 @@ def _order_prefix(order) -> str:
     return f"{n:03d}_" if 0 < n < 1000 else ""
 
 
+def page_inches(sw: int, sh: int, short_in: float, long_in: float, bleed: float):
+    """원본 방향에 맞춘 인화 면(가로·세로 인치) — 굽기와 사전 판정이 같은 산수를 쓰게 한다."""
+    landscape = sw >= sh
+    return ((long_in if landscape else short_in) + 2 * bleed,
+            (short_in if landscape else long_in) + 2 * bleed)
+
+
+def source_dpi(sw: int, sh: int, short_in: float, long_in: float, bleed: float,
+               fit: bool = False) -> float:
+    """원본이 이 규격에서 내는 실효 DPI. cover 는 구속축(min), fit 은 여유축(max)이 기준이다."""
+    pw_in, ph_in = page_inches(sw, sh, short_in, long_in, bleed)
+    if pw_in <= 0 or ph_in <= 0:
+        return 0.0
+    pick = max if fit else min
+    return pick(sw / pw_in, sh / ph_in)
+
+
 def export_one(scene_id: str, src_path: Path, short_in, long_in, dpi, bleed, anchor,
                mode="cover", bg="#ffffff", marks=False, order=None, upscale="lanczos"):
     """이미지 1장 → 마스터 픽셀·크롭(또는 여백)·리샘플 후 저장. 스펙 dict 반환."""
@@ -367,9 +389,7 @@ def export_one(scene_id: str, src_path: Path, short_in, long_in, dpi, bleed, anc
         im.load()
         img = to_srgb(_flatten(im, bgc))
     sw, sh = img.size
-    landscape = sw >= sh
-    pw_in = (long_in if landscape else short_in) + 2 * bleed
-    ph_in = (short_in if landscape else long_in) + 2 * bleed
+    pw_in, ph_in = page_inches(sw, sh, short_in, long_in, bleed)
     tw, th = round(pw_in * dpi), round(ph_in * dpi)
 
     fit = str(mode).lower() == "fit"
@@ -531,19 +551,56 @@ def prune_size_dirs(keep: int = KEEP_SIZE_DIRS, protect: Path | None = None,
     return gone
 
 
+def _pre_dpi(path: Path, short_in: float, long_in: float, bleed: float, fit: bool):
+    """굽기 **전에** 원본 크기만 읽어 실효 DPI 를 잰다(픽셀을 디코드하지 않는다).
+
+    읽지 못하면 None — 그때는 막지 않는다. 판독 실패를 저해상도로 취급하면, 도구가 다룰 수
+    있는 포맷인데 헤더만 이상한 파일 때문에 멀쩡한 컷이 안 구워진다(굽기 단계에서 다시 실패한다).
+    """
+    if not PIL_OK:
+        return None
+    try:
+        with Image.open(path) as im:
+            sw, sh = im.size
+    except Exception:
+        return None
+    return source_dpi(sw, sh, short_in, long_in, bleed, fit)
+
+
+def _needed_px(short_in: float, long_in: float, dpi: int):
+    """이 규격을 dpi 로 채우려면 2:3 원본에 필요한 (짧은변, 긴변) 픽셀.
+
+    산수의 정본은 print_preflight 하나다 — 여기서 다시 구현하면 "판정이 말하는 수" 와
+    "굽기가 말하는 수" 가 갈린다. 지연 import 인 이유는 순환 때문이 아니라(print_preflight 는
+    모듈 수준에서 vn_core 만 본다) **Pillow 없는 설치에서도 이 모듈이 뜨는 성질**을 지키기
+    위해서다. 실패하면 숫자 없이 안내만 한다.
+    """
+    try:
+        import print_preflight as pf
+        return pf.needed_px_for(short_in, long_in, dpi)
+    except Exception:
+        return None
+
+
 def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
                  scene_filter=None, skip_upscale=False, emit=lambda *a: None,
                  *, only_ids=None, mode="cover", bg="#ffffff", marks=False,
-                 upscale="lanczos", order_prefix=True) -> dict:
+                 upscale="lanczos", order_prefix=True, allow_lowres=False) -> dict:
     """장면 수집 → 규격별 마스터 굽기 → spec_sheet 저장. 웹·CLI 공용. 요약 dict 반환.
 
     only_ids 를 주면 그 scene_id 만 굽는다(즐겨찾기 인화용). None 이면 기존 동작 그대로.
+
+    **실효 DPI 가 하한(DPI_FLOOR) 미만인 컷은 굽지 않는다.** 예전에는 ⚠ 한 줄과 함께
+    구웠고, 그 마스터는 파일로만 보면 멀쩡해서(8×10 이면 2400×3000px) 그대로 인화소로
+    갔다 — 104DPI 는 2.9배 확대이고, 뭉개졌다는 사실은 인화비를 쓴 뒤에 도착한다.
+    정말 필요하면 allow_lowres=True(CLI: --allow-lowres)로 사람이 명시한다.
     """
     scenes = collect(scene_filter, include_all)
     wanted = {str(s) for s in only_ids} if only_ids is not None else None
     if wanted is not None:
         scenes = [sc for sc in scenes if sc.get("scene_id") in wanted]
-    specs, skipped, missing = [], 0, 0
+    specs, skipped, missing, refused = [], 0, 0, []
+    need = _needed_px(short_in, long_in, dpi)
     if marks and bleed <= 0:
         emit("재단선은 블리드가 있어야 그릴 수 있습니다 — --bleed 0.125 를 함께 주세요.")
     for sc in scenes:
@@ -559,6 +616,16 @@ def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
         md = pol.get("crop_mode", mode)
         bgc = pol.get("pad_color", bg)
         order = sc.get("scene_order") if order_prefix else None
+        eff = _pre_dpi(p, short_in, long_in, bleed, str(md).lower() == "fit")
+        if eff is not None and eff < DPI_FLOOR and not allow_lowres:
+            refused.append({"scene_id": sid, "dpi": round(eff)})
+            emit(f"[{sid}] ⛔ 굽지 않음 — 이 원본은 {size_label(short_in, long_in)} @{dpi}DPI 에서 "
+                 f"실효 {round(eff)}DPI 입니다(하한 {DPI_FLOOR}DPI). 인화소에 보내면 뭉개집니다.")
+            if need:
+                emit(f"        이 규격을 채우려면 원본이 최소 {need[0]}×{need[1]}px 이어야 합니다 "
+                     "— 값까지 알려면: python tools/print_preflight.py")
+            emit("        정말 굽겠다면 --allow-lowres (화질은 그대로입니다).")
+            continue
         try:
             spec = export_one(sid, p, short_in, long_in, dpi, bleed, anc,
                               md, bgc, marks, order, upscale)
@@ -606,6 +673,8 @@ def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
     return {"count": len(specs), "dir": _rel(dest) if specs else None, "pruned": pruned,
             "upscaled": sum(1 for s in specs if s["upscaled"]), "skipped": skipped,
             "missing": missing, "specs": specs, "stale": stale,
+            "refused": refused, "floor_dpi": DPI_FLOOR,
+            "needed_px": list(need) if need else None,
             "crop_max": max((float(s["crop_pct"] or 0) for s in specs), default=0.0),
             "anchor": anchor,
             "mode": "fit" if str(mode).lower() == "fit" else "cover",
@@ -637,6 +706,8 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="상태 무관 selected 전부")
     ap.add_argument("--contact", action="store_true", help="컨택트시트 생성")
     ap.add_argument("--skip-upscale", action="store_true", help="업스케일 필요분은 굽지 않음")
+    ap.add_argument("--allow-lowres", action="store_true",
+                    help=f"실효 {DPI_FLOOR}DPI 미만이어도 굽는다 — 인화소에 보내면 뭉개집니다")
     ap.add_argument("--no-order-prefix", action="store_true",
                     help="파일명 앞 scene_order 접두사(001_)를 붙이지 않음")
     ap.add_argument("--list-sizes", action="store_true", help="규격 프리셋 목록만 출력")
@@ -692,7 +763,8 @@ def main() -> int:
         s = export_batch(short_in, long_in, args.dpi, args.bleed, args.anchor,
                          args.all, args.scene, args.skip_upscale, emit=print,
                          only_ids=only, mode=args.mode, bg=args.bg, marks=args.marks,
-                         upscale=args.upscale, order_prefix=not args.no_order_prefix)
+                         upscale=args.upscale, order_prefix=not args.no_order_prefix,
+                         allow_lowres=args.allow_lowres)
     except VNError as exc:          # 규격 오타·매니페스트 부재 등 — 트레이스백 대신 한 줄 안내
         print(exc)
         return 1
@@ -720,8 +792,23 @@ def main() -> int:
                 print(line)
         if s["skipped"]:
             print(f"  {s['skipped']}장은 --skip-upscale 로 제외됨.")
+    elif s["refused"]:
+        print(f"구운 마스터가 없습니다 — {len(s['refused'])}장 전부가 이 규격의 해상도 하한"
+              f"({s['floor_dpi']}DPI)에 못 미칩니다.")
     else:
         print("구운 마스터가 없습니다. (selected_image 있고 APPROVED 인 장면 대상 — --all 로 전체)")
+    if s["refused"]:
+        worst = min(r["dpi"] for r in s["refused"])
+        print(f"  ⛔ {len(s['refused'])}장을 굽지 않았습니다 — {size_label(short_in, long_in)} "
+              f"@{args.dpi}DPI 에서 실효 {worst}DPI (하한 {s['floor_dpi']}DPI).")
+        print("     " + ", ".join(f"{r['scene_id']}({r['dpi']}DPI)" for r in s["refused"][:8])
+              + (" ..." if len(s["refused"]) > 8 else ""))
+        for line in _regen_recipe(short_in, long_in, args.dpi):
+            print(line)
+        print("     더 작은 규격은 지금 원본으로도 됩니다: python tools/print_preflight.py")
+        print("     그래도 굽겠다면 --allow-lowres (그림은 그대로 뭉개집니다).")
+        if not s["count"]:
+            return 1
     return 0
 
 

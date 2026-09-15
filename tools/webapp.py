@@ -508,8 +508,12 @@ def r_export(b):
         skip_upscale=bool(b.get("skip_upscale")), **kw)
     if b.get("contact"):
         print_export.contact_sheet(_pick(print_export.collect(None, inc_all)))
+    # refused 는 **굽지 않은 이유**다 — 세지 않으면 화면에 "0장 → (없음)" 만 남아서
+    # 사용자가 실패로 읽고 같은 버튼을 다시 누른다(실측 가능한 낭비는 아니지만 같은 종류의 침묵).
     return {"count": summ["count"], "dir": summ["dir"], "upscaled": summ["upscaled"],
-            "skipped": summ["skipped"], "missing": summ["missing"]}
+            "skipped": summ["skipped"], "missing": summ["missing"],
+            "refused": summ.get("refused") or [], "floor_dpi": summ.get("floor_dpi"),
+            "needed_px": summ.get("needed_px")}
 
 
 def r_favorite(b):

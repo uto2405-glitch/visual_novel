@@ -351,9 +351,12 @@ $("btnExport").onclick=async()=>{
  try{const d=await api("/api/export",{size:$("exportSize").value,bleed:+$("exportBleed").value,
    all:$("exportAll").checked,skip_upscale:$("exportSkipUp").checked});
   const s=bz.stop();
+  const ref=Array.isArray(d.refused)?d.refused:[];
   $("exportMsg").textContent=d.count+"장 → "+(d.dir||"(없음)")
-   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+(d.skipped?" · 제외 "+d.skipped:"")+took(s)
-   +" · 폰으로 받기: [뷰어] 탭 → [📥 내보낸 파일 받기]";
+   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+(d.skipped?" · 제외 "+d.skipped:"")
+   +(ref.length?" · ⛔ "+ref.length+"장은 해상도 부족("+ref[0].dpi+"DPI < "+d.floor_dpi
+     +"DPI)으로 굽지 않음"+(d.needed_px?" — 원본 "+d.needed_px[0]+"×"+d.needed_px[1]+"px 필요":""):"")
+   +took(s)+" · 폰으로 받기: [뷰어] 탭 → [📥 내보낸 파일 받기]";
  }catch(e){bz.stop("실패: "+e.message)}};
 $("btnContact").onclick=async()=>{
  const bz=busy($("exportMsg"),"컨택트시트 생성 중…");
@@ -835,7 +838,7 @@ function scPrint(sc){
  btn.onclick=async()=>{try{const d=await api("/api/preflight",{scene_id:sc.scene_id});
   if(!d.rows||!d.rows.length){out.textContent="크기 판독 불가"}
   else{out.textContent=d.px[0]+"×"+d.px[1]+"px  →  300DPI 최대: "+(d.max_size_at_target||"엽서 미만")+"\n"+
-   d.rows.map(r=>{const m=r.grade==="좋음"?"OK  ":(r.grade==="보통"?"~   ":"✗   ");
+   d.rows.map(r=>{const m=r.grade==="좋음"?"OK  ":(r.grade==="보통"?"~   ":(r.grade==="인화불가"?"⛔  ":"✗   "));
     return m+r.size+"  "+r.dpi+"DPI  "+r.grade+(r.crop_pct>1?" · 크롭 "+r.crop_pct+"%":"")}).join("\n")}
   out.hidden=false}catch(e){out.textContent="실패: "+e.message;out.hidden=false}};
  pr.appendChild(btn);
@@ -1017,8 +1020,11 @@ $("btnFavPrint").onclick=async()=>{
  try{const d=await api("/api/export",{size:$("favPrintSize").value,
    favorites_only:true,only_ids:[...favSet]});
   const s=bz.stop();
+  const ref=Array.isArray(d.refused)?d.refused:[];
   $("galMsg").textContent=(d.count||0)+"장 → "+(d.dir||"(없음)")
-   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")+took(s)}
+   +(d.upscaled?" · ⚠업스케일 "+d.upscaled+"장":"")
+   +(ref.length?" · ⛔ "+ref.length+"장은 해상도 부족으로 굽지 않음(더 작은 규격을 고르세요)":"")
+   +took(s)}
  catch(e){bz.stop("실패: "+e.message)}};
 
 let lbList=[],lbIdx=-1;
