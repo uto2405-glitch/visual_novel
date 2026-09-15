@@ -37,7 +37,6 @@ import local_llm  # noqa: E402
 import prompt_build  # noqa: E402  (이미지 프롬프트 조립 — 대화→장면 경로가 바로 이어 쓴다)
 import scene_ops  # noqa: E402   (장면 상태 전이의 유일한 구현)
 import vn_core  # noqa: E402
-import xai_client  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
 ROOT = vn_core.ROOT
@@ -442,14 +441,22 @@ def _orch_local() -> bool:
 
 
 def orch_chat(messages: list, temperature: float = 0.6, max_tokens: int = 8192) -> str:
-    """장면 구성용 LLM 호출 — 로컬 LLM(기본) 또는 xAI(mode=api)."""
-    if _orch_local():
-        return local_llm.chat(messages, temperature=temperature, max_tokens=max_tokens)
-    return xai_client.chat(messages, temperature=temperature)
+    """장면 구성용 LLM 호출 — 오케스트레이터는 로컬 LLM 하나뿐이다.
+
+    예전에는 mode 가 local 이 아니면 외부 API 클라이언트로 넘어갔다. 그 경로는 은퇴했으므로
+    **여기서 멈추고 사람이 실제로 쓸 수 있는 경로를 이름으로 말한다.** 그냥 지우면 예전
+    매니페스트(mode:"api")를 그대로 쓰는 프로젝트가 NameError 역추적을 보게 되고, 웹에서는
+    그것이 500 이 된다 — 무엇을 해야 하는지는 한 글자도 나오지 않는다.
+    """
+    if not _orch_local():
+        raise VNError('오케스트레이터가 로컬 LLM 이 아닙니다(manifest.orchestrator.mode). '
+                      '원격 API 경로는 더 이상 없습니다 — mode 를 "local" 로 두거나 '
+                      '직접 입력(붙여넣기) 경로를 쓰세요.')
+    return local_llm.chat(messages, temperature=temperature, max_tokens=max_tokens)
 
 
 def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
-    """스토리라인 → 장면 자동 구성 (로컬 LLM/API). 수동 모드는 compose_from_json 사용."""
+    """스토리라인 → 장면 자동 구성 (로컬 LLM). 직접 입력 경로는 compose_from_json 사용."""
     if not force and vn_core.scene_files():
         raise VNError(_EXISTS_MSG)          # 호출 낭비 방지 — 미리 막는다
     instruction = build_compose_instruction(count, branching)
@@ -471,13 +478,13 @@ def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
 
 
 def compose_from_json(text: str, force: bool, expected: int | None = None) -> dict:
-    """수동 모드: grok.com 에서 받아 붙여넣은 SCENES_JSON 배열 → 장면 생성 (API 불필요)."""
+    """직접 입력: 어디서 받았든 붙여넣은 SCENES_JSON 배열 → 장면 생성 (LLM 불필요)."""
     if not (text or "").strip():
         raise VNError("붙여넣은 내용이 비어 있습니다.")
     try:
         items = _extract_json_array(text)
     except (ValueError, json.JSONDecodeError) as exc:
-        raise VNError(f"JSON 배열을 찾지 못했습니다({exc}). grok.com 응답에서 [ ... ] 배열 전체를 붙여넣으세요.")
+        raise VNError(f"JSON 배열을 찾지 못했습니다({exc}). 응답에서 [ ... ] 배열 전체를 붙여넣으세요.")
     return _create_scenes_from_items(items, force, expected=expected)
 
 
@@ -550,7 +557,7 @@ def scene_from_talk(messages, character_id=None) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="스토리라인 → 장면 자동 구성 (로컬 LLM 또는 xAI API)")
+    ap = argparse.ArgumentParser(description="스토리라인 → 장면 자동 구성 (로컬 LLM)")
     ap.add_argument("count", type=int, nargs="?", default=10,
                     help=f"장면 수 (기본 10, 최대 {MAX_SCENES})")
     ap.add_argument("--force", action="store_true", help="기존 장면을 backups/ 로 옮기고 재구성")

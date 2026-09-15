@@ -226,7 +226,7 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 .scrollview .topbar{padding-top:calc(10px + env(safe-area-inset-top))}
 </style></head><body>
 <header><h1>웹툰 스튜디오</h1><span class="chip" id="chipTitle"></span>
-<span class="chip" id="chipKey"></span><span class="chip" id="chipModel"></span></header>
+<span class="chip" id="chipLLM"></span><span class="chip" id="chipModel"></span></header>
 <main>
 <nav aria-label="작업 단계">
 <div class="navlabel">소설 만들기</div>
@@ -258,14 +258,14 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 <button class="btn" id="btnSaveStory">스토리라인 저장</button></div>
 <p class="small" id="storyMsg" role="status" style="margin-top:6px"></p>
 <details style="margin-top:12px">
-<summary class="small">외부 챗 AI 프롬프트 틀 (예비) — 로컬 LLM 대신 grok.com 등에 붙여넣을 때</summary>
+<summary class="small">프롬프트 틀 — 직접 쓰거나 다른 AI 에 물어볼 때 복사해서 쓰세요</summary>
 <div class="row" style="margin-top:8px">
 <select id="frameSel" style="flex:1" aria-label="프롬프트 틀 고르기"></select>
 <button class="btn ghost" id="btnFrameCopy">복사</button>
 <button class="btn ghost" id="btnFrameChat">채팅칸에 넣기</button></div>
 <textarea id="frameText" rows="13" style="margin-top:6px" aria-label="프롬프트 틀 내용"></textarea>
 <p class="small" style="margin-top:4px">{중괄호}만 채워서 쓰세요. ③·④는 [장면] 탭의 [지시문 생성] 버튼이
-앵커까지 채워 자동 생성합니다. 전체 틀 문서: templates/grok-prompts-ko.md</p>
+앵커까지 채워 자동 생성합니다. 전체 틀 문서: templates/prompt-frames-ko.md</p>
 </details>
 </div></div>
 </section>
@@ -283,22 +283,22 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 파일을 직접 넣는 [폴더 스캔]·[📤 업로드] 경로도 그대로 씁니다.</p></div>
 
 <details class="card" id="manualCompose">
-<summary class="small">⚡ 그록 수동 · 지시문 복사 → grok.com → JSON 붙여넣기 (로컬 LLM 느릴 때 추천)</summary>
-<p class="small" style="margin:8px 0">그록이 더 빠르고 똑똑합니다: [지시문 생성]을 복사해 grok.com(SuperGrok 구독, 비용 0)에 붙여넣고,
-응답 JSON 을 아래에 붙여넣으면 끝. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
+<summary class="small">✍ 직접 입력 · 지시문 복사 → 받은 JSON 붙여넣기 (로컬 LLM 이 꺼져 있거나 느릴 때)</summary>
+<p class="small" style="margin:8px 0">로컬 LLM 이 꺼져 있을 때의 경로입니다: [지시문 생성]을 복사해 직접 쓰거나
+다른 AI(폰 앱도 OK)에 붙여넣고, 받은 JSON 을 아래에 붙여넣으면 끝. 위쪽 [장면 수] 값을 그대로 사용합니다.</p>
 <div class="row">
-<span class="small">① 지시문 생성 → grok.com 에 붙여넣기</span>
+<span class="small">① 지시문 생성 → 복사해서 쓰기</span>
 <button class="btn ghost" id="btnComposeInput">지시문 생성</button>
 <button class="btn ghost" id="btnComposeInputCopy" hidden>복사</button></div>
-<textarea id="composeInput" rows="6" readonly style="margin-top:6px" aria-label="grok.com 에 붙여넣을 지시문"
- placeholder="[지시문 생성]을 누르면 grok.com 에 붙여넣을 지시문이 여기에 나옵니다."></textarea>
+<textarea id="composeInput" rows="6" readonly style="margin-top:6px" aria-label="복사해서 쓸 지시문"
+ placeholder="[지시문 생성]을 누르면 복사해서 쓸 지시문이 여기에 나옵니다."></textarea>
 <div class="row" style="margin-top:10px">
-<span class="small">② grok.com 이 준 JSON 배열을 아래에 붙여넣고 →</span>
+<span class="small">② 받은 JSON 배열을 아래에 붙여넣고 →</span>
 <label class="small"><input type="checkbox" id="composeManualForce"> 기존 장면 백업 후 재구성</label>
 <button class="btn" id="btnComposeManual">장면 생성</button>
 <span class="small" id="composeManualMsg" role="status"></span></div>
-<textarea id="composeJson" rows="6" style="margin-top:6px" aria-label="grok.com 응답 JSON 붙여넣기"
- placeholder="grok.com 응답의 [ ... ] JSON 배열 전체를 여기에 붙여넣기"></textarea>
+<textarea id="composeJson" rows="6" style="margin-top:6px" aria-label="장면 구성 JSON 붙여넣기"
+ placeholder="응답의 [ ... ] JSON 배열 전체를 여기에 붙여넣기"></textarea>
 </details>
 
 <details class="card" id="printExport">

@@ -97,12 +97,13 @@ async function probeEngines(){
  try{const d=await api("/api/talk-status",{});llmUp=!!(d&&d.up)}catch(e){llmUp=null}
  try{const d=await api("/api/image-engine",{});engUp=!!(d&&d.ok)}catch(e){engUp=null}
  renderChips()}
+// 오케스트레이터는 로컬 LLM 하나뿐이다 — 칩은 '키가 있는가' 가 아니라 '지금 답하는가',
+// 그리고 답하지 않을 때 **무엇을 쓰면 되는지**를 말한다(폰에서는 이 칩이 유일한 상태 표시다).
 function renderChips(){
  $("chipTitle").textContent=S.title||"제목 미정";
- if(S.orch_local){$("chipKey").textContent="스토리: 로컬 LLM"+(llmUp===false?" 꺼짐":"");
-  $("chipKey").className="chip"+(llmUp===false?" bad":(llmUp?" ok":""))}
- else{$("chipKey").textContent="API 키 "+(S.key_set?"연결됨":"미설정");
-  $("chipKey").className="chip "+(S.key_set?"ok":"bad")}
+ const c=$("chipLLM");
+ c.textContent=(llmUp===false)?"스토리: 로컬 LLM 꺼짐 · 직접 입력":"스토리: 로컬 LLM";
+ c.className="chip"+(llmUp===false?" bad":(llmUp?" ok":""));
  imageChip()}
 // ---- 이미지 엔진(ComfyUI 로컬·무료가 기본, MakeFun 유료는 보조) ----
 // 서버가 /api/state 에 image{engine,provider,url,engines,mf_token} 를 실으면 그것을 따르고,
@@ -124,7 +125,7 @@ function imageChip(){const c=$("chipModel"),im=S.image;
  c.textContent="이미지: MakeFun "+(tok?"연결됨":"토큰 미설정");
  c.className="chip "+(tok?"ok":"bad")}
 // refresh(opts) — opts.scene 이 주어지면 그 장면 카드 하나만 새로 그린다.
-// 전면 재렌더는 다른 카드에 붙여넣던 그록 응답·펼친 <details> 를 통째로 날려 버렸다(감사 지적).
+// 전면 재렌더는 다른 카드에 붙여넣던 프롬프트·펼친 <details> 를 통째로 날려 버렸다(감사 지적).
 async function refresh(opts){
  const o=opts||{};
  const prevChat=(S&&S.chat)||[];
@@ -165,7 +166,7 @@ async function send(){const t=$("chatInput").value.trim();if(!t)return;
  catch(e){S.chat.pop();renderChat();          // 보내지지 않은 말은 대화에 남기지 않는다
   $("chatInput").value=t;                     // 쓴 것을 돌려준다(다시 치지 않게)
   $("storyMsg").textContent="보내지 못했습니다 — "+e.message
-   +" (대신 아래 [그록 프롬프트 틀]을 복사해 grok.com 에서 대화하고 결과를 스토리라인 칸에 붙여넣으세요.)"}}
+   +" (대신 아래 [프롬프트 틀]을 복사해 직접 쓰거나 다른 AI 에 물어보고, 결과를 스토리라인 칸에 붙여넣으세요.)"}}
 $("btnSend").onclick=send;
 $("chatInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}});
 $("btnPull").onclick=()=>{const last=[...S.chat].reverse().find(m=>m.role==="assistant");
@@ -176,7 +177,7 @@ $("btnSaveStory").onclick=async()=>{const m=$("storyMsg");m.textContent="저장 
   m.textContent="저장됨 — 장면 탭에서 구성할 수 있습니다."}
  catch(e){m.textContent="저장 실패: "+e.message+" — 내용을 복사해 두세요."}};
 
-// ---- 그록 프롬프트 틀 (한글) — 전체판은 templates/grok-prompts-ko.md ----
+// ---- 프롬프트 틀 (한글) — 전체판은 templates/prompt-frames-ko.md ----
 const FRAMES={
 "① 아이디어 → 스토리라인":
 `너는 비주얼 노벨/웹툰 스토리 기획 파트너다. 한국어로 답해.
@@ -309,9 +310,9 @@ $("btnCompose").onclick=async()=>{
   $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음")+took(s);
   scDraft.clear();   // 장면이 갈렸으니 같은 id 의 옛 초안을 새 장면에 되붙이지 않는다
   await refresh()}
- catch(e){bz.stop("실패: "+e.message+" — 아래 [수동 모드]로 진행하세요(크레딧 불필요)")}};
+ catch(e){bz.stop("실패: "+e.message+" — 아래 [✍ 직접 입력]으로 진행하세요(로컬 LLM 없이도 됩니다)")}};
 
-// ---- 수동 모드: 장면 구성 (grok.com 복붙) ----
+// ---- 직접 입력: 장면 구성 (지시문 복사 → 받은 JSON 붙여넣기) ----
 $("btnComposeInput").onclick=async()=>{try{
   const d=await api("/api/compose-input",{count:+$("composeCount").value});
   $("composeInput").value=d.instruction;$("btnComposeInputCopy").hidden=false;
@@ -408,10 +409,10 @@ async function pollGenUntilDone(sid,msg){
  return {timeout:true}}
 
 // ================= 장면 카드 =================
-// 원래는 193줄짜리 단일 함수였다. 의미 단위(머리/프롬프트/그록수동/행동/후보/인화)로 쪼개
+// 원래는 193줄짜리 단일 함수였다. 의미 단위(머리/프롬프트/직접입력/행동/후보/인화)로 쪼개
 // 각 조각이 자기 DOM 만 만들고 돌려주게 했다. sceneCard 는 조립만 한다.
 
-// 카드가 다시 그려져도 사용자가 입력하던 것은 살아남아야 한다(그록 응답 붙여넣기, 펼침 상태).
+// 카드가 다시 그려져도 사용자가 입력하던 것은 살아남아야 한다(붙여넣던 프롬프트, 펼침 상태).
 // note 는 유료 작업(업스케일)의 결과 한 줄이다 — 성공하면 곧바로 refresh 가 카드를 갈아끼우므로
 // 여기 두지 않으면 "새 후보가 생겼다"는 안내가 만들어지자마자 지워진다.
 const scDraft=new Map();   // scene_id → {gen, set, open, note, msg}
@@ -446,24 +447,25 @@ function scPromptBlock(sc){
  det.appendChild(detRow);
  return det}
 
-// 그록 수동 경로: 로컬 LLM 이 느릴 때 grok.com 복붙으로 이번 장면 프롬프트 만들기 (승인 전 장면만)
-function scManualGrok(sc){
+// 직접 입력 경로: 로컬 LLM 이 꺼져 있을 때 브리프를 복사해 받아 온 프롬프트를 붙여넣는다.
+// 이것이 오늘 유일하게 LLM 없이 도는 작성 경로다(브리프 조립에는 모델이 필요 없다).
+function scManualPrompt(sc){
  const dr=draftOf(sc.scene_id);
  const mp=el("details");mp.style.marginTop="6px";
  // 폰에서는 카드마다 빈 textarea 두 개(700px)를 펼치는 쪽이 방해가 된다 — 접어 두고,
  // 사용자가 편 상태는 그대로 기억한다(dr.open).
  mp.open=(dr.open==null)?false:dr.open;
  mp.addEventListener("toggle",()=>{dr.open=mp.open});
- mp.appendChild(el("summary","small","⚡ 그록 수동 · 지시문 복사 → grok.com → 결과 붙여넣기 (로컬 LLM 느릴 때)"));
+ mp.appendChild(el("summary","small","✍ 직접 입력 · 브리프 복사 → 받은 프롬프트 붙여넣기 (로컬 LLM 이 꺼져 있을 때)"));
  const genRow=el("div","row");genRow.style.marginTop="6px";
- const btnGen=el("button","btn ghost","① 지시문 생성");
+ const btnGen=el("button","btn ghost","① 브리프 생성");
  const btnGenCopy=el("button","btn ghost","복사");btnGenCopy.hidden=!dr.gen;
  const genOut=el("textarea");genOut.rows=5;genOut.readOnly=true;genOut.style.marginTop="6px";
- genOut.placeholder="[지시문 생성] → 복사해서 grok.com(폰 앱도 OK)에 붙여넣기";
- genOut.setAttribute("aria-label",sc.scene_id+" 그록 지시문");
+ genOut.placeholder="[브리프 생성] → 복사해서 직접 쓰거나 다른 AI(폰 앱도 OK)에 붙여넣기";
+ genOut.setAttribute("aria-label",sc.scene_id+" 장면 브리프");
  genOut.value=dr.gen;
  btnGen.onclick=async()=>{btnGen.disabled=true;
-  try{const d=await api("/api/grok-input",{scene_id:sc.scene_id});
+  try{const d=await api("/api/scene-brief",{scene_id:sc.scene_id});
    genOut.value=d.text;btnGenCopy.hidden=false}
   catch(e){genOut.value="실패: "+e.message}
   dr.gen=genOut.value;btnGen.disabled=false};
@@ -471,8 +473,8 @@ function scManualGrok(sc){
  genRow.appendChild(btnGen);genRow.appendChild(btnGenCopy);
  mp.appendChild(genRow);mp.appendChild(genOut);
  const setIn=el("textarea");setIn.rows=5;setIn.style.marginTop="8px";
- setIn.placeholder="② grok 의 SCENE_PROMPT 응답 전체를 여기에 붙여넣기 → [프롬프트 저장] → [🎨 이미지 생성]";
- setIn.setAttribute("aria-label",sc.scene_id+" 그록 응답 붙여넣기");
+ setIn.placeholder="② 받은 SCENE_PROMPT 응답 전체를 여기에 붙여넣기 → [프롬프트 저장] → [🎨 이미지 생성]";
+ setIn.setAttribute("aria-label",sc.scene_id+" 이미지 프롬프트 붙여넣기");
  setIn.value=dr.set;
  setIn.oninput=()=>{dr.set=setIn.value};
  const setRow=el("div","row");setRow.style.marginTop="6px";
@@ -826,7 +828,7 @@ function sceneCard(sc){
  const purpose=el("p","small",sc.purpose||"");purpose.style.margin="6px 0";
  card.appendChild(purpose);
  card.appendChild(scPromptBlock(sc));
- if(sc.status!=="APPROVED")card.appendChild(scManualGrok(sc));
+ if(sc.status!=="APPROVED")card.appendChild(scManualPrompt(sc));
  const a=scActions(sc);
  card.appendChild(a.act);
  if(a.gen){const rn=scRefNote();if(rn)card.appendChild(rn)}   // [🎨 이미지 생성] 바로 아래
@@ -879,7 +881,7 @@ function renderScenes(){const box=$("sceneList");box.replaceChildren();sceneCard
  $("scFilterMsg").textContent=!all.length?""
   :(on?"표시 "+list.length+" / 전체 "+all.length+"개":all.length+"개");
  if(!all.length){box.appendChild(el("p","small",
-  "아직 장면이 없습니다 — 위 [스토리라인 → 장면 구성](또는 [⚡ 그록 수동])으로 첫 장면을 만드세요."));
+  "아직 장면이 없습니다 — 위 [스토리라인 → 장면 구성](또는 [✍ 직접 입력])으로 첫 장면을 만드세요."));
   return}
  if(!list.length){box.appendChild(el("p","small",
   "이 조건에 맞는 장면이 없습니다 — [필터 해제]를 누르면 전체가 다시 보입니다."));return}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """웹 스튜디오 서버 — 5단계 워크플로우의 백엔드. 프론트는 tools/studio.html.
 
-  1) 스토리 탭   : Grok 과 대화하며 스토리라인 작성 (xai_client)
+  1) 스토리 탭   : 로컬 LLM 과 대화하며 스토리라인 작성 (local_llm)
   2) 장면 탭     : 스토리라인 → VN 텍스트 + 이미지 프롬프트 구성 (vn_compose)
   3) (외부·수동) : 이미지 생성 AI 에 프롬프트 붙여넣어 이미지 생성
   4) 장면 탭     : images/raw/<scene_id>/ 폴더 투입 → 스캔 → 선택 → 승인 도장
@@ -13,7 +13,8 @@
   python tools/webapp.py --lan --no-pin   # PIN 없이 (신뢰된 네트워크 전용)
 
 보안:
-  * API 키는 환경변수 XAI_API_KEY 로만. 서버 안에서만 쓰이고 브라우저로 전달되지 않는다.
+  * 오케스트레이터는 로컬 LLM 하나뿐이라 키가 없다. 보조 엔진 토큰(MAKEFUN_API_TOKEN)은
+    환경변수로만 읽고 서버 안에서만 쓰인다 — 브라우저로는 불리언조차 값 없이 전달된다.
   * 127.0.0.1 전용 바인딩 + Host 헤더 검증(DNS 리바인딩 방어) + /img·/dl 경로 탈출 차단.
   * 상태를 바꾸는 POST 는 Origin/Referer 를 자기 출처와 대조한다(CSRF 방어) — 임의 웹사이트가
     켜져 있는 스튜디오에 fetch 로 유료 생성 등을 시키지 못하게 한다.
@@ -89,16 +90,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gen_jobs  # noqa: E402
 import image_gen  # noqa: E402
 import local_llm  # noqa: E402
-import make_grok_input  # noqa: E402
+
 import makefun_client  # noqa: E402
 import print_preflight  # noqa: E402
 import prompt_build  # noqa: E402
+import scene_brief  # noqa: E402
 import scene_lint  # noqa: E402
 import scene_ops  # noqa: E402
 import talk_store  # noqa: E402
 import vn_compose  # noqa: E402
 import vn_core  # noqa: E402
-import xai_client  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
 # 경로·상수는 vn_core 가 단일 출처다(아래는 읽기 편하게 붙인 별칭).
@@ -296,7 +297,7 @@ def state() -> dict:
     orch_local = str(((mf or {}).get("orchestrator", {}) or {}).get("mode", "")) == "local"
     return {"manifest": bool(mf), "title": (mf or {}).get("title", ""),
             "dating": dating,
-            "key_set": xai_client.key_set(), "model": model,
+            "model": model,
             "orch_local": orch_local,
             "mf_token": bool(os.environ.get(makefun_client.TOKEN_ENV, "").strip()),
             # 이미지 엔진 요약(기본 엔진·모델·host:port·쓸 수 있는 엔진 목록) — 비밀값 없음.
@@ -405,9 +406,10 @@ def r_compose_manual(b):
     return vn_compose.compose_from_json(b.get("text", ""), bool(b.get("force")), expected=exp)
 
 
-def r_grok_input(b):
+def r_scene_brief(b):
+    """장면 브리프 — 직접 입력 경로의 입구. LLM 없이 조립되므로 로컬 LLM 이 꺼져 있어도 된다."""
     _require_scene(b.get("scene_id"))
-    return {"text": make_grok_input.build_input(b["scene_id"])}
+    return {"text": scene_brief.build_brief(b["scene_id"])}
 
 
 def r_set_prompt(b):
@@ -526,7 +528,10 @@ def r_lint(b):
 
 
 def r_gen_prompt(b):
-    """로컬 LLM 으로 장면 이미지 프롬프트 생성 (그록 대체) → 저장 + 자동 검사."""
+    """로컬 LLM 으로 장면 이미지 프롬프트 생성 → 저장 + 자동 검사.
+
+    LLM 이 꺼져 있으면 여기는 실패한다 — 그때의 경로는 /api/scene-brief + /api/set-prompt(직접 입력)다.
+    """
     sid = b.get("scene_id")
     sc = _load_scene(sid)
     return scene_ops.set_prompt(sid, prompt_build.compose_image_prompt(sc))
@@ -863,7 +868,7 @@ POST_ROUTES = {
     "/api/chat": r_chat, "/api/chat-history": r_chat_history,
     "/api/storyline": r_storyline,
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,
-    "/api/compose-manual": r_compose_manual, "/api/grok-input": r_grok_input,
+    "/api/compose-manual": r_compose_manual, "/api/scene-brief": r_scene_brief,
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/set-crop": r_set_crop, "/api/set-scene": r_set_scene,
     "/api/register-images": r_register, "/api/select": r_select,
@@ -1512,6 +1517,20 @@ def _pin_file_clear() -> None:
         pass
 
 
+def _orch_line() -> str:
+    """기동 배너의 오케스트레이터 한 줄 — 사용자가 서버를 켜고 가장 먼저 읽는 문장이다.
+
+    예전에는 여기에 은퇴한 외부 API 키의 설정 여부가 찍혔다. 키가 없는 것이 정상인데도
+    '미설정' 이라 적혀 있어, 제품이 반쪽으로 돌고 있다는 인상을 매 실행마다 남겼다.
+    지금 오케스트레이터는 로컬 LLM 하나뿐이므로 **주소**를 적는다(꺼져 있어도 주소는 맞다).
+    """
+    mf = vn_core.load_json_safe(MANIFEST, {})
+    orch = mf.get("orchestrator") if isinstance(mf.get("orchestrator"), dict) else {}
+    if str(orch.get("mode", "")) != "local":
+        return "직접 입력(붙여넣기) — manifest.orchestrator.mode 가 local 이 아닙니다"
+    return f"로컬 LLM ({local_llm.base_url()})"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="AI 웹툰 웹 스튜디오")
     ap.add_argument("--port", type=int, default=8765)
@@ -1531,7 +1550,7 @@ def main() -> int:
     srv = ThreadingHTTPServer((bind, args.port), Handler)
     port = srv.server_address[1]
     globals()["SERVER_PORT"] = port
-    key = "설정됨" if xai_client.key_set() else "미설정 (스토리/장면구성 탭은 수동 모드로)"
+
     log.info("서버 기동 bind=%s port=%s pin=%s", bind, port, "on" if AUTH["pin"] else "off")
 
     if args.lan:
@@ -1548,13 +1567,13 @@ def main() -> int:
         else:
             print("⚠ PIN 없음(--no-pin): 같은 네트워크의 다른 기기도 그대로 조작할 수 있습니다.")
         print("⚠ 신뢰된 와이파이에서만 쓰세요.")
-        print("  (API 키는 여전히 서버에만 있고 브라우저로 전달되지 않습니다.)")
+        print("  (보조 엔진 토큰은 여전히 서버에만 있고 브라우저로 전달되지 않습니다.)")
         print("=" * 56)
     elif AUTH["pin"]:
         print(f"접속 PIN: {AUTH['pin']} (외부 기기 접속 시 필요)")
     url = f"http://127.0.0.1:{port}/"
     print(f"웹 스튜디오 실행: {url}")
-    print(f"XAI_API_KEY: {key}  |  로그: logs/webapp.log  |  종료: Ctrl+C")
+    print(f"스토리·장면: {_orch_line()}  |  로그: logs/webapp.log  |  종료: Ctrl+C")
     # 콘솔을 놓치거나(창 숨김·출력 리다이렉트) 스크롤로 지나쳐도 폰 접속을 못 하게 되면 안 되므로
     # 자동 생성된 PIN 만 파일로 남긴다. 사용자가 --pin 으로 직접 정한 값은 적지 않는다
     # (본인이 이미 아는 값이고, 여러 실행에서 재사용되는 비밀을 디스크에 두면 위험만 커진다).

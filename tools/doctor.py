@@ -87,14 +87,13 @@ def check_pillow() -> None:
 
 # 없으면 파이프라인이 멈추는 파일. vn_core(공용 기반)·scene_ops(상태 전이)는 다른 도구가 의존한다.
 NEED_TOOLS = ["webapp.py", "studio.html", "vn_core.py", "scene_ops.py", "advance_scene.py",
-              "check_protocol.py", "scene_lint.py", "vn_compose.py", "make_grok_input.py",
+              "check_protocol.py", "scene_lint.py", "vn_compose.py", "scene_brief.py",
               "local_llm.py", "makefun_client.py", "comfyui_client.py", "image_gen.py",
               "gen_common.py", "print_preflight.py", "print_export.py",
               "export_viewer.py", "export_pwa.py", "backup_project.py", "secret_scan.py",
               "selftest.py"]
 # 없어도 되는 파일 — 있으면 그 경로가 쓸 수 있다는 뜻이라 상태만 알린다.
-OPTIONAL_TOOLS = {"talk_store.py": "대화 저장 계층(없으면 webapp 내장 구현을 씁니다)",
-                  "grok_api.py": "그록 API 모드", "xai_client.py": "그록 API 클라이언트"}
+OPTIONAL_TOOLS = {"talk_store.py": "대화 저장 계층(없으면 webapp 내장 구현을 씁니다)"}
 
 
 def check_tools() -> None:
@@ -210,13 +209,6 @@ def check_env() -> None:
         add("환경변수", "COMFYUI_URL", OK, f"{_shown(curl)} (매니페스트 comfyui.api.base_url 보다 우선)")
     else:
         add("환경변수", "COMFYUI_URL", OK, "미설정 — 매니페스트 comfyui.api.base_url 또는 기본값(127.0.0.1:8188)을 씁니다")
-
-    xai_set, xai_len = _env_state("XAI_API_KEY")
-    if xai_set:
-        add("환경변수", "XAI_API_KEY(그록 예비 경로)", OK, f"설정됨 (길이 {xai_len}자, 값 비표시)")
-    else:
-        add("환경변수", "XAI_API_KEY(그록 예비 경로)", OK,
-            "미설정 — 현재 오케스트레이터는 로컬 LLM 이라 필요 없습니다")
 
     url = os.environ.get("LOCAL_LLM_URL", "").strip()
     if url:

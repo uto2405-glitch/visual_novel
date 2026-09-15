@@ -434,7 +434,7 @@ def fix_anchor_text(sc: dict, text: str) -> tuple[str, list[str]]:
 def set_prompt(sid: str, text: str, fix_anchors: bool = False) -> dict:
     """이미지 프롬프트를 장면에 저장 → 상태 PROMPT + 자동 검사.
 
-    (로컬 LLM 생성·그록 수동 붙여넣기·API 모드가 모두 이 하나를 쓴다.)
+    (로컬 LLM 생성·직접 입력 붙여넣기가 모두 이 하나를 쓴다.)
     fix_anchors=True 면 외부 AI 출력에서 빠지거나 대소문자가 바뀐 앵커를 원문으로
     되돌려 A6 를 보장한다.
     """

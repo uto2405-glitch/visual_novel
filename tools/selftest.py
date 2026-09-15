@@ -20,7 +20,7 @@
 
 설계 원칙
   * 사용자의 project/ · images/ 원본은 절대 건드리지 않는다 — 모든 실행은 샌드박스 사본에서.
-  * 유료 API(MakeFun·xAI)는 절대 호출하지 않는다. 네트워크가 나가는 지점만 스텁으로 막는다.
+  * 유료 API(MakeFun)는 절대 호출하지 않는다. 네트워크가 나가는 지점만 스텁으로 막는다.
     MakeFun 은 REST(_once)·결과 다운로드(_fetch_bytes)·R2 업로드(_UP) 세 곳을 스텁으로 막고,
     남은 opener(_API·_DL)는 **열리는 순간 그 테스트를 실패**시킨다 — 스텁을 우회하는 전송
     경로가 새로 생기면 조용히 통과하지 못한다(mf_stub). 응답 정규화처럼 _once 안에 있는
@@ -85,11 +85,11 @@ BANNED_DOM = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
 REQUIRED_MODULES = (
     "vn_core", "advance_scene", "scene_ops", "talk_store", "prompt_build", "local_llm",
     "webapp", "vn_compose", "export_viewer", "makefun_client", "scene_lint",
-    "secret_scan", "xai_client", "backup_project", "print_preflight", "gen_jobs",
+    "secret_scan", "backup_project", "print_preflight", "gen_jobs",
     # 여기 없으면 '구문 검사만 받고 아무도 부르지 않는' 상태가 조용히 유지된다.
     # doctor 는 README·start_studio.ps1·복구 런북이 안내하는 1차 진단 도구이고,
     # export_pwa 는 살아 있는 라우트(/api/export-pwa)가 직접 부른다.
-    "doctor", "export_pwa", "make_grok_input", "print_export", "grok_api",
+    "doctor", "export_pwa", "scene_brief", "print_export",
     # 이미지 엔진이 둘이 되면서 생긴 세 모듈 — 공용 조각·로컬 클라이언트·선택기.
     "gen_common", "comfyui_client", "image_gen",
 )
@@ -111,11 +111,11 @@ LAYER = {
     # 0 기반 — 도구를 부르지 않는다. 검사기(check_protocol)가 여기 있는 이유는 그것이
     #   도구가 고칠 수 없는 판정자이기 때문이다(도구를 import 하면 도구 쪽 전역 상태가
     #   판정에 섞인다 — 그래서 부르는 쪽도 서브프로세스로만 부른다).
-    "vn_core": 0, "xai_client": 0, "check_protocol": 0,
+    "vn_core": 0, "check_protocol": 0,
     # 1 저장소·전송 계층 — vn_core 만 본다. gen_common 은 두 이미지 클라이언트가 함께 쓰는
     #   결과형·메타·대장 조각이라 클라이언트보다 아래에 있어야 한다.
     "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1,
-    "make_grok_input": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
+    "scene_brief": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
     "gen_common": 1,
     # 2 조립·전이 계층
     "advance_scene": 2, "prompt_build": 2, "gen_jobs": 2, "export_pwa": 2,
@@ -123,7 +123,7 @@ LAYER = {
     #   scene_lint 가 여기 있는 이유는 **조립부 위**여야 하기 때문이다: 저장된 프롬프트를
     #   지금 조립부가 내는 것과 비교하려면(prompt-drift) prompt_build 를 부른다. 그래서
     #   어휘·정규화 같은 공유 규칙은 vn_core 로 내려가 있다(양방향 import 가 되지 않게).
-    "makefun_client": 3, "comfyui_client": 3, "vn_compose": 3, "grok_api": 3, "scene_lint": 3,
+    "makefun_client": 3, "comfyui_client": 3, "vn_compose": 3, "scene_lint": 3,
     # 4 엔진 선택기 — 두 클라이언트 위에 서고, webapp·doctor 만 부른다.
     "image_gen": 4,
     # 5 최상위 진입점 — 아무도 이들을 import 하지 않는다.
@@ -336,7 +336,7 @@ def quiet():
 
 # ============================================================ 샌드박스
 _IGNORE = shutil.ignore_patterns(
-    "__pycache__", "*.pyc", ".git", ".claude", "grok_inputs", "grok_outputs",
+    "__pycache__", "*.pyc", ".git", ".claude", "scene_briefs",
     "backups", "output", "logs", "scratch", "*.zip", ".venv", "node_modules")
 
 
@@ -438,10 +438,8 @@ class Box:
         return f"SCENE-{(max(nums) + 1 if nums else 1):03d}", (max(orders) + 1 if orders else 1)
 
     # -------------------------------------------------- 서브프로세스
-    def run(self, *args: str, no_key: bool = False, env: dict | None = None) -> tuple[int, str]:
+    def run(self, *args: str, env: dict | None = None) -> tuple[int, str]:
         e = dict(env if env is not None else self.env)
-        if no_key:
-            e.pop("XAI_API_KEY", None)
         p = subprocess.run([PY, *args], cwd=self.root, capture_output=True,
                            text=True, encoding="utf-8", errors="replace", env=e)
         return p.returncode, p.stdout + p.stderr
@@ -506,9 +504,10 @@ class Box:
         ], ensure_ascii=False)
 
         class MockLLM(http.server.BaseHTTPRequestHandler):
-            """OpenAI 호환 최소 서버 — xAI 경로와 로컬 LLM 경로가 함께 쓴다.
+            """OpenAI 호환 최소 서버 — 오케스트레이터(장면 구성)와 인물 대화가 함께 쓴다.
 
-            실제 모델(로컬 :8080 / xAI)이 떠 있든 말든 자가진단 결과가 같아야 한다.
+            실제 로컬 LLM(:8080)이 떠 있든 말든 자가진단 결과가 같아야 한다. 이 모의 서버가
+            있기 때문에 **LLM 이 꺼진 PC 에서도 LLM-켜짐 경로가 검증된다**(W02·W12 등).
             """
             payload = scenes_json
 
@@ -544,7 +543,6 @@ class Box:
             s0.bind(("127.0.0.1", 0))
             self.web_port = s0.getsockname()[1]
         wenv = dict(self.env)
-        wenv["XAI_API_KEY"] = "dummy"
         wenv["NO_PROXY"] = wenv["no_proxy"] = "127.0.0.1,localhost"
         self._web = subprocess.Popen(
             [PY, "tools/webapp.py", "--port", str(self.web_port), "--no-browser"],
@@ -574,7 +572,7 @@ class Box:
         try:
             yield
         finally:
-            self.set_api(api.get("base_url", "https://api.x.ai/v1"), api.get("model", "TBD"))
+            self.set_api(api.get("base_url", "http://127.0.0.1:8080/v1"), api.get("model", "TBD"))
 
     def url(self, path: str) -> str:
         return f"http://127.0.0.1:{self.web_port}{path}"
@@ -1253,7 +1251,7 @@ def p02(b: Box):
 def p03(b: Box):
     with cli_scene(b, "PLAN") as sid:
         anchor_c, anchor_l = b.anchors()
-        gp = b.root / "grok_out.txt"
+        gp = b.root / "prompt_out.txt"
         gp.write_text(f"SCENE_PROMPT: medium shot, {anchor_c}, {anchor_l}, cel shading\n"
                       "NEGATIVE_PROMPT: text\n", encoding="utf-8")
         rc, out = b.run(ADV, "set-prompt", sid, "--file", str(gp))
@@ -1329,14 +1327,16 @@ def p07(b: Box):
         eq(rc_one, 0, f"단위 검사 — {out_one[:300]}")
 
 
-@test("pipeline", "P08 grok_api — 키 없으면 안내 종료 · --dry-run 은 키 없이 조립")
+@test("pipeline", "P08 오케스트레이터가 local 이 아니면 원격 API 가 아니라 직접 입력으로 안내한다")
 def p08(b: Box):
-    rc, out = b.run("tools/grok_api.py", "SCENE-001", no_key=True)
-    eq(rc, 2, f"rc — {out[:200]}")
-    has(out, "XAI_API_KEY", "안내")
-    rc2, out2 = b.run("tools/grok_api.py", "SCENE-001", "--dry-run", no_key=True)
-    eq(rc2, 0, f"dry-run rc — {out2[:200]}")
-    has(out2, "dry-run", "dry-run 표시")
+    """원격 오케스트레이터 경로는 은퇴했다. 예전 매니페스트(mode:"api")를 그대로 쓰는
+    프로젝트가 남아 있으므로, 그 경우 **사람이 실제로 쓸 수 있는 경로 이름**이 나와야 한다 —
+    조용히 NameError 가 나면 웹에서는 그것이 본문 없는 500 이 된다."""
+    vc = b.mod("vn_compose")
+    err = getattr(vc, "VNError", RuntimeError)
+    with manifest_patch(b, lambda d: d.setdefault("orchestrator", {}).update({"mode": "api"})):
+        exc = raises(lambda: vc.orch_chat([{"role": "user", "content": "hi"}]), err, "mode=api")
+        has(str(exc), "직접 입력", "무엇을 쓰면 되는지")
 
 
 @test("pipeline", "P09 잘못된 인자는 크래시 대신 usage 안내")
@@ -1475,21 +1475,24 @@ def p17(b: Box):
     has(out2, "manifest", "무엇이 없는지 안내")
 
 
-@test("pipeline", "P18 make_grok_input — 앵커를 원문 그대로 싣고 형제 장면이 손상돼도 조립된다")
+@test("pipeline", "P18 scene_brief — 앵커를 원문 그대로 싣고 형제 장면이 손상돼도 조립된다")
 def p18(b: Box):
-    """수동 모드(구독 0원 경로)의 입구다. 여기서 앵커가 빠지면 사람이 그대로 복붙하고,
-    돌아온 프롬프트는 A6 FAIL 이 된다 — 원인이 두 단계 떨어져 있어 찾기 어렵다."""
-    mgi = b.mod("make_grok_input")
+    """직접 입력 경로의 입구다. 여기서 앵커가 빠지면 사람이 그대로 복붙하고,
+    돌아온 프롬프트는 A6 FAIL 이 된다 — 원인이 두 단계 떨어져 있어 찾기 어렵다.
+    브리프는 **모델을 부르지 않는다** — 로컬 LLM 이 꺼져 있어도 이 경로는 살아 있어야 한다."""
+    sb = b.mod("scene_brief")
     anchor_c, anchor_l = b.anchors()
     with fresh_scene(b) as sid:
-        text = mgi.build_input(sid)
+        text = sb.build_brief(sid)
         has(text, sid, "장면 id")
         has(text, anchor_c, "인물 앵커 원문")
         has(text, anchor_l, "장소 앵커 원문")
+        hasnt(text, "그록", "사람이 읽는 브리프에 은퇴한 공급자 이름")
+        hasnt(text, "Grok", "사람이 읽는 브리프에 은퇴한 공급자 이름")
         with fresh_scene(b) as other, corrupted(b.scene_path(other)):
-            text2 = mgi.build_input(sid)
+            text2 = sb.build_brief(sid)
         has(text2, anchor_c, "형제 장면 하나가 손상되자 앵커가 빠짐")
-    raises(lambda: mgi.build_input("SCENE-404"), FileNotFoundError, "없는 장면")
+    raises(lambda: sb.build_brief("SCENE-404"), FileNotFoundError, "없는 장면")
 
 
 @test("pipeline", "P19 상태 계약 — 등록은 IMAGE 까지, REVIEW_HUMAN 은 선택이 찍는다(중간에 게이트가 빨개지지 않는다)")
@@ -1747,13 +1750,20 @@ def c06(b: Box):
 
 
 # ============================================================ webapp
-@test("webapp", "W01 기동 + 상태 API(키는 불리언만 노출)", web=True)
+@test("webapp", "W01 기동 + 상태 API(비밀값은 불리언만 · 은퇴한 키 개념은 사라졌다)", web=True)
 def w01(b: Box):
     st, d = b.wapi("/api/state")
     eq(st, 200, "status")
-    eq(d.get("key_set"), True, "key_set")
+    ok("key_set" not in d, "은퇴한 외부 API 키 개념이 상태에 남아 있음")
+    eq(d.get("orch_local"), True, "orch_local")
     eq(d.get("model"), "mock-model", "model")
-    ok(all(not isinstance(v, str) or "dummy" not in v for v in d.values()), "키 원문 노출")
+    ok(isinstance(d.get("mf_token"), bool), "mf_token 이 불리언이 아님")
+    # 남은 비밀값은 MakeFun 토큰 하나뿐이다 — 값이 상태에 실리는지는 심어 놓고 확인한다
+    # (살아 있는 서버에 유료 토큰을 넣지 않는다. 같은 함수를 이 프로세스 안에서 부른다).
+    wa = b.mod("webapp")
+    with env_var(wa.makefun_client.TOKEN_ENV, "PLANTED-TOKEN-VALUE"):
+        rendered = json.dumps(wa.state(), ensure_ascii=False, default=str)
+    hasnt(rendered, "PLANTED-TOKEN-VALUE", "상태 API 에 토큰 원문이 실림")
 
 
 @test("webapp", "W02 스토리 채팅(모의 LLM 경유) + 로그 저장", web=True)
@@ -1852,7 +1862,6 @@ def w09(b: Box):
 def w10(b: Box):
     ensure_storyline(b)
     cenv = dict(b.env)
-    cenv["XAI_API_KEY"] = "dummy"
     cenv["NO_PROXY"] = cenv["no_proxy"] = "127.0.0.1,localhost"
     rc, out = b.run("tools/vn_compose.py", "2", "--force", env=cenv)
     eq(rc, 0, f"rc — {out[:300]}")
@@ -1890,11 +1899,11 @@ def w12(b: Box):
     eq(d.get("checker_pass"), True, json.dumps(d, ensure_ascii=False)[:300])
 
 
-@test("webapp", "W13 수동 grok-input + set-prompt → PROMPT + 앵커 검사 통과", web=True)
+@test("webapp", "W13 직접 입력 scene-brief + set-prompt → PROMPT + 앵커 검사 통과", web=True)
 def w13(b: Box):
     anchor_c, anchor_l = b.anchors()
     with fresh_scene(b) as sid:
-        st, d = b.wapi("/api/grok-input", {"scene_id": sid})
+        st, d = b.wapi("/api/scene-brief", {"scene_id": sid})
         eq(st, 200, "status")
         has(d.get("text", ""), anchor_c, "지시문 앵커")
         ptext = f"SCENE_PROMPT: medium shot, {anchor_c}, {anchor_l}, cel shading\nNEGATIVE_PROMPT: text"
@@ -2052,7 +2061,10 @@ def w26(b: Box):
                 "/studio/studio.html", "/studio/", "/studio/vn_runtime.js.bak"):
         c, _h, bd = b.raw(bad)
         ok(c in (400, 403, 404), f"{bad} → {c} (화이트리스트 밖이 열림)")
-        hasnt(bd.decode("utf-8", "replace"), "XAI_API_KEY", f"{bad} 응답에 서버 소스가 실림")
+        # 카나리아는 **지금도 webapp.py 안에만 있는** 문자열이어야 한다. 예전 needle 은
+        # 은퇴한 키 이름이었고, 그것이 파일에서 사라지자 이 단언은 영원히 참이 됐다 —
+        # 진짜 소스 유출이 생겨도 초록으로 지나간다.
+        hasnt(bd.decode("utf-8", "replace"), "POST_ROUTES", f"{bad} 응답에 서버 소스가 실림")
 
 
 @test("webapp", "W27 스튜디오 CSP — 인라인 스크립트를 파일로 뺐다면 script-src 'unsafe-inline' 제거", web=True)
@@ -3930,7 +3942,7 @@ def cf05(b: Box):
             eq(cf.size_warnings(p8), [], "권고대로 올렸는데 경고가 남음")
     # SCHEMA §1.4 는 이 두 값을 **누가 읽는지** 적는다 — size_plan 이 읽으므로 ComfyUI 도 그 칸에 있어야 한다
     doc = doc_text(b)
-    ok("comfyui_client" in doc_field_row(doc, "`aspect_ratio`", "make_grok_input"),
+    ok("comfyui_client" in doc_field_row(doc, "`aspect_ratio`", "scene_brief"),
        "SCHEMA §1.4 aspect_ratio 의 '읽는 쪽' 에 comfyui_client 가 없음(size_plan 이 읽는다)")
     ok("comfyui_client" in doc_field_row(doc, "`min_long_edge_px`", "print_preflight"),
        "SCHEMA §1.4 min_long_edge_px 의 '읽는 쪽' 에 comfyui_client 가 없음(size_plan 이 읽는다)")
@@ -5926,90 +5938,6 @@ def s01(b: Box):
     has(out, "[A8] FAIL", "키 검출")
     rc2, _ = b.checker()
     eq(rc2, 0, "픽스처 정리 후 GREEN")
-
-
-@test("security", "S02 xai cross-host 302 리다이렉트로 키가 유출되지 않는다(critical)")
-def s02(b: Box):
-    attacker = {"auth": "NOT-CALLED"}
-
-    class Atk(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-
-        def do_POST(self):
-            attacker["auth"] = self.headers.get("Authorization")
-            drain_request(self)
-            raw = json.dumps({"choices": [{"message": {"content": "leaked"}}]}).encode()
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-    atk = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Atk)
-    threading.Thread(target=atk.serve_forever, daemon=True).start()
-
-    class Redir(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-
-        def do_POST(self):
-            drain_request(self)
-            self.send_response(302)
-            self.send_header("Location",
-                             f"http://127.0.0.1:{atk.server_address[1]}/v1/chat/completions")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-
-    rd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redir)
-    threading.Thread(target=rd.serve_forever, daemon=True).start()
-    try:
-        xc = b.mod("xai_client")
-        with env_var("XAI_API_KEY", "sk-SECRET-LEAK-TEST-XYZ"), \
-                env_var("NO_PROXY", "127.0.0.1,localhost"), env_var("no_proxy", "127.0.0.1,localhost"), \
-                b.api_pointed_at(f"http://127.0.0.1:{rd.server_address[1]}/v1"):
-            raises(lambda: xc.chat([{"role": "user", "content": "hi"}]), RuntimeError, "리다이렉트")
-        eq(attacker["auth"], "NOT-CALLED", "공격 서버가 Authorization 헤더를 받음")
-    finally:
-        atk.shutdown()
-        atk.server_close()
-        rd.shutdown()
-        rd.server_close()
-
-
-@test("security", "S03 xai — content=null·비JSON 200 응답은 안내(크래시 아님)")
-def s03(b: Box):
-    mode = {"v": "null"}
-
-    class Weird(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-
-        def do_POST(self):
-            drain_request(self)
-            if mode["v"] == "null":
-                raw = json.dumps({"choices": [{"message": {"content": None}}]}).encode()
-                ct = "application/json"
-            else:
-                raw, ct = b"<html>gateway error</html>", "text/html"
-            self.send_response(200)
-            self.send_header("Content-Type", ct)
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Weird)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    try:
-        xc = b.mod("xai_client")
-        with env_var("XAI_API_KEY", "sk-TEST"), env_var("NO_PROXY", "127.0.0.1,localhost"), \
-                env_var("no_proxy", "127.0.0.1,localhost"), \
-                b.api_pointed_at(f"http://127.0.0.1:{srv.server_address[1]}/v1"):
-            raises(lambda: xc.chat([{"role": "user", "content": "x"}]), RuntimeError, "content=null")
-            mode["v"] = "html"
-            raises(lambda: xc.chat([{"role": "user", "content": "x"}]), RuntimeError, "비JSON 200")
-    finally:
-        srv.shutdown()
-        srv.server_close()
 
 
 @test("security", "S04 secret_scan — 심은 키를 잡고 원문은 출력하지 않는다(마스킹)")

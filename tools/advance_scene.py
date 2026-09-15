@@ -5,7 +5,7 @@
 
   status                          전체 진행 현황표 + 다음 할 일
   new [SCENE-ID]                  다음 번호 장면 생성 (id·order 자동, 화는 마지막 장면에서 승계)
-  set-prompt SID [--file F]       Grok 출력 저장, 상태 → PROMPT (미지정 시 붙여넣기,
+  set-prompt SID [--file F]       이미지 프롬프트 저장, 상태 → PROMPT (미지정 시 붙여넣기,
                                   종료: Windows Ctrl+Z+Enter / mac·Linux Ctrl+D)
   add-images SID 파일...           후보 복사·기록 → 자동 검사 (상태 → IMAGE = 고르기 대기)
   select SID <번호|파일명>          후보 1장을 selected_image 로 지정 (상태 → REVIEW_HUMAN)
@@ -23,7 +23,7 @@
   * 한동안 이 파일은 저장소 계층 이름(load·save·scene_path·run_checker·all_scenes·
     WRITE_LOCK)을 재수출했고 **위층인 webapp·vn_compose 가 그것을 통해 vn_core 를 썼다**
     — 계층 4가 계층 2를 지나 계층 0에 닿는 우회로였다. 지금은 그쪽이 vn_core 를 직접
-    부르므로 재수출은 없앴다. 남은 별칭은 grok_api(CLI→CLI)가 쓰는 _console_guard 뿐이다.
+    부르므로 재수출은 없앴다. 남은 별칭은 _console_guard 하나뿐이다.
 
 오류 규약: 라이브러리 함수는 VNError 를 던지고, 종료 코드 변환은 main() 에서만 한다.
 """
@@ -43,7 +43,7 @@ from vn_core import VNError  # noqa: E402
 # (예전에는 여기 따로 적어 둬서 두 벌이었고, 한쪽만 늘리면 CLI 와 웹의 허용 단계가 갈렸다.)
 BACK_STATES = scene_ops.BACK_STATES
 
-_console_guard = vn_core.console_guard   # grok_api 가 부르는 예전 이름. import 시 이미 적용됨.
+_console_guard = vn_core.console_guard   # 예전 이름(외부 호출 호환). import 시 이미 적용됨.
 
 
 def die(msg: str) -> NoReturn:
@@ -61,11 +61,11 @@ def _print_fails(fails: str) -> None:
 
 
 def apply_prompt(sid: str, text: str) -> None:
-    """Grok 출력을 장면에 반영하고 상태를 PROMPT 로 올린다. (수동/API 모드 공용)"""
+    """이미지 프롬프트를 장면에 반영하고 상태를 PROMPT 로 올린다. (로컬 LLM·직접 입력 공용)"""
     res = scene_ops.set_prompt(sid, text)
     print("상태 → PROMPT")
     if res["checker_pass"]:
-        print("앵커 검사 포함 자동 검사 통과. 다음: 외부 이미지 AI에서 후보 생성")
+        print("앵커 검사 포함 자동 검사 통과. 다음: 이미지 생성(ComfyUI)으로 후보 생성")
         print("  (레퍼런스 이미지 첨부를 잊지 마세요 → manifest 의 reference_images)")
         print(f"  python tools/advance_scene.py add-images {sid} <파일...>")
     else:
@@ -87,7 +87,7 @@ def cmd_new(args: argparse.Namespace) -> None:
     print(f"생성: project/scenes/{sid}.json (scene_order={sc['scene_order']}"
           + (f", {sc['episode']}화" if sc.get("episode") else "") + ")")
     print("다음: 장면 계획(purpose/action_beat/emotion/camera/dialogue)을 채운 뒤")
-    print(f"      python tools/make_grok_input.py {sid}")
+    print(f"      python tools/scene_brief.py {sid}")
 
 
 def cmd_set_prompt(args: argparse.Namespace) -> None:
@@ -97,7 +97,7 @@ def cmd_set_prompt(args: argparse.Namespace) -> None:
         except OSError as exc:
             die(f"파일을 읽을 수 없습니다: {args.file} ({exc})")
     else:
-        print("Grok 출력 전체를 붙여넣으세요. (종료: Windows Ctrl+Z+Enter / mac·Linux Ctrl+D)")
+        print("이미지 프롬프트 응답 전체를 붙여넣으세요. (종료: Windows Ctrl+Z+Enter / mac·Linux Ctrl+D)")
         text = sys.stdin.read()
     print("저장 완료.", end=" ")
     apply_prompt(args.scene_id, text)
@@ -175,8 +175,8 @@ def cmd_status(args: argparse.Namespace) -> None:
         print(f"{s.get('scene_order','?'):<4} {s.get('scene_id','?'):<12} "
               f"{s.get('status','?'):<14} {review.get('auto','?'):<8} "
               f"{review.get('human','?'):<8} {sel}")
-    nxt = {"SCENE_PLAN": "계획 작성 후 make_grok_input.py 실행",
-           "PROMPT": "외부 AI 생성 → add-images",
+    nxt = {"SCENE_PLAN": "계획 작성 후 scene_brief.py 실행",
+           "PROMPT": "이미지 생성(ComfyUI) → add-images",
            "IMAGE": "후보 고르기 — select <번호> (후보가 없으면 add-images)",
            "REVIEW_HUMAN": "시사 → approve",
            "REVISE": "지정 단계 작업 재개",
@@ -207,9 +207,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("scene_id", nargs="?", help="생략 시 자동 번호 (SCENE-00N)")
     p.set_defaults(fn=cmd_new)
 
-    p = sub.add_parser("set-prompt", help="Grok 출력 저장 → 상태 PROMPT")
+    p = sub.add_parser("set-prompt", help="이미지 프롬프트 저장 → 상태 PROMPT")
     p.add_argument("scene_id")
-    p.add_argument("--file", help="Grok 출력이 담긴 텍스트 파일 (생략 시 붙여넣기 입력)")
+    p.add_argument("--file", help="이미지 프롬프트가 담긴 텍스트 파일 (생략 시 붙여넣기 입력)")
     p.set_defaults(fn=cmd_set_prompt)
 
     p = sub.add_parser("add-images", help="후보 이미지 등록 → 자동 검사")

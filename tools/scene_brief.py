@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Grok 입력 패키지 자동 조립 — 매번 손으로 붙여넣던 컨텍스트를 한 파일로 만든다.
+"""장면 브리프 자동 조립 — 매번 손으로 붙여넣던 컨텍스트를 한 파일로 만든다.
 
 사용법:
-  python tools/make_grok_input.py SCENE-001
+  python tools/scene_brief.py SCENE-001
 
 동작:
-  지시서(templates/grok-prompt-brief.md) + 프로젝트 정보 + 등장 캐릭터/장소
+  지시서(templates/scene-brief.md) + 프로젝트 정보 + 등장 캐릭터/장소
   기준정보(prompt_anchor, 레퍼런스 목록) + 장면 계획 + 직전 장면 연속성 +
   대사 배치 요구를 하나의 텍스트로 조립해
-  project/grok_inputs/<scene_id>.txt 로 저장하고 화면에도 출력한다.
-  이 내용을 그대로 Grok 에 붙여넣으면 된다.
+  project/scene_briefs/<scene_id>.txt 로 저장하고 화면에도 출력한다.
+
+이것이 **직접 입력 경로의 입구**다. 로컬 LLM 이 꺼져 있으면 /api/gen-prompt 는 실패하지만
+이 브리프는 LLM 없이 조립되므로, 사람이 어디서(직접 작성·다른 AI·폰) 프롬프트를 받아 오든
+앵커·연속성·대사 배치가 빠지지 않는다. 앵커가 빠진 프롬프트는 두 단계 뒤 A6 FAIL 이 된다.
 
 경로·JSON·화풍 문구는 vn_core 하나에서 온다(같은 문구를 여러 도구가 복제하면
-컷 사이 화풍이 갈린다). 오류 타입은 기존 호출부(grok_api·webapp)와의 호환을 위해
+컷 사이 화풍이 갈린다). 오류 타입은 호출부(webapp)와의 호환을 위해
 FileNotFoundError 를 유지한다.
 """
 from __future__ import annotations
@@ -26,8 +29,8 @@ import vn_core  # noqa: E402
 ROOT = vn_core.ROOT
 MANIFEST = vn_core.MANIFEST
 SCENES = vn_core.SCENES
-BRIEF = vn_core.TEMPLATES / "grok-prompt-brief.md"
-OUT_DIR = vn_core.PROJECT / "grok_inputs"
+BRIEF = vn_core.TEMPLATES / "scene-brief.md"
+OUT_DIR = vn_core.PROJECT / "scene_briefs"
 
 # 화풍 문구·JSON 로딩은 vn_core 가 유일한 출처다. (기존 이름은 호출 호환을 위해 남긴다.)
 DEFAULT_VISUAL_STYLE = vn_core.DEFAULT_VISUAL_STYLE
@@ -62,8 +65,8 @@ def _prev_scene(sc: dict) -> dict | None:
     return None
 
 
-def build_input(sid: str) -> str:
-    """장면 sid 의 Grok 입력 패키지를 조립해 문자열로 돌려준다. (API 모드에서도 사용)"""
+def build_brief(sid: str) -> str:
+    """장면 sid 의 브리프를 조립해 문자열로 돌려준다. (웹·CLI 공용)"""
     if not vn_core.is_scene_id(sid):
         # 형식 검증이 파일 접근보다 먼저다 — '../x' 같은 값이 장면 폴더 밖에 닿지 못하게 한다.
         raise FileNotFoundError(f"장면 ID 는 SCENE-001 형식이어야 합니다: {sid!r}")
@@ -73,7 +76,7 @@ def build_input(sid: str) -> str:
     if not scene_file.exists():
         raise FileNotFoundError(f"project/scenes/{sid}.json 이 없습니다.")
     if not BRIEF.exists():
-        raise FileNotFoundError("templates/grok-prompt-brief.md 가 없습니다(지시서 원본).")
+        raise FileNotFoundError("templates/scene-brief.md 가 없습니다(지시서 원본).")
 
     mf = load(MANIFEST)
     sc = load(scene_file)
@@ -154,8 +157,8 @@ def build_input(sid: str) -> str:
     if sc.get("episode"):
         add_kv("화", f"{sc.get('episode')}화")
     # 엔딩 표기 규칙의 정본은 vn_core.ending_of 하나다(감상본·스튜디오·여기가 같은 답).
-    # 예전에는 이 자리에서 같은 규칙을 손으로 다시 구현했고, 규칙이 갈리면 그록에게는
-    # 결말이라고 알려 준 컷이 감상본에서는 평범한 장면으로 지나간다.
+    # 예전에는 이 자리에서 같은 규칙을 손으로 다시 구현했고, 규칙이 갈리면 브리프에는
+    # 결말이라고 적힌 컷이 감상본에서는 평범한 장면으로 지나간다.
     is_end, end_label = vn_core.ending_of(sc)
     if is_end:
         add_kv("결말 컷", (end_label or "이 경로의 마지막 장면")
@@ -206,7 +209,7 @@ def main() -> int:
         return 2
     sid = sys.argv[1]
     try:
-        text = build_input(sid)
+        text = build_brief(sid)
     except (FileNotFoundError, vn_core.VNError) as exc:
         print(f"오류: {exc}")
         return 2
@@ -217,7 +220,7 @@ def main() -> int:
         print(text)
         print("-" * 56)
         print(f"저장됨: {out_file.relative_to(ROOT).as_posix()}")
-        print("다음: 위 내용을 Grok 에 붙여넣고, 출력을 받아서")
+        print("다음: 위 내용을 원하는 곳(직접 작성·다른 AI)에 붙여넣고, 받은 출력을")
         print(f"      python tools/advance_scene.py set-prompt {sid} --file <저장한파일>")
     except BrokenPipeError:
         pass  # head 등으로 파이프가 먼저 닫혀도 파일 저장은 완료됨

@@ -2,7 +2,7 @@
 """로컬 LLM 전송 계층 — 캐릭터와 '실제 대화'하기 위한 통로.
 
 C:\\Users\\USER\\claude\\local_llm 의 llama.cpp 서버(OpenAI 호환, 기본 http://127.0.0.1:8080/v1)에 붙는다.
-xai_client 와 별개(그록은 연출/프롬프트용, 로컬 LLM 은 인물 대화용). 키 불필요(로컬).
+오케스트레이터(스토리·장면 구성·이미지 프롬프트)와 인물 대화가 같은 이 통로를 쓴다. 키 불필요(로컬).
 
 **이 모듈에는 프롬프트 문자열이 없다.** 인물 페르소나·말투 규칙·장기 기억·앨범 사진 규칙은
 prompt_build 가 조립한다(저장소 규약: 모델 프롬프트는 prompt_build 와 vn_compose 에만 둔다).
@@ -12,7 +12,8 @@ prompt_build 를 함수 안에서 되받아 `prompt_build → local_llm → prom
 호출부는 webapp 두 줄뿐이었고 webapp 은 이미 prompt_build 를 import 하므로 통로를 걷어냈다 —
 프롬프트가 필요한 곳은 prompt_build 를 직접 부른다(이 파일의 CLI 도 main 안에서만 부른다).
 
-설정 우선순위: 환경변수 LOCAL_LLM_URL > manifest.talk.base_url > 기본값.
+설정 우선순위: 환경변수 LOCAL_LLM_URL > manifest.talk.base_url >
+manifest.orchestrator.api.base_url > 기본값 (정본 표는 docs/SCHEMA.md §1.2).
 
 전송 방식: :func:`chat` 은 기본이 비스트리밍(응답 전문을 한 번에 받는다)이고, ``on_token``
 콜백을 주면 SSE 스트리밍으로 바뀌어 **첫 글자가 나오는 즉시** 조각을 흘려 준다. 콜백이
@@ -75,13 +76,24 @@ _OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler()
 
 
 def base_url() -> str:
+    """로컬 LLM 주소. 매니페스트를 한 번만 읽고 두 칸을 순서대로 본다.
+
+    ``orchestrator.api.base_url`` 이 뒤에 붙어 있는 이유: 그 칸은 매니페스트를 읽는 사람이
+    **오케스트레이터 주소라고 믿는 자리**다. 예전에는 은퇴한 외부 API 클라이언트만 그것을
+    읽었고, 그 클라이언트를 지우자 적혀 있어도 아무 효과가 없는 칸이 됐다. 우선순위는
+    바꾸지 않았다(``talk.base_url`` 이 여전히 먼저다) — 없을 때만 내려온다.
+    """
     env = os.environ.get("LOCAL_LLM_URL", "").strip()
     if env:
         return env.rstrip("/")
-    talk = vn_core.load_manifest().get("talk")
-    u = talk.get("base_url", "") if isinstance(talk, dict) else ""
-    if isinstance(u, str) and u.strip():
-        return u.strip().rstrip("/")
+    mf = vn_core.load_manifest()
+    talk = mf.get("talk")
+    orch = mf.get("orchestrator") if isinstance(mf.get("orchestrator"), dict) else {}
+    api = orch.get("api") if isinstance(orch.get("api"), dict) else {}
+    for src in (talk if isinstance(talk, dict) else {}, api):
+        u = src.get("base_url", "")
+        if isinstance(u, str) and u.strip():
+            return u.strip().rstrip("/")
     return DEFAULT_URL
 
 

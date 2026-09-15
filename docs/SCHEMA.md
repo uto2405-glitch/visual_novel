@@ -28,7 +28,7 @@
 | `project_id` | str | ✅ | 사람 | (식별용) | **A1** 키 존재 |
 | `title` | str | ✅ | 사람 | 감상본 제목 · 컨택트시트 제목 · 스튜디오 헤더 | **A1** 키 존재 |
 | `language` | str | ⬜ | 사람 | (없음) — 표기용 | — |
-| `orchestrator` | obj | ⬜ | 사람 | `local_llm` · `grok_api` · 스튜디오(모드 표시) | — |
+| `orchestrator` | obj | ⬜ | 사람 | `local_llm` · `vn_compose` · 스튜디오(모드 표시) | — |
 | `image_generator` | obj | ⬜ | 사람 | `image_gen` · `comfyui_client` · `makefun_client` | — |
 | `output` | obj | ⬜ | 사람 | 프롬프트 조립 · 검사기 · 인화 | **A3** (`min_long_edge_px`) |
 | `dating` | obj | ⬜ | 사람 | 뷰어·감상본 호감도 미터 | — |
@@ -48,10 +48,20 @@
 |---|---|---|---|
 | `provider` | str | ⬜ | 표기용 |
 | `mode` | `"local"` \| `"api"` \| `"manual"` | ⬜ | 스튜디오가 `local` 일 때 로컬 LLM 경로를 켠다 |
-| `api.base_url` | str | ⬜ | `local_llm` · `grok_api` 접속 주소 |
+| `api.base_url` | str | ⬜ | `local_llm` 접속 주소 — **우선순위 3위**(아래 상자) |
 | `api.model` | str | ⬜ | 요청 모델명 · 스튜디오 표시 |
 | `api.key_env` | str | ⬜ | 키를 담은 **환경변수 이름**. 로컬은 빈 문자열 |
 | `api.note` | str | ⬜ | 사람용 메모 |
+
+> ### 로컬 LLM 주소는 세 곳에서 온다 — 순서가 정본이다
+> `local_llm.base_url()` 이 이 순서로 고른다:
+> **① 환경변수 `LOCAL_LLM_URL` → ② `talk.base_url` → ③ `orchestrator.api.base_url` → ④ 기본값
+> `http://127.0.0.1:8080/v1`.**
+> ②가 먼저인 이유는 인물 대화가 먼저 이 주소를 썼기 때문이고, ③이 있는 이유는 **매니페스트를
+> 읽는 사람이 오케스트레이터 주소라고 믿는 칸이 거기이기 때문**이다. 예전에는 ③을 읽는 코드가
+> 은퇴한 외부 API 클라이언트 하나뿐이었고, 그것을 지우자 이 칸은 아무도 읽지 않는 장식이 됐다 —
+> 적혀 있는데 효과가 없는 칸은 다음 사람이 반드시 한 번 속는다. 그래서 다시 배선했다.
+> `api.model` 은 스튜디오 헤더 표시용이고(`webapp.state()`), `api.key_env` 는 로컬에서 빈 문자열이다.
 
 > `key_env` 에 적는 건 **변수 이름**이지 값이 아니다. 값을 적으면 A8/`secret_scan` 이 잡는다.
 
@@ -129,7 +139,7 @@
 |---|---|---|---|---|
 | `mode` | str | ⬜ | (없음) — 표기용 | — |
 | `print_ready` | bool | ⬜ | (없음) — 표기용 | — |
-| `aspect_ratio` | str | ⬜ | `comfyui_client` · `makefun_client` 생성 크기(`W:H`) · 프롬프트 입력 조립(`make_grok_input`) | — |
+| `aspect_ratio` | str | ⬜ | `comfyui_client` · `makefun_client` 생성 크기(`W:H`) · 장면 브리프 조립(`scene_brief`) | — |
 | `min_long_edge_px` | int | ⬜ | 검사기 해상도 기준 · `comfyui_client` · `makefun_client` 생성 크기 · `print_preflight` | **A3** (기본 1024) |
 | `visual_style` | str | ⬜ | 프롬프트 조립의 **작품 전체 화풍** (최우선) | — |
 
@@ -137,7 +147,7 @@
 (`vn_core.DEFAULT_VISUAL_STYLE`). 매니페스트에 값이 있으면 장면 오버라이드는 무시된다.
 
 **`aspect_ratio` 는 아직 완전히 배선되지 않았다.** 두 이미지 클라이언트(`comfyui_client`·
-`makefun_client`)는 이 값으로 생성 크기를 계산하고 `make_grok_input` 은 지시서에 적어 주지만,
+`makefun_client`)는 이 값으로 생성 크기를 계산하고 `scene_brief` 는 지시서에 적어 주지만,
 **`prompt_build` 는 `"portrait 2:3"` 을 하드코딩**한다(로컬 LLM 경로로 만든 프롬프트 문자열).
 2:3 이 아닌 작품을 하려면 그 한 줄도 함께 고쳐야 한다.
 
@@ -233,7 +243,7 @@ SDXL 은 1MP 근처를 벗어날수록 인물이 갈라진다. 값을 지어내�
 #### `reference_images` — 이제 **생성 요청에 실린다**
 
 오랫동안 이 필드는 "사람이 이미지 AI 창에 직접 첨부하라"는 안내 문구로만 쓰였다
-(`make_grok_input` 의 지시서). 지금은 `makefun_client` 가 **장면의 `characters[]` 를 훑어
+(`scene_brief` 의 지시서). 지금은 `makefun_client` 가 **장면의 `characters[]` 를 훑어
 그 캐릭터의 `reference_images` 를 text2image 의 `input_images` 로 함께 보낸다** —
 컷마다 얼굴이 흔들리는 문제의 1차 수단이다. 기본으로 켜져 있고 `--no-reference` 로 끈다.
 
@@ -328,7 +338,7 @@ OK   레퍼런스 이미지: 2/3명 등록 (생성마다 최대 2장 첨부)
 |---|---|---|---|---|
 | `location_id` | str | ✅ | 장면 참조 | **A2** 존재·중복 |
 | `name` · `description` | str | ⬜ | 프롬프트 입력 | — |
-| `version` | int | ⬜ | **(없음)** — 템플릿에는 있지만 어떤 코드도 읽지 않는다. 캐릭터 쪽 `version` 만 프롬프트 입력에 찍힌다(`make_grok_input`) | — |
+| `version` | int | ⬜ | **(없음)** — 템플릿에는 있지만 어떤 코드도 읽지 않는다. 캐릭터 쪽 `version` 만 브리프에 찍힌다(`scene_brief`) | — |
 | `reference_images` | list[str] | ⬜ | 프롬프트 입력의 첨부 안내 **only** — 생성 요청의 `input_images` 에는 **실리지 않는다**(캐릭터 것만 실린다, §1.6) | — |
 | `prompt_anchor` | str | ⚠ | 프롬프트 조립 | **A6** (값이 있으면 프롬프트 포함을 강제) |
 
@@ -355,7 +365,7 @@ ID 형식은 `SCENE-` + 3자리 이상 숫자 (`^SCENE-\d{3,}$`).
 > ### ⚠ ID 형식은 **검사기가 보지 않는다**
 > `check_protocol` 이 확인하는 건 "scene_id 와 파일명이 같은가" 뿐이다. 형식의 정본은
 > **`vn_core.is_scene_id`** 이고, 이걸 관문으로 쓰는 쪽은 도구 전체다 —
-> `advance_scene` · `scene_ops` · `make_grok_input` · `makefun_client` · `gen_jobs` · `webapp`.
+> `advance_scene` · `scene_ops` · `scene_brief` · `makefun_client` · `gen_jobs` · `webapp`.
 > 그래서 손으로 만든 `SCENE-1.json`(또는 `SCENE-01`)은 **검사기 RESULT: PASS 를 받은 뒤**
 > 프롬프트 생성·이미지 생성·상태 전이·웹 편집이 전부 "잘못된 scene_id" 로 거부된다.
 > 되살릴 방법은 파일명과 `scene_id` 를 세 자리로 고쳐 쓰는 것뿐이니, 장면은
@@ -475,8 +485,8 @@ FAIL 이 아니다.
 | `intimacy` | str | ⬜ | **애정 태그 억제**(`prompt_build.is_distance_beat`) — `"distant"` / `"close"` / 빈 값(=`emotion` 에서 자동 판정). 그 밖의 값은 조용히 `close` 로 읽혀 연출이 뒤집히므로 `scene_lint` 가 `intimacy-value` 로 알려 준다 | — |
 | `camera.shot` | str | ⬜ | 프롬프트 입력 · **프롬프트 구도 힌트·거리 태그**(`prompt_build`) · `scene_lint` 컷 반복·어휘 | — |
 | `camera.angle` | str | ⬜ | **프롬프트 카메라 조각**(`prompt_build.ANGLE_EN` — `eye-level`·`front` 은 아무것도 내지 않는다 · 아래 표) · `scene_lint` 어휘 | — |
-| `camera.framing` | str | ⬜ | **사람이 읽는 연출 메모** · `make_grok_input` 브리프 — 프롬프트에는 닿지 않는다(실측: 영어로 옮겨 실어도 구도가 바뀐 컷 0/6 · 한국어 원문은 0/6 + 의상 오염 1/6. 실제로 구도를 만드는 것은 동작 문장이다) | — |
-| `camera.focus` | str | ⬜ | **사람이 읽는 연출 메모** · `make_grok_input` 브리프 — 프롬프트에는 닿지 않는다(실측: 영어 구절은 초점이 바뀐 컷 0/6, Danbooru 식 `hand focus, depth of field` 는 샷을 덮어써 두 번째 인물 3/3·불꽃 2/3 을 지웠다) | — |
+| `camera.framing` | str | ⬜ | **사람이 읽는 연출 메모** · `scene_brief` 브리프(**유일한 소비자**) — 프롬프트에는 닿지 않는다(실측: 영어로 옮겨 실어도 구도가 바뀐 컷 0/6 · 한국어 원문은 0/6 + 의상 오염 1/6. 실제로 구도를 만드는 것은 동작 문장이다) | — |
+| `camera.focus` | str | ⬜ | **사람이 읽는 연출 메모** · `scene_brief` 브리프(**유일한 소비자**) — 프롬프트에는 닿지 않는다(실측: 영어 구절은 초점이 바뀐 컷 0/6, Danbooru 식 `hand focus, depth of field` 는 샷을 덮어써 두 번째 인물 3/3·불꽃 2/3 을 지웠다) | — |
 | `visual_style` | str | ⬜ | 프롬프트 화풍 (매니페스트 값이 있으면 무시됨) | — |
 
 #### 카메라 표준 어휘 (`scene_lint` 권고 — PASS/FAIL 아님)
@@ -542,6 +552,19 @@ angle: eye-level / high-angle / low-angle / overhead /
 | `grok_output` | str | ⚠ | `scene_ops.set_prompt` | 이미지 생성 · 스튜디오 · `scene_lint` | **A6** IMAGE 이상 필수 |
 | `external_generator` | str | ⬜ | 이미지 생성 클라이언트(자동) 또는 사람 | (없음) — 기록용 | — |
 | `external_model` | str | ⬜ | 이미지 생성 클라이언트(자동) 또는 사람 | (없음) — 기록용 | — |
+
+> ### ⚠ `grok_output` 은 **레거시 이름**이다 — 뜻은 「이미지 프롬프트」
+> 사람이 보는 모든 곳에서 이 필드는 **이미지 프롬프트**로 부른다. 화면·문서·CLI 어디에도
+> 공급자 이름은 남기지 않는다(스튜디오는 이 값을 브라우저에 `prompt` 라는 이름으로 내보낸다 —
+> `webapp.state()`).
+>
+> **키 이름만 바꾸지 않는다.** `tools/check_protocol.py` 는 **수정 금지**(`.claude/settings.json` deny)
+> 이고 A6 이 이 키를 이름으로 읽는다(`prompt.get("grok_output")`). 키를 고치면 승인된 12개 장면이
+> 전부 A6 FAIL 이 되고, 고칠 수 있는 파일이 하나도 없어 교착한다. 같은 이유로 바로 윗줄의
+> `grok_input_version` 도 그대로 둔다(템플릿·예제가 함께 들고 있는 짝이다).
+>
+> **언제 바뀌나**: 검사기가 편집 가능해지는 날 `image_prompt` 로 옮긴다 —
+> 절차는 CLAUDE.md 의 "채점표·검사기 개정 절차"다. 그때까지 **이름과 뜻이 갈린 자리는 이 하나뿐이다.**
 
 `external_generator`·`external_model` 은 **어느 엔진·모델이 그렸나**의 기록이다 — 생성이 성공하면
 클라이언트가 `scene_ops.record_external_generator(sid, "ComfyUI", <체크포인트>)` 로 적어 두고(다른 필드는 건드리지 않는다),
@@ -968,7 +991,7 @@ scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, end
 | `logs/webapp.log` | 스튜디오 서버 | 사람 (장애 추적) | ✂ 제외 | 오류·생성 실패 기록 |
 | `logs/lan_pin.txt` | 스튜디오 `--lan` | 사람 (PIN 확인) | ✂ 제외 | 이번 실행의 접속 PIN |
 | `logs/gen_locks/<scene_id>.lock` | `gen_jobs.claim` (생성 선점) | `gen_jobs` — 웹·CLI 양쪽 | ✂ 제외 | 없음 — **지워도 된다**(§3.5) |
-| `project/grok_inputs/<scene_id>.txt` | `make_grok_input` | 사람 (grok.com 에 붙여넣는 입력) | ✂ 제외 | 없음 — 언제든 다시 만든다 |
+| `project/scene_briefs/<scene_id>.txt` | `scene_brief` | 사람 (직접 입력 경로에 붙여넣는 브리프) | ✂ 제외 | 없음 — 언제든 다시 만든다 |
 | `project/story/storyline.md` | 사람 + 로컬 LLM | 프롬프트 맥락 · 대화 페르소나 | ✔ 추적 | 작품 줄거리 |
 | `project/story/character_bible.md` | 사람 | 대화 페르소나 `[너에 대한 기록]` | ✔ 추적 | 인물의 취향·기념일·기억 |
 | `project/story/chatlog.json` | 스튜디오 스토리 탭 | 스토리 탭 이어하기 | ✂ **제외** | 기획 대화 |
@@ -1108,8 +1131,8 @@ SCENE-007 이미지를 이미 생성 중입니다(생성 · pid 12345 · … 시
 | `scene.json` | 새 장면의 기본형 | ✔ `advance_scene new` · `vn_compose` 가 그대로 읽는다 |
 | `character.json` | `manifest.characters[]` 에 **붙여넣는 항목 1개 조각** (§1.6) | ✗ |
 | `review-report.json` | **SCORECARD C 사람 시사 서식** — 장면 파일에 들어가지 않는다 | ✗ |
-| `grok-prompt-brief.md` | 프롬프트 지시서 원문 | ✔ `make_grok_input` |
-| `grok-prompts-ko.md` | 그록 한글 프롬프트 틀 모음 (스튜디오가 요약본을 표시) | ✗ |
+| `scene-brief.md` | 프롬프트 지시서 원문 | ✔ `scene_brief` |
+| `prompt-frames-ko.md` | 한글 프롬프트 틀 모음 (스튜디오가 요약본을 표시) | ✗ |
 | `free-assets-ko.md` | 무료 폰트·BGM·효과음 소스 목록(라이선스 등급별) | ✗ |
 
 **캐릭터는 별도 파일에 살지 않는다.** `character.json` 은 편의용 조각이고, 실제 기준정보는
