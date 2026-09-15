@@ -30,6 +30,7 @@ Python 3.9+ · 외부 패키지 없음.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -56,6 +57,14 @@ IMAGES_RAW = IMAGES / "raw"
 # 서로를 import 할 수 없다(L01). 한쪽이 이름을 다시 적는 순간 매니페스트가 약속한 것과
 # zip 이 주는 것이 갈리고, 복원 직후 verify 가 있지도 않은 '누락' 을 뱉는다.
 GEN_META_NAME = "_gen_meta.json"
+# 인물과 나눈 **사적 대화**와 그 보관본·압축본. `.gitignore` 와 SCHEMA §3.1 의 표가 같은 넷을
+# 적고, 코드 정본은 여기 하나다(L06 이 문서와 대조한다).
+# **여기 있는 이유**: 이 목록을 아는 쪽이 저장 계층(talk_store·prompt_build, 계층 1)과
+# 백업(backup_project, 같은 계층 1)으로 갈라져 있어 서로를 import 할 수 없다(L01).
+# 한쪽이 목록을 다시 적는 순간 한쪽만 늘어나고, 그 차이는 '사적 대화가 클라우드로 복사됐다'
+# 로만 드러난다 — 드러났을 때는 이미 올라간 뒤다.
+PRIVATE_PATTERNS = ("project/story/chatlog.json", "project/story/talk_*.json",
+                    "project/story/*.archive.jsonl", "project/story/memory_*.json")
 OUTPUT = ROOT / "output"
 LOGS = ROOT / "logs"
 BACKUPS = ROOT / "backups"
@@ -65,6 +74,17 @@ CHECKER = TOOLS / "check_protocol.py"
 # 검사기 응답 대기 상한(초). 전역 WRITE_LOCK 을 쥔 채 도는 호출이라 무한 대기는
 # 스튜디오 전체를 멈춘다. 장면 수백 개에서도 1초 안쪽이라 60초는 충분히 넉넉하다.
 CHECKER_TIMEOUT = 60
+
+def is_private_rel(rel: Any) -> bool:
+    """저장소 상대 경로(POSIX 구분자)가 **사적 대화 기록**인가.
+
+    판정을 부르는 쪽이 늘 같은 답을 듣도록 패턴 매칭을 여기 한 곳에만 둔다.
+    윈도우식 역슬래시 경로로 물어봐도 같은 답을 준다 — 부르는 쪽이 as_posix() 를 잊는 것은
+    흔한 실수이고, 그 실수의 결과가 '사적 대화가 백업에 실린다' 라면 관대한 쪽이 맞다.
+    """
+    r = str(rel).replace("\\", "/").lstrip("./")
+    return any(fnmatch.fnmatch(r, pat) for pat in PRIVATE_PATTERNS)
+
 
 # 장면 ID 형식 — 경로 탈출 차단과 order 무결성의 첫 관문(웹·CLI 공통).
 SCENE_ID_RE = re.compile(r"^SCENE-\d{3,}$")

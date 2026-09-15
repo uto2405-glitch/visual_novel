@@ -27,6 +27,22 @@ python tools/backup_project.py verify   # 원본이 성한지 (sha256 대조)
 `manifest_<시각>.json` 은 어느 경우든 `project/` **와** `images/` 전체의 sha256 을 기록한다
 (무결성 검증용 — 체크섬은 복구 수단이 아니다).
 
+> ### ⚠ 개인 대화 기록은 백업에 담기지 않는다 (기본값)
+> `chatlog.json` · `talk_*.json` · `*.archive.jsonl` · `memory_*.json` 은 **인물과 나눈 사적
+> 대화**다(→ [SCHEMA.md](SCHEMA.md) §3.1). 이 넷은 zip 에도, 함께 복사되는 체크섬 매니페스트
+> 에도 들어가지 않는다 — 바로 아래의 표준 명령이 `--dest D:/backup` 을 권하고, 그 폴더가
+> **클라우드 동기화 폴더**면 백업 한 줄이 사적 대화를 제3자 서버에 올리기 때문이다.
+>
+> ```
+> python tools/backup_project.py snapshot --include-private     # 정말 담아야 할 때만
+> ```
+>
+> `--include-private` 와 `--dest` 를 함께 주면 확인(`포함`)을 묻는다. 예약 실행처럼 확인이
+> 불가능한 자리에서는 **사적 기록만 빼고 백업은 계속한다** — 백업 자체를 멈추면 작품까지
+> 안 지켜진다. 그래서 **대화 기록은 이 도구의 복구 대상이 아니다**: 잃고 싶지 않다면
+> `project/story/` 를 손으로 따로 복사해 두거나 `--include-private` 로 뜬 스냅샷을 쓴다.
+> 빠졌다고 `verify` 가 이상을 보고하지는 않는다(대상이 아니라고 한 줄로 알린다).
+
 > ### ⚠ 기본 `snapshot` 은 이미지를 담지 않는다
 > 승인된 컷은 유료 생성물이자 유일본이다 — 같은 프롬프트로도 같은 그림은 나오지 않는다.
 > `.gitignore` 가 `images/raw/` 를 제외하므로 **git 도 이미지 백업이 아니다.**

@@ -14,6 +14,7 @@ schedule: 주기 자동 스냅샷+verify 용 스크립트/등록 명령 안내(�
   python tools/backup_project.py snapshot --with-images    # 승인 이미지 원본까지 zip 에 포함
   python tools/backup_project.py snapshot --dest D:/backup # 외장드라이브/클라우드 폴더에 사본
   python tools/backup_project.py snapshot --force          # 내용이 같아도 zip 을 새로 굽는다
+  python tools/backup_project.py snapshot --include-private # 개인 대화 기록까지 담는다(기본은 제외)
   python tools/backup_project.py verify                    # 최신 스냅과 현재 비교
   python tools/backup_project.py list
   python tools/backup_project.py restore --dry-run         # 복원 차이만 미리보기
@@ -28,6 +29,10 @@ schedule: 주기 자동 스냅샷+verify 용 스크립트/등록 명령 안내(�
 
 복구할 때 zip 을 손으로 풀 필요는 없다 — restore 가 차이 미리보기·확인·되돌림 백업까지 한다.
 이미지 원본은 기본 백업에 없다(체크섬만) — 지키려면 snapshot --with-images 를 쓴다.
+개인 대화 기록(vn_core.PRIVATE_PATTERNS — chatlog.json · talk_*.json · *.archive.jsonl ·
+memory_*.json)은 zip 에도 체크섬 매니페스트에도 **담지 않는다**. --dest 가 클라우드 동기화
+폴더를 겨냥한 옵션이라, 기본값이 '담는다' 이면 표준 백업 명령 한 줄이 사적 대화를 밖으로
+내보낸다. 정말 담으려면 --include-private 를 명시한다(--dest 와 함께 쓰면 확인을 묻는다).
 """
 from __future__ import annotations
 
@@ -74,19 +79,34 @@ def _sha256(path: Path) -> str:
         return _sha256_fh(f)
 
 
-def _iter_files():
+def _rel(p: Path) -> str:
+    return p.relative_to(ROOT).as_posix()
+
+
+def _iter_files(include_private: bool = False):
     for top in TARGETS:
         base = ROOT / top
         if not base.exists():
             continue
         for p in sorted(base.rglob("*")):
-            if p.is_file() and not (set(p.parts) & SKIP_PARTS):
-                yield p
+            if not p.is_file() or (set(p.parts) & SKIP_PARTS):
+                continue
+            if not include_private and vn_core.is_private_rel(_rel(p)):
+                continue
+            yield p
 
 
-def _checksums() -> dict:
-    return {p.relative_to(ROOT).as_posix(): {"sha256": _sha256(p), "size": p.stat().st_size}
-            for p in _iter_files()}
+def _checksums(include_private: bool = False) -> dict:
+    """매니페스트에 적을 sha256 목록.
+
+    사적 대화 기록은 zip 에서 빼는 것으로 끝나지 않는다 — **매니페스트에서도 뺀다.**
+    매니페스트가 약속한 것과 zip 이 주는 것이 갈리면 복원 직후 verify 가 있지도 않은
+    '누락' 을 뱉고(실측 전례: _gen_meta 12개), 그 처방은 같은 스냅샷을 다시 restore 하라는
+    무한 루프였다. 게다가 매니페스트는 --dest 로 함께 복사되는 파일이라, 내용이 아니어도
+    **대화 상대의 이름이 박힌 파일 목록**이 클라우드로 나간다.
+    """
+    return {_rel(p): {"sha256": _sha256(p), "size": p.stat().st_size}
+            for p in _iter_files(include_private)}
 
 
 def _stamp(now: datetime) -> str:
@@ -135,12 +155,33 @@ def _confirm(question: str, word: str, assume_yes: bool) -> bool:
 
 # ---------------------------------------------------------------- 백업 대상 수집
 
-def _project_files() -> list[Path]:
+def _project_files(include_private: bool = False) -> list[Path]:
+    """zip 에 담을 project/ 의 파일들 — 기본은 **사적 대화 기록을 뺀다.**
+
+    이 함수가 담는 것이 그대로 --dest(클라우드 동기화 폴더를 겨냥한 옵션)로 복사된다.
+    기본값이 '담는다' 이면 런북의 표준 명령 한 줄이 인물과 나눈 대화를 제3자 서버에 올린다.
+    목록의 정본은 vn_core.PRIVATE_PATTERNS 하나다(SCHEMA §3.1 · .gitignore 와 같은 넷).
+    """
+    proj = ROOT / "project"
+    if not proj.exists():
+        return []
+    out = []
+    for p in sorted(proj.rglob("*")):
+        if not p.is_file() or (set(p.parts) & SKIP_PARTS):
+            continue
+        if not include_private and vn_core.is_private_rel(_rel(p)):
+            continue
+        out.append(p)
+    return out
+
+
+def _private_files() -> list[Path]:
+    """지금 트리에 실제로 있는 사적 대화 기록(없으면 빈 목록 — 대개 여기다)."""
     proj = ROOT / "project"
     if not proj.exists():
         return []
     return [p for p in sorted(proj.rglob("*"))
-            if p.is_file() and not (set(p.parts) & SKIP_PARTS)]
+            if p.is_file() and vn_core.is_private_rel(_rel(p))]
 
 
 def _approved_images() -> list[Path]:
@@ -204,8 +245,9 @@ def _all_images() -> list[Path]:
             if p.is_file() and not (set(p.parts) & SKIP_PARTS)]
 
 
-def _zip_payload(with_images: bool, images_scope: str) -> list[Path]:
-    files = _project_files()
+def _zip_payload(with_images: bool, images_scope: str,
+                 include_private: bool = False) -> list[Path]:
+    files = _project_files(include_private)
     if with_images:
         imgs = _all_images() if images_scope == "all" else _approved_images()
         seen = set(files)
@@ -240,6 +282,35 @@ def _warn_no_images(prefix: str = "  ") -> None:
               "(외장드라이브 사본은 --dest D:/backup)")
     else:
         print(f"{prefix}※ 이미지는 체크섬만 기록됨 — 원본 사본이 필요하면 --with-images")
+
+
+def _warn_private(private: list[Path], included: bool, dest: str | None,
+                  prefix: str = "  ") -> None:
+    """사적 대화 기록에 대해 **이번 스냅샷이 실제로 무엇을 했는지** 한자리에서 말한다.
+
+    조용한 쪽이 위험한 방향이 서로 반대다.
+      * 뺐다면 — 사용자는 "백업했다" 고 믿는다. 무엇이 안 담겼는지 수로 말해야 한다.
+      * 담았는데 --dest 가 있다면 — 그 폴더는 대개 클라우드 동기화 폴더다. 여기서 조용하면
+        사적 대화가 제3자 서버로 올라간 사실을 아무도 모른다. 그래서 이쪽은 크게 외친다.
+    """
+    if not private:
+        return
+    n = len(private)
+    size = _human(sum(p.stat().st_size for p in private if p.exists()))
+    if not included:
+        print(f"{prefix}※ 개인 대화 기록 {n}개({size})는 백업에서 제외했습니다 — "
+              "인물과 나눈 사적 대화입니다.")
+        print(f"{prefix}   담으려면 --include-private (zip 과 체크섬 매니페스트 양쪽에 들어갑니다).")
+        return
+    print(f"{prefix}⚠ 개인 대화 기록 {n}개({size})를 이 백업에 담았습니다 — --include-private")
+    for q in private[:6]:
+        print(f"{prefix}    - {_rel(q)}")
+    if n > 6:
+        print(f"{prefix}    ... 외 {n - 6}개")
+    if dest:
+        print(f"{prefix}⚠⚠ 그 사본이 지금 외부 폴더로 복사됩니다: {dest}")
+        print(f"{prefix}    클라우드 동기화 폴더라면 인물과 나눈 대화가 제3자 서버로 올라갑니다.")
+        print(f"{prefix}    → docs/PRIVACY_HOSTING.md §1")
 
 
 def _warn_legacy(prefix: str = "  ") -> None:
@@ -301,10 +372,21 @@ def _same_as_latest(sums: dict, files: list[Path]) -> Path | None:
 
 def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "approved",
              dest: str | None = None, keep: int | None = None, keep_images: int | None = None,
-             dry_run: bool = False, force: bool = False) -> int:
-    files = _zip_payload(with_images, images_scope)
+             dry_run: bool = False, force: bool = False, include_private: bool = False,
+             assume_yes: bool = False) -> int:
+    private = _private_files()
+    if include_private and private and dest and not dry_run:
+        # 되돌릴 수 없는 방향의 동작이라 여기서만 한 번 묻는다. 확인되지 않으면 **백업을
+        # 멈추는 대신** 사적 기록만 빼고 진행한다 — 예약 실행에서 확인이 불가능하다고
+        # 백업 자체가 서 버리면, 조용한 실패 하나를 다른 조용한 실패로 바꾸는 것뿐이다.
+        print(f"⚠ 개인 대화 기록 {len(private)}개를 외부 폴더로 복사하려 합니다: {dest}")
+        if not _confirm("  인물과 나눈 사적 대화가 그 폴더(클라우드라면 제3자 서버)로 나갑니다.",
+                        "포함", assume_yes):
+            print("  → 사적 기록을 빼고 나머지만 백업합니다(작품·이미지는 그대로 담깁니다).")
+            include_private = False
+    files = _zip_payload(with_images, images_scope, include_private)
     total = sum(p.stat().st_size for p in files)
-    sums = _checksums()
+    sums = _checksums(include_private)
     same = None if force else _same_as_latest(sums, files)
 
     if dry_run:
@@ -318,6 +400,7 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
             print(f"  외부 사본: {dest}")
         if keep:
             print(f"  정리: 최신 {keep}개만 보존")
+        _warn_private(private, include_private, dest)
         if same is not None:
             print(f"  ※ 바뀐 파일이 없습니다 — 새 zip 을 굽지 않고 기존 스냅샷"
                   f"({same.stem.replace('manifest_', '')})을 그대로 씁니다(--force 면 새로 굽습니다).")
@@ -325,7 +408,7 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
         return 0
 
     if same is not None:
-        return _report_same(same, dest, keep, keep_images, with_images)
+        return _report_same(same, dest, keep, keep_images, with_images, private, include_private)
 
     BACKUPS.mkdir(parents=True, exist_ok=True)
     stamp = _stamp(now)
@@ -355,6 +438,9 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
         "zip_files": count,
         "images_included": bool(with_images and zpath),
         "images_scope": images_scope if with_images else "",
+        # 이 스냅샷이 사적 대화 기록을 담았는지 — 나중에 이 zip 을 어디로 옮겨도 되는지의 기준
+        "private_included": bool(include_private and private),
+        "private_skipped": 0 if include_private else len(private),
         "files": sums,
     })
     print(f"  체크섬 매니페스트: {manifest.relative_to(ROOT).as_posix()} ({len(sums)}개 파일)")
@@ -364,6 +450,7 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
 
     if not with_images:
         _warn_no_images("  ")
+    _warn_private(private, include_private, dest)
     _warn_legacy()
 
     if dest:
@@ -376,7 +463,8 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
 
 
 def _report_same(manifest: Path, dest: str | None, keep: int | None,
-                 keep_images: int | None, with_images: bool) -> int:
+                 keep_images: int | None, with_images: bool,
+                 private: list[Path] | None = None, include_private: bool = False) -> int:
     """내용이 같아 새로 굽지 않았을 때 — **이미 있는 그 스냅샷**을 복구 지점으로 안내한다.
 
     '생략했다' 로 끝내면 사용자는 오늘의 백업이 없다고 믿는다. 있는 것을 이름으로 말하고,
@@ -397,6 +485,7 @@ def _report_same(manifest: Path, dest: str | None, keep: int | None,
     print("  같은 내용을 한 벌 더 굽고 싶다면: snapshot --force")
     if not with_images:
         _warn_no_images("  ")
+    _warn_private(private or [], include_private, dest)
     _warn_legacy()
     if dest:
         rc = _copy_out(Path(dest), [p for p in (manifest, z) if p.exists()])
@@ -452,19 +541,25 @@ def verify(stamp: str | None = None, base: Path | None = None) -> int:
             print("검증할 백업이 없습니다. 먼저 snapshot 을 실행하세요.")
         return 1
     recorded = _load_json(m).get("files", {})
-    current = _checksums()
-    changed, missing, added = [], [], []
+    # 현재 트리는 **사적 기록까지 포함해** 잰다. 매니페스트가 그것을 담고 있을 수도 있고
+    # (--include-private), 안 담고 있으면 아래에서 '추가' 가 아니라 '대상 아님' 으로 분류한다.
+    current = _checksums(include_private=True)
+    changed, missing, added, untracked = [], [], [], []
     for rel, meta in recorded.items():
         if rel not in current:
             missing.append(rel)
         elif current[rel]["sha256"] != meta["sha256"]:
             changed.append(rel)
     for rel in current:
-        if rel not in recorded:
-            added.append(rel)
+        if rel in recorded:
+            continue
+        (untracked if vn_core.is_private_rel(rel) else added).append(rel)
 
     print(f"무결성 검증 — 기준: {m.name}")
-    print(f"  기록 {len(recorded)} · 현재 {len(current)}")
+    print(f"  기록 {len(recorded)} · 현재 {len(current) - len(untracked)}")
+    if untracked:
+        print(f"  · 개인 대화 기록 {len(untracked)}개는 이 스냅샷의 대상이 아닙니다 "
+              "(사적 대화 — --include-private 로만 담깁니다)")
     for rel in changed:
         print(f"  ✗ 변경/손상: {rel}")
     for rel in missing:
@@ -854,6 +949,7 @@ def _psq(s: str) -> str:
 def schedule(*, time_of_day: str = "21:00", freq: str = "DAILY", day: str = "SUN",
              keep: int = KEEP_DEFAULT, keep_images: int = KEEP_IMAGES_DEFAULT,
              with_images: bool = False, images_scope: str = "approved",
+             include_private: bool = False,
              dest: str | None = None, task_name: str = TASK_NAME_DEFAULT,
              dry_run: bool = False, base: Path | None = None) -> int:
     hh, _, mm = time_of_day.partition(":")
@@ -877,6 +973,9 @@ def schedule(*, time_of_day: str = "21:00", freq: str = "DAILY", day: str = "SUN
     snap_args = ["--keep", str(keep), "--keep-images", str(keep_images)]
     if with_images:
         snap_args += ["--with-images", "--images-scope", images_scope]
+    if include_private:
+        # 예약 실행은 비대화형이라 확인을 받을 수 없다 — 사용자가 등록 시점에 한 번 고른다.
+        snap_args += ["--include-private", "--yes"]
     if dest:
         snap_args += ["--dest", f"'{_psq(dest)}'"]
 
@@ -928,6 +1027,9 @@ def schedule(*, time_of_day: str = "21:00", freq: str = "DAILY", day: str = "SUN
     print(f"실행 기록: {log}")
     print("  · PC 가 켜져 있는 시각으로 잡으세요(꺼져 있으면 다음 로그온 때 밀려서 실행됩니다).")
     print("  · 이미지 원본까지 지키려면 --with-images, 외장드라이브 사본은 --dest 를 함께 주세요.")
+    print("  · 개인 대화 기록은 예약 백업에서도 기본 제외입니다"
+          + (" — 지금은 --include-private 로 담도록 등록됩니다." if include_private
+             else " (담으려면 schedule --include-private)."))
     return 0
 
 
@@ -945,6 +1047,10 @@ EPILOG = """자주 쓰는 두 가지
   [이미지 원본] 기본 백업에는 체크섬만 들어갑니다. 승인 이미지는 유료 생성물이자 유일본입니다.
     python tools/backup_project.py snapshot --with-images          zip 에 원본까지
     python tools/backup_project.py snapshot --with-images --dest D:/backup   외장드라이브 사본
+
+  [개인 대화 기록] chatlog.json · talk_*.json · *.archive.jsonl · memory_*.json 은 기본 제외입니다
+    (zip 에도 체크섬 매니페스트에도 안 들어갑니다 — --dest 가 클라우드 폴더일 수 있으므로).
+    python tools/backup_project.py snapshot --include-private      정말 담아야 할 때만
 """
 
 
@@ -964,6 +1070,11 @@ def main() -> int:
                     help=f"--keep 와 함께: 이미지 든 스냅샷은 최신 N개만 (기본 {KEEP_IMAGES_DEFAULT})")
     sp.add_argument("--force", action="store_true",
                     help="바뀐 파일이 없어도 zip 을 새로 굽는다(기본은 기존 스냅샷을 안내하고 생략)")
+    sp.add_argument("--include-private", action="store_true",
+                    help="개인 대화 기록(chatlog·talk_*·*.archive.jsonl·memory_*)까지 담는다 "
+                         "— 기본은 제외. --dest 와 함께 쓰면 확인을 묻는다")
+    sp.add_argument("--yes", action="store_true",
+                    help="--include-private 와 --dest 를 함께 줬을 때의 확인을 생략")
     sp.add_argument("--dry-run", action="store_true", help="쓰지 않고 계획만 표시")
 
     vp = sub.add_parser("verify", help="스냅과 현재 파일 대조 (이상이 있으면 restore 를 안내)")
@@ -1001,6 +1112,8 @@ def main() -> int:
     cp.add_argument("--day", default="SUN", help="WEEKLY 일 때 요일(SUN~SAT)")
     cp.add_argument("--keep", type=int, default=KEEP_DEFAULT)
     cp.add_argument("--keep-images", type=int, default=KEEP_IMAGES_DEFAULT)
+    cp.add_argument("--include-private", action="store_true",
+                    help="예약 백업에 개인 대화 기록까지 담는다(기본 제외 — 확인 없이 돕니다)")
     cp.add_argument("--with-images", action="store_true")
     cp.add_argument("--images-scope", default="approved", choices=["approved", "all"])
     cp.add_argument("--dest", help="외부 사본 폴더")
@@ -1014,7 +1127,8 @@ def main() -> int:
         return snapshot(datetime.now(), with_images=args.with_images,
                         images_scope=args.images_scope, dest=args.dest,
                         keep=args.keep, keep_images=args.keep_images,
-                        dry_run=args.dry_run, force=args.force)
+                        dry_run=args.dry_run, force=args.force,
+                        include_private=args.include_private, assume_yes=args.yes)
     if args.cmd == "verify":
         return verify(args.snapshot, src)
     if args.cmd == "list":
@@ -1028,7 +1142,7 @@ def main() -> int:
         return prune(args.keep, keep_images=args.keep_images, base=src,
                      dry_run=args.dry_run, assume_yes=args.yes)
     return schedule(time_of_day=args.time, freq=args.freq, day=args.day, keep=args.keep,
-                    keep_images=args.keep_images,
+                    keep_images=args.keep_images, include_private=args.include_private,
                     with_images=args.with_images, images_scope=args.images_scope,
                     dest=args.dest, task_name=args.name, dry_run=args.dry_run)
 

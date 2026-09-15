@@ -27,6 +27,28 @@
 즉 **채팅 기록은 안전하지만, 작품 전체(그림+대사)는 파일 하나에 통째로 들어간다.**
 그 파일 하나만 유출되면 작품 전체가 유출된 것과 같다.
 
+### 백업도 같은 넷을 뺀다 (2026-09-15)
+
+감상본이 채팅 기록을 빼는 것과 **같은 이유로 백업도 뺀다.** 예전에는 감상본만 조심스러웠고
+`backup_project snapshot` 은 `project/` 를 통째로 zip 에 담았다 — 그리고 런북의 표준 명령이
+`--dest D:/backup` 을 권한다. 그 폴더가 클라우드 동기화 폴더라면, 백업 한 줄이 인물과 나눈
+대화를 제3자 서버에 올린다. 지금까지 사고가 없었던 이유는 로컬 LLM 이 한 번도 돌지 않아
+**그 파일이 아직 없기 때문**일 뿐이다(곧 생긴다).
+
+| | 기본 `snapshot` | `snapshot --include-private` |
+|---|---|---|
+| `project/scenes/*.json` · `manifest.json` · `storyline.md` · `character_bible.md` | ✔ 담김 | ✔ 담김 |
+| `chatlog.json` · `talk_*.json` · `*.archive.jsonl` · `memory_*.json` | ✂ **제외** | ✔ 담김 |
+| 체크섬 매니페스트(`manifest_*.json`, `--dest` 로 함께 복사됨) | 제외된 파일은 **적히지도 않는다** | 적힌다 |
+
+`--include-private` 와 `--dest` 를 함께 주면 확인을 묻고, 확인하지 않으면 **사적 기록만 빼고
+백업은 계속한다**(백업을 통째로 멈추면 작품까지 안 지켜진다). 예약 백업(`schedule`)도 기본
+제외이고, 담으려면 등록할 때 `schedule --include-private` 를 고른다.
+
+> 이미 뜬 **옛 스냅샷**에는 이 규칙이 소급되지 않는다. `backups/` 의 zip 을 외부로 옮기기
+> 전에는 `python tools/backup_project.py list` 로 날짜를 보고, 2026-09-15 이전 스냅샷이라면
+> 그 안에 대화 기록이 들어 있을 수 있다고 보고 다룬다.
+
 ### 제작 중에 밖으로 나가는 것 — **기본 경로에서는 아무것도 나가지 않는다**
 
 지금 이 저장소의 기본 이미지 엔진은 **로컬 ComfyUI** 다(`image_generator.engine: "comfyui"` ·
@@ -41,7 +63,7 @@
 | **ComfyUI(기본)** | **없음** — 주소가 `127.0.0.1`/`localhost` 인 한 아무것도 나가지 않는다 |
 | ComfyUI 주소를 **원격으로 바꿨을 때** | 프롬프트와 완성 이미지가 그 주소로 오간다. `base_url()` 은 **스킴만** 검사하므로 `COMFYUI_URL` 이나 매니페스트에 LAN·원격 주소(`http://192.168.0.9:8188` 같은)를 적으면 **평문 HTTP 로** 나간다 — 남의 GPU 를 빌려 쓸 때는 그 PC 주인이 프롬프트와 그림을 다 본다 |
 | 로컬 LLM | 없음(`127.0.0.1:8080`). 단 `LOCAL_LLM_URL` 을 원격으로 바꾸면 대사·창작 텍스트가 그리로 간다 |
-| **백업 `--dest`** | `project/` 전체가 그 경로로 복사된다 — **인물 채팅 로그(`talk_*.json` · `chatlog.json` · `*.archive.jsonl` · `memory_*.json`)도 포함**이다. 클라우드 동기화 폴더를 `--dest` 로 주면 사적 대화가 제3자 서버로 올라간다(지금은 해당 로그가 없어 잠재적 위험) |
+| **백업 `--dest`** | `project/` 가 그 경로로 복사된다. **개인 대화 기록 넷(`chatlog.json` · `talk_*.json` · `*.archive.jsonl` · `memory_*.json`)은 2026-09-15 부터 기본 제외**다 — zip 에도, 함께 복사되는 체크섬 매니페스트에도 들어가지 않는다. 담으려면 `--include-private` 를 명시해야 하고, `--dest` 와 함께 주면 백업 도구가 확인을 묻는다(확인이 불가능한 예약 실행에서는 사적 기록만 빼고 나머지를 백업한다) |
 
 #### MakeFun 을 **쓸 때만** 나가는 것 (유료 보조 경로)
 
@@ -153,6 +175,8 @@ PWA 의 오프라인 캐시(`sw.js`, 서비스 워커)는 **HTTPS 또는 localho
       `project/story/memory_*.json` 이 **과거 커밋에도** 없는가?
       (`*.archive.jsonl` 은 대화가 상한을 넘길 때 생기는 **옛 대화 원문**이다. 확장자가 달라
        `talk_*.json` 패턴에 안 걸리니 따로 확인한다 — [SCHEMA.md](SCHEMA.md) §3 이 정본이다)
+- [ ] 백업을 클라우드 폴더로 복사할 계획이라면 — `--include-private` 를 쓰지 않았는가?
+      (기본 `snapshot` 은 개인 대화 기록 넷을 빼고, 뺐다는 사실을 실행할 때 화면에 적는다)
 - [ ] `python tools/secret_scan.py` 가 깨끗한가?
 - [ ] 이미지 AI 서비스 약관상 재배포가 허용되는가?
 - [ ] 그냥 [PHONE_TUTORIAL.md](PHONE_TUTORIAL.md) 의 LAN 접속으로 충분하지 않은가?

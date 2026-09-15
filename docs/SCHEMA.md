@@ -1016,6 +1016,24 @@ scene = {id, order, purpose, img, lines:[{n,c,t,p}], ep?, choices?, branch?, end
 `logs/` 전체도 제외 대상이다. `makefun_usage.jsonl` 은 비용 이력이고 `lan_pin.txt` 는
 이번 실행의 접속 PIN 이라 둘 다 기기 로컬에 남아야 한다.
 
+**이 네 패턴의 코드 정본은 `vn_core.PRIVATE_PATTERNS` 하나다**(`vn_core.is_private_rel` 로 판정).
+`.gitignore` 와 위 표와 이 목록은 같은 것을 말해야 한다 — 자가진단 L06 이 문서와 코드를 대조한다.
+
+| 패턴 | git | 백업 zip · 체크섬 매니페스트 | 감상본 HTML |
+|---|---|---|---|
+| `project/story/chatlog.json` | ✂ 제외 | ✂ **제외**(`--include-private` 로만 포함) | ✂ 제외 |
+| `project/story/talk_*.json` | ✂ 제외 | ✂ **제외**(〃) | ✂ 제외 |
+| `project/story/*.archive.jsonl` | ✂ 제외 | ✂ **제외**(〃) | ✂ 제외 |
+| `project/story/memory_*.json` | ✂ 제외 | ✂ **제외**(〃) | ✂ 제외 |
+
+백업이 넷을 빼는 이유는 `backup_project snapshot --dest <폴더>` 가 **클라우드 동기화 폴더**를
+겨냥해 만들어졌기 때문이다. 기본값이 '담는다' 이면, 런북의 표준 명령 한 줄이 인물과 나눈
+사적 대화를 제3자 서버로 올린다. zip 뿐 아니라 **체크섬 매니페스트에서도** 뺀다 — 매니페스트가
+약속한 것과 zip 이 주는 것이 갈리면 복원 직후 `verify` 가 있지도 않은 누락을 뱉는다(§3.2 · B06).
+정말 담아야 한다면 `--include-private` 를 명시한다. 그 플래그와 `--dest` 가 함께 오면
+백업 도구가 **확인을 요구**하고, 확인하지 않으면 사적 기록을 빼고 나머지만 백업한다.
+→ [PRIVACY_HOSTING.md](PRIVACY_HOSTING.md) · [RECOVERY_RUNBOOK.md](RECOVERY_RUNBOOK.md)
+
 ### 3.2 `_gen_meta.json`
 
 `images/raw/<scene_id>/` 안에 누적되는 생성 이력. 최근 **200건**까지 보관한다.

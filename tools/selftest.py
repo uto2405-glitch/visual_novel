@@ -1204,6 +1204,16 @@ def l06(b: Box):
     eq(sorted(doc_field_row(doc, "crop_mode") - {"crop_mode"}), sorted(vc.CROP_MODES),
        "SCHEMA §2.8 crop_mode 열거 ≠ vn_core.CROP_MODES")
 
+    # (5b) §3.1 사적 데이터 패턴 — vn_core.PRIVATE_PATTERNS 가 정본이고, **세 곳이** 같은
+    #      넷을 말해야 한다: 코드 · SCHEMA · .gitignore. 한 곳만 늘면 그 차이는 '사적 대화가
+    #      클라우드로 복사됐다' 로만 드러나고, 드러났을 때는 이미 올라간 뒤다.
+    has(doc, "vn_core.PRIVATE_PATTERNS", "SCHEMA §3.1 이 사적 데이터 패턴의 코드 정본을 가리키지 않음")
+    ignored = (SRC / ".gitignore").read_text(encoding="utf-8")
+    for pat in vc.PRIVATE_PATTERNS:
+        has(doc, f"`{pat}`", f"SCHEMA §3.1 에 사적 데이터 패턴 {pat!r} 가 없음")
+        ok(any(line.strip() == pat for line in ignored.splitlines()),
+           f".gitignore 가 사적 데이터 패턴 {pat!r} 를 제외하지 않음")
+
     # (6) 나머지 산문 복제 — id 형식과 상태 열거는 이름이 문서에 그대로 있어야 한다
     has(doc, vc.SCENE_ID_RE.pattern, "SCENE_ID_RE 정규식이 문서와 다름")
     absent = [s for s in checker_const(b, "SCENE_STATES") if s not in doc]
@@ -4719,6 +4729,80 @@ def b08(b: Box):
         heavy2 = heavy_of(bk)
     eq(len(left2), 2, f"최신 스냅샷과 이미지 스냅샷이 함께 남아야 한다 — {left2}")
     eq(len(heavy2), 1, "이미지가 든 유일한 스냅샷이 지워졌다")
+
+
+@test("backup", "B09 개인 대화 기록은 백업에 담기지 않는다(옵트인 · 외부 사본 확인)")
+def b09(b: Box):
+    """백업의 --dest 는 **클라우드 동기화 폴더**를 겨냥해 만들어진 옵션이다(런북의 표준 명령이
+    D:/backup 을 쓴다). _project_files 가 project/ 를 통째로 담던 시절에는 그 한 줄이
+    인물과 나눈 사적 대화를 제3자 서버로 올렸다 — 지금까지 잠재적 위험이었던 이유는
+    로컬 LLM 이 한 번도 안 돌아 그 파일이 아직 없었기 때문일 뿐이다.
+
+    픽스처로 넷을 다 만들어 두고 네 가지를 잠근다.
+      ① 기본 스냅샷은 zip 에도 **체크섬 매니페스트에도** 사적 기록을 넣지 않는다.
+      ② 그런데도 verify 는 0 이다 — 빠진 것을 '누락' 으로 뱉으면 사용자는 백업이 깨진 줄 안다.
+      ③ --include-private 면 담는다(사용자가 명시했을 때만).
+      ④ --include-private + --dest 인데 확인을 못 받으면 **사적 기록만 빼고** 백업은 계속한다.
+    """
+    class _NotATty(io.StringIO):
+        def isatty(self):
+            return False
+
+    names = ("chatlog.json", "talk_CHAR-001.json", "talk_CHAR-001.archive.jsonl",
+             "memory_CHAR-001.json")
+    with bk_box(b) as (bpm, root), quiet() as log:
+        bk, story = root / "backups", root / "project" / "story"
+        story.mkdir(parents=True, exist_ok=True)
+        for n in names:
+            (story / n).write_text('{"사적":"대화"}', encoding="utf-8")
+        (story / "storyline.md").write_text("공개 줄거리", encoding="utf-8")
+        dest = root / "_dest"
+
+        eq(bpm.snapshot(dt.datetime(2026, 9, 9, 1, 0, 0), with_images=True, dest=str(dest)),
+           0, "기본 스냅샷 rc")
+        stamp = "20260909_010000"
+        man = json.loads((bk / f"manifest_{stamp}.json").read_text(encoding="utf-8"))
+        with zipfile.ZipFile(bk / f"project_{stamp}.zip") as zf:
+            packed = set(zf.namelist())
+        promised = set(man["files"])
+        rc_ver = bpm.verify()
+        copied = sorted(p.name for p in dest.glob("*")) if dest.exists() else []
+
+        eq(bpm.snapshot(dt.datetime(2026, 9, 9, 2, 0, 0), with_images=True,
+                        include_private=True), 0, "옵트인 rc")
+        stamp2 = "20260909_020000"
+        with zipfile.ZipFile(bk / f"project_{stamp2}.zip") as zf:
+            packed2 = set(zf.namelist())
+        promised2 = set(json.loads((bk / f"manifest_{stamp2}.json").read_text(encoding="utf-8"))["files"])
+        rc_ver2 = bpm.verify()
+
+        old_stdin = sys.stdin                        # 비대화형(예약 실행)에서의 확인 요구
+        sys.stdin = _NotATty()
+        try:
+            rc3 = bpm.snapshot(dt.datetime(2026, 9, 9, 3, 0, 0), with_images=True,
+                               include_private=True, dest=str(root / "_dest2"), force=True)
+        finally:
+            sys.stdin = old_stdin
+        with zipfile.ZipFile(bk / "project_20260909_030000.zip") as zf:
+            packed3 = set(zf.namelist())
+        text = log.getvalue()
+
+    priv = [f"project/story/{n}" for n in names]
+    eq([r for r in priv if r in packed], [], "기본 스냅샷 zip 에 사적 대화가 담김")
+    eq([r for r in priv if r in promised], [], "체크섬 매니페스트가 사적 대화를 적었다")
+    ok("project/story/storyline.md" in packed, "공개 스토리 파일까지 빠졌다")
+    eq(man.get("private_skipped"), 4, f"제외 개수를 매니페스트가 적지 않음 — {man.get('private_skipped')}")
+    eq(rc_ver, 0, f"사적 기록을 뺀 스냅샷의 verify 가 이상을 보고함 — {text[-400:]}")
+    has(text, "개인 대화 기록", "무엇을 뺐는지 말하지 않음")
+    eq(copied, sorted([f"manifest_{stamp}.json", f"project_{stamp}.zip"]), f"외부 사본 {copied}")
+
+    eq(sorted(r for r in priv if r in packed2), sorted(priv), "--include-private 인데 안 담김")
+    eq(sorted(r for r in priv if r in promised2), sorted(priv), "--include-private 인데 매니페스트에 없음")
+    eq(rc_ver2, 0, "사적 기록을 담은 스냅샷의 verify 가 이상을 보고함")
+
+    eq(rc3, 0, "확인 불가일 때 백업 자체가 멈췄다 — 작품까지 백업되지 않는다")
+    eq([r for r in priv if r in packed3], [], "확인 없이 사적 대화가 외부 사본으로 나갔다")
+    has(text, "빼고 나머지만 백업", "무엇을 대신 했는지 말하지 않음")
 
 
 # ============================================================ 인화(print)
