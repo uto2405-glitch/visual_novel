@@ -234,7 +234,14 @@ def build_compose_instruction(count: int, branching: bool = False) -> str:
     if not mf:
         raise VNError("project/manifest.json 이 없거나 읽을 수 없습니다. 작품 설정을 먼저 저장하세요.")
     chars, locs = mf.get("characters", []), mf.get("locations", [])
-    char_block = "\n".join(f"- {c.get('character_id')} {c.get('name','')}: anchor=\"{c.get('prompt_anchor','')}\"" for c in chars)
+    # 말투 규칙을 함께 싣는다. 대화 탭은 이미 같은 칸(profile.speech_style)을 읽어 페르소나를
+    # 만드는데 장면 구성만 그것을 몰라서, 반말로 말하는 인물이 새 장면에서 "고마워요" 라고
+    # 존댓말을 썼다(실측). 같은 작품의 기존 12장과 새로 만든 3장이 말투부터 갈린다.
+    char_block = "\n".join(
+        f"- {c.get('character_id')} {c.get('name','')}: anchor=\"{c.get('prompt_anchor','')}\""
+        + (f"\n  말투: {str((c.get('profile') or {}).get('speech_style','')).strip()}"
+           if str((c.get('profile') or {}).get('speech_style', '')).strip() else "")
+        for c in chars)
     loc_block = "\n".join(f"- {l.get('location_id')} {l.get('name','')}: anchor=\"{l.get('prompt_anchor','')}\"" for l in locs)
     style = vn_core.visual_style(mf)
     shot_vocab = " / ".join(vn_core.STD_SHOTS)      # 어휘 정본은 vn_core(린터도 같은 목록을 본다)
@@ -280,7 +287,8 @@ def build_compose_instruction(count: int, branching: bool = False) -> str:
 1. image_prompt 는 영어. 등장 캐릭터와 장소의 anchor 문구를 원문 그대로 포함할 것.
 2. image_prompt 는 화풍 문구로 시작할 것: "{style}"
 3. 이미지 안에 글자/말풍선이 생기지 않도록 image_prompt 에 텍스트 요소를 넣지 말 것.
-4. dialogue 는 한국어, 장면당 1~4줄. 한 줄은 60자 이내.
+4. dialogue 는 한국어, 장면당 1~4줄. 한 줄은 60자 이내. **위에 적힌 각 인물의 말투를 지킬 것**
+   (반말인 인물에게 존댓말을 쓰지 말 것 — 기존 장면과 말투가 갈린다).
 5. location_id 는 장소 목록의 id 중 하나.
 6. 그 장면 dialogue 에 등장하지 않는 인물의 anchor 는 image_prompt 에 넣지 말 것
    (등장 인물은 dialogue 화자로 정해진다. 말없이 함께 있는 인물은 짧은 대사를 1줄 주어라).
@@ -455,8 +463,21 @@ def _create_scenes_from_items(items, force: bool, expected: int | None = None) -
                       "구성할 수 있습니다. 나눠서 진행하세요.")
     ordered = sorted(enumerate(dict_items), key=lambda p: _as_order(p[1].get("order"), p[0]))
     built, prev_ep = [], _first_episode(mf)      # 화 승계: 원소가 말하지 않으면 앞 장면을 따른다
+    fixed_anchors: list[str] = []
     for i, (_, it) in enumerate(ordered, 1):
         sc = build_scene(it, i, char_ids, loc_ids, locs, episode=prev_ep)
+        # 앵커 보정 — 붙여넣기 경로가 이미 하던 일을 자동 경로도 한다.
+        # 지시문 1번은 "앵커 문구를 원문 그대로 포함하라" 지만 실측에서 장면 3개 중 2개가
+        # 앵커 **중간에 말을 끼워 넣어**("...Korean girl holding hands with boy, light brown...")
+        # 검사기 A6 를 떨어뜨렸다. 그대로 저장하면 방금 만든 작품이 저장소의 게이트에서
+        # 빨간불이고, 사람은 장면마다 손으로 프롬프트를 고쳐야 한다 — 스튜디오의 [프롬프트
+        # 저장]은 '앵커 자동 보정' 이 기본으로 켜져 있는데 자동 경로만 그 보정을 건너뛰었다.
+        text = str(sc.get("prompt", {}).get("grok_output", "") or "")
+        if text:
+            text, touched = scene_ops.fix_anchor_text(sc, text)
+            if touched:
+                sc["prompt"]["grok_output"] = text
+                fixed_anchors.append(sc["scene_id"])
         prev_ep = norm_episode(sc.get("episode")) or prev_ep
         built.append(sc)
 
@@ -484,6 +505,8 @@ def _create_scenes_from_items(items, force: bool, expected: int | None = None) -
     code, chk = vn_core.run_checker()
     result = {"created": created, "checker_pass": code == 0,
               "checker": "\n".join(l for l in chk.splitlines() if "FAIL" in l) or "자동 검사 통과"}
+    if fixed_anchors:
+        result["fixed_anchors"] = fixed_anchors
     if backup is not None:
         result["backup"] = backup.relative_to(ROOT).as_posix()
         if pruned:

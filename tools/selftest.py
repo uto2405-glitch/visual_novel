@@ -5395,6 +5395,7 @@ def j01(b: Box):
     _node_check(b, html, "studio")
 
 
+
 @test("js", "J02 감상본 HTML — JS 문법 통과(내보낸 결과물 그대로)")
 def j02(b: Box):
     tcm = b.mod("export_viewer")
@@ -8061,6 +8062,62 @@ def u27(b: Box):
 
     # JSON 이 아예 없으면 예전처럼 ValueError — 호출부의 재시도 분기가 그것으로 걸린다.
     raises(lambda: vc._extract_json_array("미안, 장면을 못 만들겠어."), ValueError, "JSON 없음")
+
+
+@test("unit", "U30 장면 구성 지시문이 인물의 말투를 싣는다 — 새 장면만 존댓말로 갈리지 않게")
+def u30(b: Box):
+    """대화 탭은 `profile.speech_style` 을 읽어 페르소나를 만드는데(prompt_build `[말투 규칙]`)
+    장면 구성 지시문만 그 칸을 몰랐다. 실측: 반말로 말하는 인물이 새로 구성된 장면에서
+    "미끄러질 뻔했네요... 고마워요" 라고 존댓말을 썼다 — 같은 작품의 기존 12장과 새 3장이
+    말투부터 갈린다. 같은 데이터를 두 화면이 서로 다르게 보면 그 차이는 조용히 쌓인다.
+    """
+    vc = b.mod("vn_compose")
+    style = "편한 반말. 기쁘면 말끝을 늘인다."
+    with manifest_patch(b, lambda d: d["characters"][0].setdefault("profile", {})
+                        .update({"speech_style": style})):
+        ensure_storyline(b)
+        text = vc.build_compose_instruction(2, False)
+    has(text, style, "지시문이 인물의 말투를 싣지 않는다(장면 대사가 대화 탭과 갈린다)")
+    has(text, "말투를 지킬 것", "말투를 지키라는 규칙이 없다 — 데이터만 있고 지시가 없다")
+
+
+@test("unit", "U29 장면 구성도 앵커를 보정한다 — 자동 경로만 A6 에서 빨간불이지 않게")
+def u29(b: Box):
+    """지시문 1번은 "앵커 문구를 원문 그대로 포함하라" 다. 실측(장면 3개 구성)에서 모델은
+    2개에서 **앵커 중간에 말을 끼워 넣었다** — "…Korean girl holding hands with boy, light
+    brown semi-long hair…". 검사기 A6 는 원문 포함을 보므로 둘 다 FAIL 이고, 방금 만든
+    작품이 저장소의 게이트에서 빨간불인 채로 태어난다.
+
+    붙여넣기 경로는 이미 보정한다(스튜디오 [프롬프트 저장]의 '앵커 자동 보정' 은 기본
+    켜짐). 같은 보정을 **자동 경로에도** 건다 — 두 경로가 같은 결과를 내야 사람이 어느
+    길로 왔는지에 따라 손으로 고쳐야 하는지가 갈리지 않는다.
+    """
+    vc = b.mod("vn_compose")
+    anchor_c, anchor_l = b.anchors()
+    mf = b.manifest()
+    cid = mf["characters"][0]["character_id"]
+    lid = mf["locations"][0]["location_id"]
+    # 모델이 실제로 한 짓: 앵커의 첫 조각 뒤에 제 말을 끼워 넣어 원문을 끊는다.
+    broken = anchor_c.replace(", ", " holding hands with boy, ", 1)
+    ok(anchor_c not in broken, "픽스처가 앵커를 끊지 못했다 — 이 검사가 무의미해진다")
+    items = [{"order": 1, "purpose": "도입", "action_beat": "창밖", "emotion": "설렘",
+              "time": "오후", "location_id": lid,
+              "camera": {"shot": "wide", "angle": "eye-level", "framing": "", "focus": ""},
+              "dialogue": [{"speaker_id": cid, "text": "안녕"}],
+              "image_prompt": f"wide shot, {broken}, {anchor_l}, cel shading"}]
+    res = vc.compose_from_json(json.dumps(items, ensure_ascii=False), force=True)
+    sid = res["created"][0]
+    saved = b.scene(sid)["prompt"]["grok_output"]
+    has(saved, anchor_c, "자동 경로가 끊긴 인물 앵커를 원문으로 되돌리지 않는다(A6 FAIL)")
+    has(saved, anchor_l, "장소 앵커 원문")
+    eq(res.get("checker_pass"), True, f"자동 검사 — {res.get('checker', '')[:200]}")
+    eq(res.get("fixed_anchors"), [sid], "보정했다는 사실을 결과에 남기지 않는다(화면이 말할 수 없다)")
+
+    # 이미 원문 그대로면 손대지 않는다 — 보정이 없었다는 것도 결과에 남는다(멱등).
+    items[0]["image_prompt"] = f"wide shot, {anchor_c}, {anchor_l}, cel shading"
+    again = vc.compose_from_json(json.dumps(items, ensure_ascii=False), force=True)
+    ok("fixed_anchors" not in again, f"손댈 것이 없는데 보정했다고 말한다 — {again.get('fixed_anchors')}")
+    eq(again.get("checker_pass"), True, "재구성 후 검사")
 
 
 @test("unit", "U28 장면 구성은 스트리밍으로 받는다 — 120초 상한이 '총 생성 시간' 이 되지 않게")

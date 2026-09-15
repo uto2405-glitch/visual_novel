@@ -343,7 +343,9 @@ $("btnCompose").onclick=async()=>{
   // d.warning(요청 수 ≠ 생성 수)을 빼먹으면 "1개 장면 생성 · 검사 통과" 만 뜬다 —
   // 12장짜리 앨범이 한 장으로 갈린 순간에도. 직접 입력 경로는 처음부터 보여 주고 있었다.
   $("composeMsg").textContent=d.created.length+"개 장면 생성 · "+(d.checker_pass?"검사 통과":"검사 경고 있음")
-   +(d.warning?" · "+d.warning:"")+(d.backup?" · 이전 장면 백업: "+d.backup:"")+took(s);
+   +(d.warning?" · "+d.warning:"")
+   +((d.fixed_anchors&&d.fixed_anchors.length)?" · 앵커 보정 "+d.fixed_anchors.length+"장":"")
+   +(d.backup?" · 이전 장면 백업: "+d.backup:"")+took(s);
   scDraft.clear();   // 장면이 갈렸으니 같은 id 의 옛 초안을 새 장면에 되붙이지 않는다
   await refresh()}
  catch(e){bz.stop("실패: "+e.message+" — 아래 [✍ 직접 입력]으로 진행하세요(로컬 LLM 없이도 됩니다)")}};
@@ -1176,6 +1178,11 @@ async function talkStatus(){const c=$("talkStatus");
         +"start_studio.ps1 로 켠 뒤 이 탭에 다시 들어오세요. "))
     +"(장면 작업은 [장면] 탭의 [✍ 직접 입력]으로 계속할 수 있습니다.)"}}
  catch(e){c.textContent="상태 확인 실패";c.className="chip bad"}
+ // 이 줄은 예전에 'local_llm/runtime/serve.ps1' 이라고 **고정 문구**로 적혀 있었다. LLM 이
+ // 노트북에 있으면 그 파일은 이 PC 에 없다 — 대화가 끊긴 사람이 가장 먼저 읽는 줄에서
+ // 없는 파일을 찾게 만든다. 서버가 실제로 어디인지는 talk-status 가 이미 알고 있다.
+ const w=$("talkWhere");
+ if(w)w.textContent=(st&&st.url)?("LLM 서버: "+st.url+(st.remote?" (다른 기기)":" (이 PC)")):"";
  await restoreTalk(st)}
 // 50 · 전송 중에는 입력창·전송 버튼을 잠가 중복 전송을 막는다
 function talkLock(on){talkWaiting=on;
