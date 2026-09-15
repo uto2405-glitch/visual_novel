@@ -554,17 +554,28 @@ def prune_size_dirs(keep: int = KEEP_SIZE_DIRS, protect: Path | None = None,
 def _pre_dpi(path: Path, short_in: float, long_in: float, bleed: float, fit: bool):
     """굽기 **전에** 원본 크기만 읽어 실효 DPI 를 잰다(픽셀을 디코드하지 않는다).
 
+    크기는 **헤더만** 읽는다(print_preflight.image_size) — 돈이 나가는 것을 막는 관문이
+    Pillow 설치 여부에 딸려 가면 안 되고, 판정하는 도구와 같은 판독기를 써야 두 도구가
+    다른 크기를 말하지 않는다. 그쪽이 못 읽은 포맷만 Pillow 로 한 번 더 시도한다.
+
     읽지 못하면 None — 그때는 막지 않는다. 판독 실패를 저해상도로 취급하면, 도구가 다룰 수
     있는 포맷인데 헤더만 이상한 파일 때문에 멀쩡한 컷이 안 구워진다(굽기 단계에서 다시 실패한다).
     """
-    if not PIL_OK:
-        return None
+    size = None
     try:
-        with Image.open(path) as im:
-            sw, sh = im.size
+        import print_preflight as pf
+        size = pf.image_size(path)
     except Exception:
+        size = None
+    if size is None and PIL_OK:
+        try:
+            with Image.open(path) as im:
+                size = im.size
+        except Exception:
+            size = None
+    if not size:
         return None
-    return source_dpi(sw, sh, short_in, long_in, bleed, fit)
+    return source_dpi(size[0], size[1], short_in, long_in, bleed, fit)
 
 
 def _needed_px(short_in: float, long_in: float, dpi: int):

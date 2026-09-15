@@ -5010,19 +5010,25 @@ def pr07(b: Box):
     ok("8×10" in (rep.get("blocked") or []), f"blocked 목록 — {rep.get('blocked')}")
     eq(rep.get("floor_dpi"), vc.PRINT_DPI_FLOOR, "보고서가 하한을 싣지 않음")
 
+    # 거부 자체는 **Pillow 없이도** 동작해야 한다 — 돈이 나가는 것을 막는 관문이 선택
+    # 의존성에 딸려 가면, 그 의존성이 없는 PC 에서만 조용히 열린다(크기는 헤더로 읽는다).
     try:
         from PIL import Image as _PImg            # noqa: F401
+        have_pil = True
     except Exception:
-        raise Skip("Pillow 미설치 — 굽기 거부는 확인 불가")
+        have_pil = False
     out = b.root / "_pe_floor"
     msgs: list[str] = []
     with approved_scene(b) as sid, patched(pem, "OUT", out):
         write_png(b.root / f"images/raw/{sid}/v.png", 832, 1248)     # 앨범과 같은 원본
         with quiet():
             s1 = pem.export_batch(8.0, 10.0, 300, 0.0, "center", scene_filter=sid, emit=msgs.append)
-            s2 = pem.export_batch(8.0, 10.0, 300, 0.0, "center", scene_filter=sid,
-                                  emit=msgs.append, allow_lowres=True)
-            s3 = pem.export_batch(4.0, 6.0, 300, 0.0, "center", scene_filter=sid, emit=msgs.append)
+            s2 = s3 = None
+            if have_pil:
+                s2 = pem.export_batch(8.0, 10.0, 300, 0.0, "center", scene_filter=sid,
+                                      emit=msgs.append, allow_lowres=True)
+                s3 = pem.export_batch(4.0, 6.0, 300, 0.0, "center", scene_filter=sid,
+                                      emit=msgs.append)
         baked = sorted(f.suffix for f in (out / "8x10").glob("*.tiff"))
     text = chr(10).join(msgs)
     eq(s1["count"], 0, "하한 미만인데 마스터가 구워졌다 — 그대로 인화소로 간다")
@@ -5030,11 +5036,13 @@ def pr07(b: Box):
     eq(s1["needed_px"], [2400, 3600], "필요 픽셀이 없거나 프리플라이트와 수가 다름")
     has(text, "2400×3600", "몇 픽셀이 필요한지 말하지 않음")
     has(text, "--allow-lowres", "푸는 방법을 말하지 않음")
+    shutil.rmtree(out, ignore_errors=True)
+    if not have_pil:
+        raise Skip("Pillow 미설치 — 거부는 확인했고, 굽는 쪽(--allow-lowres)은 확인 불가")
     eq(s2["count"], 1, "--allow-lowres 로 명시했는데도 굽지 못했다")
     eq(baked, [".tiff"], f"명시했을 때 실제 파일이 나와야 한다 — {baked}")
     eq(s3["count"], 1, "4×6(208DPI)까지 막혔다")
     eq(s3["refused"], [], "4×6 은 거부 대상이 아니다")
-    shutil.rmtree(out, ignore_errors=True)
 
 
 @test("print", "PR05 크롭 안내는 '어느 변이' 잘렸는지까지 말한다 · 저장소 밖 출력 경로에서 죽지 않는다")
