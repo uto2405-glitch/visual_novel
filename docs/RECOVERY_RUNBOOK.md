@@ -129,8 +129,17 @@ python tools/backup_project.py verify
 ```
 
 `--with-images` 로 뜬 스냅샷이면 이미지 원본도 같은 명령으로 함께 돌아온다.
-`verify` 가 `✗ 누락` 으로 `images/...` 를 잔뜩 뱉는다면 그 스냅샷에 이미지가 없었던 것이다 —
-외부 백업에서 `images/` 를 복사한다(§1 · §2-F).
+
+`verify` 가 복원 직후 `✗ 누락` 을 뱉는다면 **먼저 무엇이 누락인지 본다.**
+
+- `images/raw/SCENE-0NN/_gen_meta.json` 만 누락(장면 수만큼) → **스냅샷에는 이미지가 있다.**
+  `approved` 범위가 컷 파일만 담고 생성 기록(프롬프트·시드·모델)은 안 담기 때문이다
+  (`_approved_images` 는 장면의 `raw_images`·`selected_image` 만 본다). 복원된 앨범은
+  멀쩡하고 감상본·인화도 정상이다. 생성 기록까지 남기려면 다음 스냅샷을
+  `--images-scope all` 로 뜬다. 이 경우 `restore --snapshot <같은 스탬프>` 를 다시 해도
+  소용없다 — 그 zip 에 애초에 없는 파일이다.
+- 컷 파일(`.png`) 자체가 누락 → 그때가 그 스냅샷에 이미지가 없었던 경우다.
+  외부 백업에서 `images/` 를 복사한다(§1 · §2-F).
 
 ### E. `verify` 가 "변경/손상"을 보고한다
 
@@ -203,11 +212,21 @@ python tools/backup_project.py migrate --dry-run     # 옛 사본을 backups/leg
    ```
    python --version
    ```
-2. **Pillow 설치** (인화 마스터·감상본 용량 최적화에 필요. 없어도 나머지는 동작한다.)
+2. **가상환경 + Pillow 설치** (스튜디오 실행 스크립트가 `.venv` 를 먼저 찾는다.)
    ```
-   python -m pip install Pillow
+   python -m venv .venv
+   .venv\Scripts\python -m pip install Pillow
    ```
-3. **저장소 복원** — 코드·문서·템플릿. (git 저장소가 있으면 거기서, 없으면 백업 사본에서.)
+   없어도 도구는 돌지만 **결과물이 쓸 수 없게 커진다** — 실측: 같은 감상본이
+   Pillow 있으면 2.90MB, 없으면 21.22MB(7.3배)로 나오고 내보내기 도구 스스로
+   "15MB 초과 — 폰 전송이 어려울 수 있음" 이라고 경고한다. 인화 마스터는 Pillow 없이는
+   아예 못 만든다. 남에게 건넬 파일을 만들 거면 필수로 취급하라.
+3. **저장소 복원** — 코드·문서·템플릿. **git 에서만 온다.**
+
+   > `backups/project_*.zip` 에는 **`project/` 와 `images/` 만** 들어 있다(`_zip_payload`).
+   > `tools/` 는 한 줄도 없다 — 백업 사본으로는 도구를 되살릴 수 없다.
+   > 그러니 **원격에 push 가 돼 있어야 한다**: `git rev-list --count @{u}..HEAD` 가 0 이 아니면
+   > 그만큼의 코드가 이 PC 에만 있다. 지금 미는 것이 이 문서의 어떤 복구 절차보다 싸다.
 4. **백업을 제자리에 둔다** — 외장드라이브의 `project_*.zip` · `manifest_*.json` 을
    저장소의 `backups/` 로 복사한다. (복사하지 않고 `restore --from D:/backup` 으로 바로 써도 된다.)
 5. **`project/` · `images/` 복원**
@@ -246,11 +265,14 @@ python tools/backup_project.py migrate --dry-run     # 옛 사본을 backups/leg
 
 - 승인 도장을 찍은 날 →
   `python tools/backup_project.py snapshot --with-images --dest D:/backup --keep 12`
+- **코드를 고친 날 → `git push`**(백업 zip 에는 `tools/` 가 없다 · §3-3).
+  `git rev-list --count @{u}..HEAD` 가 이 PC 에만 있는 커밋 수다.
 - 한 달에 한 번 → 외장 매체의 백업이 실제로 열리는지 확인
   (`python tools/backup_project.py list --from D:/backup`)
 - 인화 주문 직전 → `python tools/backup_project.py verify`
 - 도구·스키마를 고친 뒤 → `python tools/selftest.py` 전체 통과 확인
 - 가끔 → `python tools/doctor.py` 로 경고가 늘지 않았는지 확인
 
-가장 흔한 사고는 디스크 고장이 아니라 **"환경변수가 세션 전용이었다"** 와
-**"그 스냅샷에 이미지가 없었다"** 두 가지다. 둘 다 오늘 5분이면 막을 수 있다.
+가장 흔한 사고는 디스크 고장이 아니라 **"환경변수가 세션 전용이었다"** ·
+**"그 스냅샷에 이미지가 없었다"** · **"코드를 한 번도 push 하지 않았다"** 세 가지다.
+셋 다 오늘 5분이면 막을 수 있다.
