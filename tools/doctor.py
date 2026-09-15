@@ -239,8 +239,9 @@ def check_local_llm() -> None:
     else:
         add("로컬 LLM", "서버 응답", WARN,
             f"{_shown(str(st.get('url', '')))} 에 응답 없음 — 스토리·프롬프트·대화 탭이 막힙니다",
-            "start_studio.ps1 로 함께 켜거나, "
-            "powershell -File c:\\Users\\USER\\claude\\local_llm\\runtime\\serve.ps1 을 실행하세요.")
+            # 경로는 local_llm.serve_hint() 하나에서만 만든다 — 예전에는 여기에 개발 PC 경로가
+            # 박혀 있어서, 다른 기기에서 doctor 를 돌린 사람에게 없는 파일을 알려 줬다.
+            "start_studio.ps1 로 함께 켜거나, " + local_llm.serve_hint())
 
 
 # ------------------------------------------------------------------ 3b. 이미지 엔진

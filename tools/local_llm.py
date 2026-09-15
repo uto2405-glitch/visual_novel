@@ -44,6 +44,28 @@ TALK_WINDOW = 16   # 서버가 모델에 넘기는 최근 대화 수 — 창 밖
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
 
 
+def serve_script() -> Path:
+    """llama.cpp 설치 폴더의 ``runtime\\serve.ps1`` 경로.
+
+    해석 순서는 ``start_studio.ps1`` 과 같다: ``LOCAL_LLM_HOME`` > ``~/claude/local_llm``.
+    예전에는 안내 문구에 개발 PC 경로(``c:\\Users\\USER\\...``)가 그대로 박혀 있어서,
+    다른 기기에서는 시키는 대로 따라 해도 존재하지 않는 파일을 가리켰다 — 서버가 꺼져
+    있다는 사실을 처음 알게 되는 자리가 바로 이 문구라서, 여기서 길을 잃으면 스토리·
+    프롬프트·대화 네 탭이 통째로 막힌 채로 남는다. 경로 해석을 한 곳에 모아 둔다.
+    """
+    home = os.environ.get("LOCAL_LLM_HOME") or str(Path.home() / "claude" / "local_llm")
+    return Path(home) / "runtime" / "serve.ps1"
+
+
+def serve_hint() -> str:
+    """서버를 켜는 한 줄 안내 — 설치본을 못 찾으면 어디를 알려 줘야 하는지까지 말한다."""
+    path = serve_script()
+    cmd = f'powershell -File "{path}" 을 실행하세요.'
+    if path.exists():
+        return cmd
+    return cmd + ' 그 경로가 아니면 setx LOCAL_LLM_HOME "D:\\llm\\local_llm" 로 알려 주세요.'
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise urllib.error.HTTPError(req.full_url, code, "redirect blocked", headers, fp)
@@ -211,8 +233,7 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
     except urllib.error.HTTPError as e:
         raise VNError(f"로컬 LLM HTTP {e.code} — 서버/모델 상태를 확인하세요.")
     except urllib.error.URLError as e:
-        raise VNError(f"로컬 LLM 에 연결할 수 없습니다({e.reason}). "
-                      "local_llm/runtime/serve.ps1 로 서버를 켜세요.")
+        raise VNError(f"로컬 LLM 에 연결할 수 없습니다({e.reason}). {serve_hint()}")
     try:
         data = json.loads(raw.decode("utf-8"))
         content = data["choices"][0]["message"]["content"]
@@ -232,7 +253,7 @@ def main() -> int:
     print(f"로컬 LLM: {'ON' if st['up'] else 'OFF'} ({st['url']})")
     if not st["up"]:
         print(f"  {st.get('error', '')}")
-        print("  → C:\\Users\\USER\\claude\\local_llm\\runtime\\serve.ps1 로 서버를 켜세요.")
+        print(f"  → {serve_hint()}")
         return 1
     print(f"  모델: {', '.join(m for m in st['models'] if m) or '(미표시)'}")
     if len(sys.argv) > 1 and sys.argv[1] == "--memory":   # 지난 대화 요약 갱신(장기 기억)
