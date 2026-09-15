@@ -50,6 +50,12 @@ MANIFEST = PROJECT / "manifest.json"
 STORY = PROJECT / "story"
 IMAGES = ROOT / "images"
 IMAGES_RAW = IMAGES / "raw"
+# 컷 폴더마다 하나씩 놓이는 생성 메타(images/raw/<scene>/_gen_meta.json)의 이름.
+# **여기 있는 이유**: 이 이름을 아는 곳이 두 층으로 갈라져 있었다 — 파일을 쓰는 쪽
+# (gen_common, 계층 1)과 백업에 담아야 하는 쪽(backup_project, 같은 계층 1)이라
+# 서로를 import 할 수 없다(L01). 한쪽이 이름을 다시 적는 순간 매니페스트가 약속한 것과
+# zip 이 주는 것이 갈리고, 복원 직후 verify 가 있지도 않은 '누락' 을 뱉는다.
+GEN_META_NAME = "_gen_meta.json"
 OUTPUT = ROOT / "output"
 LOGS = ROOT / "logs"
 BACKUPS = ROOT / "backups"

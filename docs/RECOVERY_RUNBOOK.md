@@ -132,12 +132,15 @@ python tools/backup_project.py verify
 
 `verify` 가 복원 직후 `✗ 누락` 을 뱉는다면 **먼저 무엇이 누락인지 본다.**
 
-- `images/raw/SCENE-0NN/_gen_meta.json` 만 누락(장면 수만큼) → **스냅샷에는 이미지가 있다.**
-  `approved` 범위가 컷 파일만 담고 생성 기록(프롬프트·시드·모델)은 안 담기 때문이다
-  (`_approved_images` 는 장면의 `raw_images`·`selected_image` 만 본다). 복원된 앨범은
-  멀쩡하고 감상본·인화도 정상이다. 생성 기록까지 남기려면 다음 스냅샷을
-  `--images-scope all` 로 뜬다. 이 경우 `restore --snapshot <같은 스탬프>` 를 다시 해도
-  소용없다 — 그 zip 에 애초에 없는 파일이다.
+- `images/raw/SCENE-0NN/_gen_meta.json` 만 누락(장면 수만큼) → **2026-09-15 이전에 뜬
+  옛 스냅샷이다.** 그때는 매니페스트가 `images/` 를 통째로 훑어 생성 기록까지 적는데
+  `approved` 범위의 zip 은 컷 파일만 담아서, 되살린 트리가 항상 장면 수만큼 모자랐다
+  (실측: 매니페스트 112 · zip 100 · 차이 12 = 장면 12개). **복원된 앨범은 멀쩡하다** —
+  `check_protocol` 은 PASS 고 감상본·인화도 정상이다. 그 zip 에 애초에 없는 파일이라
+  `restore --snapshot <같은 스탬프>` 를 다시 해도 소용없다(그 안내는 무한 루프였다).
+  지금 코드는 `_approved_images` 가 컷 폴더의 `_gen_meta.json` 까지 담으므로 **새로 뜬
+  스냅샷에서는 이 증상이 나오지 않는다**(`snapshot` → `restore` → `verify` 가 126/126).
+  옛 스냅샷을 계속 쓸 거면 한 번 `snapshot` 을 다시 떠서 기준을 갱신한다.
 - 컷 파일(`.png`) 자체가 누락 → 그때가 그 스냅샷에 이미지가 없었던 경우다.
   외부 백업에서 `images/` 를 복사한다(§1 · §2-F).
 

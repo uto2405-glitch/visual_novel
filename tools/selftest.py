@@ -4512,6 +4512,38 @@ def b05(b: Box):
     has(log.getvalue(), "--yes", "안내 문구")
 
 
+@test("backup", "B06 approved 스냅샷이 매니페스트가 약속한 것을 전부 담는다(_gen_meta 누락 없음)")
+def b06(b: Box):
+    """복원 직후 verify 가 **있지도 않은 '누락'** 을 뱉던 자리를 잠근다.
+
+    매니페스트(_checksums)는 images/ 를 통째로 훑어 ``_gen_meta.json`` 까지 적는데
+    기본 범위(approved)의 zip 은 장면 assets 에 적힌 PNG 만 담았다. 그래서 되살린 트리는
+    항상 장면 수만큼 모자랐고(실측: 매니페스트 112 · zip 100 · 차이 12 = 장면 12개),
+    verify 가 내미는 처방은 **같은 스냅샷을 다시 restore** 하는 것이라 무한 루프였다.
+
+    B02 가 이것을 놓친 이유는 거기서 ``images_scope='all'`` 을 쓰기 때문이다 — 사람이
+    실제로 쓰는 기본 경로(approved)는 아무도 왕복시켜 보지 않았다.
+    """
+    import json as _json
+    with bk_box(b) as (bpm, root), quiet() as log:
+        meta = root / "images" / "raw" / "SCENE-001" / bpm.vn_core.GEN_META_NAME
+        write_json(meta, {"entries": [{"seed": 1}]})
+        eq(bpm.snapshot(dt.datetime(2026, 5, 5, 5, 5, 5), with_images=True), 0, "snapshot")
+        stamp = "20260505_050505"
+        man = _json.loads((root / "backups" / f"manifest_{stamp}.json").read_text(encoding="utf-8"))
+        promised = set(man["files"])
+        import zipfile as _zip
+        with _zip.ZipFile(root / "backups" / f"project_{stamp}.zip") as zf:
+            packed = set(zf.namelist())
+        shutil.rmtree(root / "images")
+        rc_restore = bpm.restore(assume_yes=True)
+        rc_verify = bpm.verify()
+    ok("images/raw/SCENE-001/_gen_meta.json" in promised, "매니페스트가 _gen_meta 를 안 적었다")
+    eq(sorted(promised - packed), [], "매니페스트가 약속했는데 zip 에 없는 파일")
+    eq(rc_restore, 0, "restore")
+    eq(rc_verify, 0, f"복원 직후 verify 가 누락을 보고함 — {log.getvalue()[-400:]}")
+
+
 # ============================================================ 인화(print)
 @test("print", "PR01 인화 프리플라이트 규격 판정 + 최대규격(면적) + CLI 무크래시")
 def pr01(b: Box):

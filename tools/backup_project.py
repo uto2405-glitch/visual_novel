@@ -145,9 +145,16 @@ def _approved_images() -> list[Path]:
     도구라서(테스트·복제본이 ROOT 를 갈아끼운다) 저장소 전역 폴더를 보면 엉뚱한 트리의
     이미지를 담는다. 그래서 iter_scenes 대신 같은 순서로 자기 트리를 읽는다.
     후보(raw_images)까지 담는 것은 의도다 — 선택본만으로는 다른 컷을 다시 고를 수 없다.
+
+    컷 옆의 ``_gen_meta.json`` 도 함께 담는다. 매니페스트를 쓰는 :func:`_checksums` 는
+    ``images/`` 를 통째로 훑어 이 파일까지 **기록**하는데 zip 에는 안 들어가서, 매니페스트가
+    약속한 것과 zip 이 주는 것이 갈렸다. 그 결과 복원 직후 ``verify`` 가 장면마다 '✗ 누락'
+    을 뱉고(실측: 매니페스트 112 · zip 100 · 차이는 정확히 이 12개), 처방으로 **같은
+    스냅샷을 다시 restore** 하라고 안내했다 — 무엇을 다시 풀어도 없는 파일이라 무한 루프다.
     """
     out: list[Path] = []
     seen: set[Path] = set()
+    cut_dirs: list[Path] = []        # 컷이 들어 있는 폴더 — 아래 _gen_meta 를 같은 곳에서 찾는다
     sdir = ROOT / "project" / "scenes"
     if not sdir.exists():
         return out
@@ -171,6 +178,15 @@ def _approved_images() -> list[Path]:
             if p.is_file() and p not in seen:
                 seen.add(p)
                 out.append(p)
+                if p.parent not in cut_dirs:
+                    cut_dirs.append(p.parent)
+    # 컷 폴더의 생성 메타 — 경로를 다시 조립하지 않고 **컷이 실제로 있던 폴더**에서 찾는다
+    # (폴더 규칙이 바뀌어도 따라간다). 없으면 조용히 넘어간다 — 옛 트리에는 없을 수 있다.
+    for d in cut_dirs:
+        meta = d / vn_core.GEN_META_NAME
+        if meta.is_file() and meta not in seen:
+            seen.add(meta)
+            out.append(meta)
     return out
 
 

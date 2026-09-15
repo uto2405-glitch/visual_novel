@@ -19,9 +19,9 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:          # 이 파일만 적재돼도 '옆에 있는' vn_core 를 쓴다
     sys.path.insert(0, str(_HERE))
 
-from vn_core import WRITE_LOCK, atomic_write_json, load_json_safe   # noqa: E402
+from vn_core import WRITE_LOCK, GEN_META_NAME, atomic_write_json, load_json_safe   # noqa: E402
 
-META_NAME = "_gen_meta.json"
+META_NAME = GEN_META_NAME   # 이름의 단일 출처는 vn_core — 백업도 같은 것을 봐야 한다
 META_MAX_ENTRIES = 200      # _gen_meta.json 무한 증식 방지(엔진마다 다르면 한쪽만 부푼다)
 SIZE_ALIGN = 8              # 생성 크기는 8의 배수 — SDXL/VAE 규약이라 두 엔진에 같이 걸린다
 
