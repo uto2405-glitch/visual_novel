@@ -209,6 +209,12 @@ def _owner(info: dict) -> str:
     return " · ".join(bits)
 
 
+def _owns(sid: str) -> bool:
+    """이 프로세스가 그 장면의 잠금을 **지금 들고 있는가**(_OWNED 의 단일 조회 지점)."""
+    with _LOCK:
+        return sid in _OWNED
+
+
 def _acquire_file(sid: str, label: str) -> str:
     """잠금 파일을 잡는다 → 토큰. 파일 잠금을 쓸 수 없는 환경이면 빈 문자열.
 
@@ -232,6 +238,15 @@ def _acquire_file(sid: str, label: str) -> str:
             #     렌더를 죽였을 때 같은 장면이 20분간 잠기던 것이 이 줄로 사라진다.
             if _is_dead_owner(info):
                 log.warning("죽은 생성 잠금 회수 %s — 주인 프로세스가 없습니다(%s)", sid, _owner(info))
+                with contextlib.suppress(OSError):
+                    os.unlink(path)
+                continue
+            # (a') 내 잠금인데 내 소유 표시가 없다 — 이 프로세스가 놓다가 만 잔해다.
+            #      status() 는 이미 "내 pid 면 다른 곳이 아니다" 를 안다. 그쪽만 알고
+            #      이쪽이 모르면 화면은 '끝남' 이라 말하는데 [생성] 은 거절하는 모순이 된다.
+            #      같은 프로세스 안의 진짜 동시 실행은 위(_JOBS)에서 이미 걸러졌다.
+            if info.get("host") == _HOST and info.get("pid") == os.getpid() and not _owns(sid):
+                log.warning("놓다 만 내 생성 잠금 회수 %s (%s)", sid, _owner(info))
                 with contextlib.suppress(OSError):
                     os.unlink(path)
                 continue
@@ -323,6 +338,21 @@ def release(sid: str, message: str = "", result: dict | None = None,
     화면(studio.js pollGenUntilDone)이 보는 error 키가 영영 오지 않았다 — 토큰 없는
     업스케일이 "확대본을 저장했습니다" 로 끝났다. 문구는 사람이 읽고 이 키는 기계가 읽는다.
     """
+    # 순서가 중요하다 — **잠금 파일이 먼저, 메모리 표시가 나중이다.**
+    #
+    # 예전에는 _JOBS 를 '끝남' 으로 바꾸고 그 다음에 파일을 지웠다. 그 사이 한 순간
+    # "메모리는 끝났다고 하는데 잠금 파일은 아직 있는" 상태가 열린다. status() 는 메모리를
+    # 믿고 running=False 라 답하고(화면은 [생성] 을 다시 열어 준다), 바로 이어지는 claim()
+    # 은 아직 남은 파일을 보고 **내 pid 를 가리키며** "이미 생성 중입니다" 로 거절한다 —
+    # 끝났다고 말해 놓고 누르면 바쁘다고 하는 화면이다(전체 자가진단에서 CF07 이 이따금
+    # 여기서 깨졌다. 기계가 바쁠수록 창이 넓어져 사용자가 실제로 겪는 쪽이다).
+    #
+    # 파일을 먼저 지우는 동안 메모리는 아직 '진행 중' 이므로, 그 창에서는 status() 도
+    # claim() 도 '진행 중' 이라는 **같은 답**을 한다. 두 층이 어긋나는 순간이 사라진다.
+    with _LOCK:
+        token = _OWNED.get(sid, "")               # 소유 표시는 파일을 지울 때까지 들고 있는다
+    if token:
+        _release_file(sid, token)
     with _LOCK:
         prev = _JOBS.get(sid) or {}
         _JOBS[sid] = {"running": False,
@@ -332,17 +362,7 @@ def release(sid: str, message: str = "", result: dict | None = None,
             _JOBS[sid]["error"] = str(error)
         if isinstance(result, dict):
             _JOBS[sid]["result"] = dict(result)   # 사본 — 호출부가 나중에 고쳐도 표시는 그대로
-        token = _OWNED.get(sid, "")               # **아직 내리지 않는다** — 아래 설명
-    # 순서가 중요하다. 예전에는 _OWNED 에서 먼저 내리고 그 다음에 파일을 지웠는데, 그 사이
-    # 한 순간 "_JOBS 는 끝났다고 하고 _OWNED 는 비었는데 잠금 파일은 아직 있는" 상태가 된다.
-    # status() 는 그 상태를 '다른 프로세스가 굽는 중' 으로 읽어, 방금 끝난 작업을
-    # **내 pid 를 가리키며** "다른 곳에서 생성 중입니다" 라고 답했다(CF07 이 이따금 여기서 깨졌다).
-    # 파일을 먼저 지우고 소유 표시를 나중에 내리면 그 창이 아예 열리지 않는다 —
-    # 파일이 있는 동안에는 _OWNED 가 항상 sid 를 들고 있으므로 status() 가 메모리 쪽을 본다.
-    if token:
-        _release_file(sid, token)
-    with _LOCK:
-        _OWNED.pop(sid, None)
+        _OWNED.pop(sid, None)                     # 파일이 없어진 뒤에야 내린다(한 잠금 안에서)
 
 
 def release_all(message: str = "") -> list[str]:

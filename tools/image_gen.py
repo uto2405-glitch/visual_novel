@@ -27,6 +27,7 @@ from vn_core import VNError   # noqa: E402
 
 ENGINES = {"comfyui": "ComfyUI", "makefun": "MakeFun"}
 DEFAULT_ENGINE = "makefun"          # engine 키가 없는 옛 매니페스트 = MakeFun 단독 시절
+FREE_ENGINE = "comfyui"             # 설정이 있으면 폴백은 무료 쪽으로 — 아래 _fallback_engine
 _CLIENTS = {"comfyui": comfyui_client, "makefun": makefun_client}
 HEALTH_TIMEOUT = 3                  # 상태 버튼 한 번에 화면이 3초 넘게 멈추지 않게
 
@@ -48,23 +49,39 @@ _WARNED_ENGINES: set[str] = set()   # 모르는 엔진 값 — 값마다 프로�
 _WARN_CAP = 50                      # 방어적 상한(매니페스트가 계속 바뀌어도 집합이 무한히 자라지 않게)
 
 
+def _fallback_engine(ig: dict) -> str:
+    """`engine` 을 못 읽었을 때 **어느 쪽으로 떨어질 것인가.**
+
+    예전에는 무조건 MakeFun 이었다. 그 규칙은 engine 키가 생기기 전 매니페스트(= MakeFun
+    단독 시절)를 그대로 열어도 동작이 바뀌지 않게 하려는 것이었는데, 오타 하나에도 **유료
+    원격 엔진**으로 떨어진다는 뜻이기도 하다 — `engien: "comfyui"` 한 글자가 과금이 된다.
+
+    그래서 조건을 하나 붙인다: 이 매니페스트에 **ComfyUI 설정 블록이 있으면** 무료 쪽으로
+    떨어진다. 옛 매니페스트에는 그 블록이 없으므로 호환은 글자 그대로 유지되고, 무료
+    엔진을 설정해 둔 작품에서 오타가 과금으로 이어지는 길만 닫힌다.
+    """
+    return FREE_ENGINE if isinstance(ig.get("comfyui"), dict) else DEFAULT_ENGINE
+
+
 def active_engine(mf: dict | None = None) -> str:
-    """매니페스트가 고른 기본 엔진. 모르는 값은 MakeFun 으로 떨어뜨리되 로그에 남긴다.
+    """매니페스트가 고른 기본 엔진. 못 읽는 값은 폴백하되 로그에 남긴다(:func:`_fallback_engine`).
 
     경고는 **값마다 한 번**이다. 이 함수는 webapp.state() 가 부르고 스튜디오는 그 상태를
     주기적으로 폴링하므로, 매번 경고하면 오타 하나가 logs/webapp.log 를 같은 줄로 채운다
     (진짜 사고가 그 사이에 묻힌다). 사실은 한 번 말하면 충분하고, 값이 바뀌면 다시 말한다.
     """
-    engine = str(_ig(mf).get("engine", "") or "").strip().lower()
+    ig = _ig(mf)
+    fallback = _fallback_engine(ig)
+    engine = str(ig.get("engine", "") or "").strip().lower()
     if not engine:
-        return DEFAULT_ENGINE
+        return fallback
     if engine not in ENGINES:
         if engine not in _WARNED_ENGINES:
             if len(_WARNED_ENGINES) < _WARN_CAP:
                 _WARNED_ENGINES.add(engine)
             log.warning("image_generator.engine=%r 는 모르는 값 — %s 로 동작합니다(이 값은 한 번만 알립니다)",
-                        engine, DEFAULT_ENGINE)
-        return DEFAULT_ENGINE
+                        engine, fallback)
+        return fallback
     return engine
 
 

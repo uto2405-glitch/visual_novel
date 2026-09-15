@@ -4093,6 +4093,16 @@ def cf06(b: Box):
     eq(len([l for l in lines if "midjourney" in l]), 1,
        f"같은 값을 여러 번 경고(상태 폴링이 로그를 채운다) — {lines[:3]}")
     eq(len([l for l in lines if "stablehorde" in l]), 1, "값이 바뀌면 한 번은 말해야 한다")
+    # 폴백의 방향 — 오타 하나가 **유료 엔진 호출**이 되지 않게. 옛 매니페스트(ComfyUI 블록
+    # 없음)는 예전 그대로 MakeFun 으로 떨어지고(위 세 줄), 무료 엔진을 설정해 둔 작품에서는
+    # 무료 쪽으로 떨어진다. `engien: "comfyui"` 같은 한 글자 오타가 과금이 되던 길이다.
+    free = {"image_generator": {"comfyui": {"checkpoint": "x.safetensors"}}}
+    eq(ig.active_engine(free), "comfyui", "ComfyUI 설정이 있는데 engine 없음 → 유료 폴백")
+    eq(ig.active_engine({"image_generator": dict(free["image_generator"], engine="engien")}), "comfyui",
+       "ComfyUI 설정이 있는데 오타 → 유료 폴백(과금)")
+    eq(ig.active_engine({"image_generator": dict(free["image_generator"], engine="makefun")}), "makefun",
+       "명시한 값은 언제나 이긴다 — 사용자가 고른 엔진이 조용히 바뀌면 안 된다")
+
     e = raises(lambda: ig.client("dalle"), err, "요청 body 의 모르는 엔진이 통과")
     has(str(e), "comfyui", "가능한 엔진 안내")
     ok(ig.client("comfyui") is ig.comfyui_client and ig.client("makefun") is ig.makefun_client, "client() 매핑")
@@ -6776,6 +6786,36 @@ def u11d(b: Box):
         ok(not lock.exists(), "release 뒤에도 잠금 파일이 남음(다음 생성이 막힌다)")
         eq(gj.status(sid)["running"], False, "release 뒤에도 도는 것으로 보고됨")
         has(gj.status(sid)["message"], "완료", "release 가 남긴 문구")
+
+        # **해제 순서 자체를 잠근다** — 파일이 먼저, 메모리 표시가 나중. 그 반대이면
+        # "끝났다" 고 답해 놓고 바로 이어지는 claim() 이 내 pid 를 가리키며 거절한다.
+        seen = {}
+        real = gj._release_file
+
+        def watching(s, token):
+            with gj._LOCK:
+                seen["running_when_file_goes"] = bool((gj._JOBS.get(s) or {}).get("running"))
+                seen["owned_when_file_goes"] = s in gj._OWNED
+            return real(s, token)
+
+        gj.claim(sid, "생성")
+        with patched(gj, "_release_file", watching):
+            gj.release(sid, "완료 — 후보 1장")
+        eq(seen.get("running_when_file_goes"), True,
+           "잠금 파일을 지우기 전에 이미 '끝남' 으로 바뀌어 있다 — status 와 claim 이 어긋나는 창")
+        eq(seen.get("owned_when_file_goes"), True,
+           "소유 표시를 먼저 내렸다 — 그 창에서 내 잠금이 남의 것으로 보인다")
+        gj.claim(sid, "생성")          # 끝난 직후 다시 잡는 것이 실제 사용 흐름이다
+        gj.release(sid, "완료")
+
+        # 안전판: 내 pid 가 적혔는데 내 소유 표시가 없는 잠금(놓다 만 잔해)은 회수한다.
+        # status() 는 이미 '내 pid 면 다른 곳이 아니다' 를 안다 — 두 층이 같은 규칙을 봐야 한다.
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps({"scene_id": sid, "pid": os.getpid(), "host": gj._HOST,
+                                    "label": "생성", "token": "남의토큰"}), encoding="utf-8")
+        eq(gj.status(sid).get("running"), False, "내 pid 잠금을 '다른 곳' 으로 읽었다")
+        gj.claim(sid, "생성")          # 여기서 VNError 가 나면 화면과 서버가 서로 다른 말을 한다
+        gj.release(sid, "완료")
     finally:
         with contextlib.suppress(Exception):
             gj.release(sid)

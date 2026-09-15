@@ -65,7 +65,7 @@
 | 필드 | 타입 | 필수 | 읽는 쪽 |
 |---|---|---|---|
 | `provider` | str | ⬜ | 표기용 (스튜디오 칩 · 버튼 툴팁) |
-| `engine` | str | ⬜ | `image_gen` — `"comfyui"` 또는 `"makefun"`. **없으면 `makefun`**(구 매니페스트 호환) |
+| `engine` | str | ⬜ | `image_gen` — `"comfyui"` 또는 `"makefun"`. 없거나 오타면 **`comfyui` 블록이 있을 때 `comfyui`, 없으면 `makefun`**(구 매니페스트 호환 — `image_gen._fallback_engine`). 오타 한 글자가 유료 엔진 호출이 되지 않게 한 쪽이다 |
 | `max_long_edge_px` | int | ⬜ | 두 엔진 공통 **생성 크기 상한** (기본 2048 · 하드 상한 4096) |
 | `comfyui` | obj | ⬜ | `comfyui_client` — 아래 표 |
 | `makefun` | obj | ⬜ | `makefun_client` — 아래 표 |
