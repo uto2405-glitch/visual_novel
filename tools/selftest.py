@@ -6450,6 +6450,72 @@ def u21(b: Box):
           "golden hour", "노을이 아닌 컷에 golden hour 가 새어 들어감")
 
 
+@test("unit", "U22 손편집한 장면의 두 낱말을 린터가 읽는다 — 편집 경로만 막으면 절반이다")
+def u22(b: Box):
+    """`intimacy` 와 `wardrobe` 는 **편집 경로에서만** 좁혀져 있었다
+    (`scene_ops._apply_field`: 오타 거부 · dict 강제). 하지만 장면은 디스크의 JSON 이고
+    이 저장소는 손으로도 고친다 — 그 경로에는 관문이 하나도 없었고, `check_protocol` 은
+    두 필드를 아예 보지 않으며(A2/A6 는 양쪽 모양을 다 통과시킨다), `scene_lint` 도
+    조용했다. 그래서 잘못 적힌 두 낱말이 **아무 데서도 티가 나지 않았다**.
+
+    조용한 쪽이 위험한 이유가 서로 다르다.
+
+    ① `intimacy` 오타는 연출을 **정확히 반대로** 뒤집는다. `is_distance_beat` 는 값이
+       비어 있지 않으면 `emotion` 을 아예 보지 않고 `== "distant"` 하나만 묻는다 —
+       `"distatn"` 은 거짓 = '가깝다' 가 되어, 감정으로는 거리 비트인 컷에 애정 태그가
+       도로 붙는다. 이 작품에서 그 컷은 분기를 결정하는 SCENE-009(서운함)다.
+    ② `wardrobe` 가 dict 가 아니면 `scene_wardrobe` 가 조용히 `''` 를 돌려주므로
+       옷은 영원히 안 바뀐다. 사람은 옷을 지정했다고 믿는다.
+
+    둘 다 '규격 위반' 이 아니라 '설계 사고' 라 자문 계층이 올바른 자리다 —
+    그래서 여기서도 종료 코드는 0 이어야 한다(검사기 불침범).
+    """
+    pb, sl = b.mod("prompt_build"), b.mod("scene_lint")
+
+    def rules(sc: dict) -> list:
+        got = []
+        sl._check_intimacy([sc], lambda lv, rule, msg, sid="-": got.append(rule))
+        sl._check_wardrobe([sc], {"characters": []},
+                           lambda lv, rule, msg, sid="-": got.append(rule))
+        return got
+
+    base = {"scene_id": "SCENE-009", "emotion": "서운함"}
+
+    # ① intimacy — 오타는 잡고, 올바른 값과 빈 값은 조용하다
+    ok(pb.is_distance_beat(base), "감정만으로는 거리 비트여야 한다(전제)")
+    for typo in ("distatn", "far", "DISTANT_", "distant2"):
+        sc = dict(base, intimacy=typo)
+        ok(not pb.is_distance_beat(sc),
+           f"{typo!r} 가 거리 비트로 읽혔다 — 이 테스트의 전제가 깨졌다")
+        ok("intimacy-value" in rules(sc),
+           f"intimacy {typo!r} 가 조용히 연출을 뒤집는데 린터가 그냥 보냄")
+    for good in ("distant", "close", "DISTANT", " close ", ""):
+        eq([r for r in rules(dict(base, intimacy=good)) if r == "intimacy-value"], [],
+           f"정상 intimacy {good!r} 에 경고가 남음")
+    eq([r for r in rules(base) if r == "intimacy-value"], [],
+       "intimacy 키가 없는 장면(= 예전 그대로)에 경고가 남음")
+    ok("intimacy-value" in rules(dict(base, intimacy=7)), "문자열이 아닌 intimacy 를 그냥 보냄")
+
+    # ② wardrobe — 모양이 틀리면 잡고, 없거나 올바르면 조용하다
+    for bad in ("outing", ["default"], 7):
+        sc = dict(base, wardrobe=bad)
+        eq(pb.scene_wardrobe(sc, "CHAR-001"), "",
+           f"{bad!r} 에서 wardrobe 가 조용히 무시되지 않았다 — 전제가 깨졌다")
+        ok("wardrobe-shape" in rules(sc),
+           f"wardrobe 가 {type(bad).__name__} 인데 린터가 그냥 보냄(옷이 영영 안 바뀐다)")
+    eq([r for r in rules(base) if r == "wardrobe-shape"], [],
+       "wardrobe 키가 없는 장면(= 예전 그대로)에 경고가 남음")
+    eq([r for r in rules(dict(base, wardrobe={"CHAR-001": "default"}))
+        if r == "wardrobe-shape"], [], "정상 wardrobe 에 모양 경고가 남음")
+
+    # ③ 자문 계층의 계약 — 이 경고들이 검사기를 오염시키지 않는다
+    out = sl.run() if hasattr(sl, "run") else None
+    if isinstance(out, dict):
+        eq([f for f in out["findings"]
+            if f["rule"] in ("intimacy-value", "wardrobe-shape")], [],
+           "살아 있는 저장소에 새 경고가 떠 있다(장면 파일이 실제로 잘못 적혀 있다)")
+
+
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")
 def u08(b: Box):
     gj = need_mod(b, "gen_jobs")

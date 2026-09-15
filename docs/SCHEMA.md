@@ -316,6 +316,7 @@ OK   레퍼런스 이미지: 2/3명 등록 (생성마다 최대 2장 첨부)
 | 잠글 불변식 | `"default"` 배리에이션의 `tags` 는 그 인물의 `prompt_tags` 와 같아야 하고, `anchor` 는 `wardrobe_default` 문구를 담아야 한다(자가진단 U19 가 잠근다) |
 | 오타를 쓰면 | 프롬프트는 **깨지지 않고 예전 그대로** 나간다. 그 침묵은 `scene_lint` 가 자문으로 알려 준다(`wardrobe-variant`) |
 | `tags` 를 비우면 | 앵커만 덧붙고 옷은 안 바뀐다(위 표 2행). `scene_lint` 가 `wardrobe-tags` 로 알려 준다 |
+| 객체가 아니면 | `"wardrobe": "outing"` 처럼 적으면 **통째로 무시된다** — `scene_wardrobe` 가 조용히 `''` 를 돌려주고 옷은 영영 안 바뀐다. 편집 경로는 이 모양을 거절하지만 손으로 고친 파일에는 남으므로 `scene_lint` 가 `wardrobe-shape` 로 알려 준다 |
 | 한 사람만 지정하면 | **하지 마라.** 실측에서 여자에게만 배리에이션을 준 4장 중 3장에서 그 트렌치코트가 **남자에게 번졌다**(§2.3 프린트 절의 같은 원인). 한 컷에 쓰면 등장인물 전원에게 준다 |
 | 다시 그려야 하나 | 그렇다. 선언은 프롬프트를 바꾸고, 프롬프트가 바뀐 컷은 다시 구워야 그림이 따라온다 |
 
@@ -471,7 +472,7 @@ FAIL 이 아니다.
 | `purpose` | str | ⬜ | 프롬프트 입력 · 스튜디오 카드 · 컨택트시트 라벨 · 감상본 | — |
 | `action_beat` | str | ⬜ | 프롬프트 입력 · 직전 장면 연속성 | — |
 | `emotion` | str | ⬜ | 프롬프트 입력 · `scene_lint` 감정 반복 | — |
-| `intimacy` | str | ⬜ | **애정 태그 억제**(`prompt_build.is_distance_beat`) — `"distant"` / `"close"` / 빈 값(=`emotion` 에서 자동 판정) | — |
+| `intimacy` | str | ⬜ | **애정 태그 억제**(`prompt_build.is_distance_beat`) — `"distant"` / `"close"` / 빈 값(=`emotion` 에서 자동 판정). 그 밖의 값은 조용히 `close` 로 읽혀 연출이 뒤집히므로 `scene_lint` 가 `intimacy-value` 로 알려 준다 | — |
 | `camera.shot` | str | ⬜ | 프롬프트 입력 · **프롬프트 구도 힌트·거리 태그**(`prompt_build`) · `scene_lint` 컷 반복·어휘 | — |
 | `camera.angle` | str | ⬜ | 프롬프트 입력 · `scene_lint` 어휘 | — |
 | `camera.framing` | str | ⬜ | 프롬프트 입력 | — |
@@ -568,6 +569,7 @@ SCENE-010 을 3시드 × 5안으로 구워 본 결과:
 | 무엇을 보나 | 규칙 |
 |---|---|
 | `intimacy` | 값이 있으면 **그것이 이긴다** — `"distant"` 면 거리 비트, 그 밖의 값(`"close"` 등)이면 아니다 |
+| 오타를 쓰면 | `"distatn"` 은 `"distant"` 가 아니므로 **'가깝다'로 읽혀** `emotion` 판정을 덮어쓴다 — 거리 비트인 컷에 애정 태그가 도로 붙어 연출이 정확히 반대로 뒤집힌다. 편집 경로(`scene_ops._apply_field`)는 값을 좁히지만 손편집에는 관문이 없어 `scene_lint` 의 `intimacy-value` 가 그 자리를 메운다(자가진단 U22) |
 | `emotion` | `intimacy` 가 비었을 때만. `prompt_build.DISTANCE_WORDS` 가 부분문자열로 걸리면 거리 비트 |
 | `purpose` · `action_beat` | **보지 않는다** |
 

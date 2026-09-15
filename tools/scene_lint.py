@@ -246,6 +246,11 @@ def _check_wardrobe(scenes, mf, add) -> None:
       * `wardrobe-default-tags` — `"default"` 배리에이션의 `tags` 가 그 인물의 `prompt_tags` 와
         다르다. 배리에이션은 태그 줄을 **통째로 대신하므로**, 사람이 가장 안전하다고 믿는
         `"default"` 를 가리킨 컷이 조용히 다른 옷을 입게 된다.
+      * `wardrobe-shape` — `wardrobe` 가 객체가 아니다(`"wardrobe": "outing"` 처럼 문자열).
+        편집 경로(`scene_ops._apply_field`)는 이 모양을 거절하지만 **손으로 고친 장면 파일**
+        에는 그대로 남는다. `prompt_build.scene_wardrobe` 는 dict 가 아니면 조용히 `''` 를
+        돌려주므로 옷은 영원히 안 바뀌고 아무 데서도 티가 나지 않는다 — 바로 이 린터가
+        메우라고 있는 침묵이다.
     """
     chars = {_s(c.get("character_id")): c for c in mf.get("characters", []) if isinstance(c, dict)}
     for cid, c in chars.items():
@@ -266,9 +271,14 @@ def _check_wardrobe(scenes, mf, add) -> None:
                 "조용히 다른 옷을 입는다")
     for sc in scenes:
         w = sc.get("wardrobe")
+        sid = _s(sc.get("scene_id", "?"))
+        if w is not None and not isinstance(w, dict):
+            add("warn", "wardrobe-shape",
+                f"wardrobe 가 객체가 아님({type(w).__name__}) — "
+                '{"CHAR-001": "outing"} 형태여야 한다. 지금은 통째로 무시돼 옷이 안 바뀐다', sid)
+            continue
         if not isinstance(w, dict) or not w:
             continue
-        sid = _s(sc.get("scene_id", "?"))
         for cid, vid in w.items():
             cid, vid = _s(cid), _s(vid).strip()
             if not vid:
@@ -292,6 +302,37 @@ def _check_wardrobe(scenes, mf, add) -> None:
                 add("info", "wardrobe-tags",
                     f"{cid} 의 배리에이션 '{vid}' 에 tags 가 없음 — 앵커만으로는 옷이 바뀌지 않는다"
                     "(실측: 기존 의상 위에 새 의상이 겹쳤다). 그 의상일 때의 태그 줄 전체를 적을 것", sid)
+
+
+def _check_intimacy(scenes, add) -> None:
+    """`intimacy` 에 알 수 없는 값이 적혀 있는가 — 조용히 **반대로** 읽히는 한 글자.
+
+    `prompt_build.is_distance_beat` 는 값이 비어 있지 않으면 `emotion` 을 아예 보지 않고
+    `== "distant"` 하나만 묻는다. 그래서 `"distatn"` 같은 오타는 거짓 = '가깝다' 가 되어
+    **감정으로는 거리 비트인 컷에 애정 태그를 도로 붙인다** — 연출이 정확히 뒤집힌다.
+
+    편집 경로(`scene_ops._apply_field`)는 이 값을 이미 좁혀 두었지만, 장면은 디스크의
+    JSON 이라 손으로도 고친다. 그 경로에는 아무 관문이 없다.
+    """
+    ok = ("distant", "close")
+    for sc in scenes:
+        raw = sc.get("intimacy")
+        if raw is None:
+            continue
+        sid = _s(sc.get("scene_id", "?"))
+        if not isinstance(raw, str):
+            add("warn", "intimacy-value",
+                f"intimacy 가 문자열이 아님({type(raw).__name__}) — "
+                f"{'/'.join(ok)} 중 하나여야 한다", sid)
+            continue
+        val = raw.strip().lower()
+        if not val or val in ok:
+            continue
+        emo = _s(sc.get("emotion", ""))
+        reads = "가깝다(애정 태그 유지)"          # distant 가 아닌 값은 전부 '가깝다'로 읽힌다
+        add("warn", "intimacy-value",
+            f"intimacy '{raw}' 는 알 수 없는 값 — {'/'.join(ok)} 중 하나여야 한다. "
+            f"지금은 조용히 {reads}로 읽혀 emotion('{emo}') 판정을 덮어쓴다", sid)
 
 
 def _check_time(scenes, add) -> None:
@@ -634,6 +675,7 @@ def lint_scenes() -> dict:
     _check_offcast(scenes, mf, add)
     _check_composition(scenes, mf, add)
     _check_wardrobe(scenes, mf, add)
+    _check_intimacy(scenes, add)
     _check_time(scenes, add)
     _check_prompt_state(scenes, add)
     _check_camera_vocab(scenes, add)
