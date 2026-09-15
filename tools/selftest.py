@@ -6180,6 +6180,32 @@ def u18(b: Box):
         mfp.write_text(keep, encoding="utf-8")
 
 
+@test("unit", "U21 prompt_build — '노을' 은 두 낱말이다(golden hour) · 린터는 한 버킷으로 읽는다")
+def u21(b: Box):
+    """넓게 잡은 노을 컷이 **블루아워로 떨어지던** 문제의 잠금장치.
+
+    시간대 낱말은 프롬프트 맨 끝 한 토큰이라, 하늘이 넓게 보이는 컷에서는 장소 앵커의
+    밤 조명 낱말에 밀린다(SCENE-012 하늘 파랑 .670 = 밤 컷보다 더 파랬다). 실측에서
+    자리를 바꾸는 것은 오히려 나빴고(.255 → .309) 화려한 문구는 과보정이었다 —
+    `golden hour` **한 낱말**만 들어맞았다(010 · 012 3/3, 승인 컷 색 대역 안).
+
+    여기서 잠그는 것은 둘이다 — ① 그 낱말이 사라지지 않는다, ② 두 낱말이 `scene_lint`
+    에서 **한 시간대**로 읽힌다(갈리면 모든 노을 컷에 `time-mixed` 경고가 새로 뜬다).
+    """
+    pb, sl = b.mod("prompt_build"), b.mod("scene_lint")
+    eq(pb.TIME_EN["노을"], "sunset, golden hour", "노을 시간대 낱말(실측으로 고정된 값)")
+    eq(sorted(sl._prompt_hits(pb.TIME_EN["노을"])), ["evening"],
+       "두 낱말이 서로 다른 시간대로 읽힌다 — 노을 컷마다 time-mixed 경고가 뜬다")
+    eq(pb.TIME_EN["밤"], "night", "밤은 실측이 정상이라 손대지 않는다(근거 없는 변경 금지)")
+
+    sc = read_json(b.root / "examples" / "scenes" / "SCENE-001.json")
+    text = pb.compose_image_prompt(dict(sc, time="노을"), action="walking along the river")
+    ok(text.rstrip().endswith("sunset, golden hour"),
+       f"시간대 낱말이 프롬프트 꼬리에 그대로 붙지 않음: …{text[-60:]!r}")
+    hasnt(pb.compose_image_prompt(dict(sc, time="오후"), action="walking along the river"),
+          "golden hour", "노을이 아닌 컷에 golden hour 가 새어 들어감")
+
+
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")
 def u08(b: Box):
     gj = need_mod(b, "gen_jobs")
