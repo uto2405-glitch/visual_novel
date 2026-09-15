@@ -21,7 +21,7 @@
       },
       "checkpoint": "waiIllustriousSDXL_v170.safetensors",
       "steps": 30,
-      "negative_prompt": "text, letters, speech bubbles, watermark, signature, lowres, bad anatomy, bad hands, extra fingers, missing fingers, blurry, jpeg artifacts, blonde hair, platinum hair",
+      "negative_prompt": "text, letters, speech bubbles, watermark, signature, lowres, bad anatomy, bad hands, extra fingers, missing fingers, blurry, jpeg artifacts, blonde hair, platinum hair, star print, printed star, star pattern on clothes, star logo, star on shirt",
       "base_long_edge_px": 1248,
       "hires_denoise": 0.4,
       "hires_steps": 16,
