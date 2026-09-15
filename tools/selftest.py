@@ -6444,6 +6444,21 @@ def u09(b: Box):
         eq(sc["status"], before["status"], "편집이 상태를 움직임")
         ok("purpose" in (res.get("updated") or []), f"updated 목록 — {res}")
         eq(res.get("checker_pass"), True, f"편집 후 검사 — {str(res.get('fails'))[:200]}")
+        # 새로 생긴 선택 필드 둘 — 화이트리스트에만 올리고 **반영을 잊으면 조용히 사라진다**
+        # (실제로 그랬다: 저장은 성공했다고 답하는데 장면 파일에는 아무것도 남지 않았다).
+        update(sid, {"intimacy": "Distant", "wardrobe": {"CHAR-001": "outing", "CHAR-002": "  "}})
+        sc2 = b.scene(sid)
+        eq(sc2.get("intimacy"), "distant", "intimacy 가 저장되지 않음")
+        eq(sc2.get("wardrobe"), {"CHAR-001": "outing"}, "wardrobe 가 저장되지 않음(빈 값은 버린다)")
+        ok(b.mod("prompt_build").is_distance_beat(sc2), "저장된 intimacy 가 조립부 판정에 닿지 않음")
+        raises(lambda: update(sid, {"intimacy": "distatn"}), err,
+               "오타 intimacy 가 통과 — 조용히 '가깝다' 로 읽혀 연출이 뒤집힌다")
+        raises(lambda: update(sid, {"wardrobe": "outing"}), err, "문자열 wardrobe 가 통과")
+        update(sid, {"intimacy": "", "wardrobe": {}})
+        sc3 = b.scene(sid)
+        ok("intimacy" not in sc3 and "wardrobe" not in sc3,
+           f"빈 값이 키를 지우지 않음 — {sc3.get('intimacy')!r} · {sc3.get('wardrobe')!r}")
+
         # 보호 필드는 하나씩 넣어도 전부 거부되고, 파일은 그대로여야 한다
         keep = b.scene(sid)
         for bad in ({"status": "APPROVED"}, {"review": {"human": "PASS"}},

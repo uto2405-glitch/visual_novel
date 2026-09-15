@@ -69,6 +69,8 @@ EDITABLE_FIELDS = ("purpose", "action_beat", "emotion", "intimacy", "time", "cam
 # 이유는 오류 메시지 때문이다("오타난 필드"와 "건드리면 안 되는 필드"는 다른 사고다).
 PROTECTED_FIELDS = ("status", "review", "assets", "prompt", "scene_id", "scene_order", "version")
 CAMERA_KEYS = ("shot", "angle", "framing", "focus")
+# intimacy 가 가질 수 있는 값 — 빈 값이면 감정에서 자동 판정한다(prompt_build.is_distance_beat).
+INTIMACY_VALUES = ("distant", "close")
 # 크롭 집합의 정본은 vn_core 다(자르기 방식·웹 검증·여기가 같은 값을 봐야 한다).
 CROP_MODES = vn_core.CROP_MODES
 CROP_ANCHORS = vn_core.CROP_ANCHORS
@@ -863,6 +865,33 @@ def _apply_field(sc: dict, key: str, value: Any) -> None:
             sc[key] = ep
     elif key == "characters":
         sc[key] = _id_list(value, "characters")
+    elif key == "intimacy":
+        # 애정 태그 억제의 수동 스위치(prompt_build.is_distance_beat). 오타를 받아 주면
+        # 'distatn' 이 조용히 '가깝다' 로 읽혀 연출이 뒤집히므로 여기서 값을 좁힌다.
+        val = _text(value, 20).lower()
+        if not val:
+            sc.pop(key, None)
+        elif val not in INTIMACY_VALUES:
+            raise VNError(f"intimacy 는 {'/'.join(INTIMACY_VALUES)} 중 하나이거나 비어 있어야 합니다: {val!r}")
+        else:
+            sc[key] = val
+    elif key == "wardrobe":
+        # {"CHAR-001": "outing"} — 없는 배리에이션을 가리켜도 프롬프트는 안 깨진다(예전 그대로).
+        # 그 침묵은 scene_lint(wardrobe-variant)가 알려 주므로 여기서는 모양만 본다.
+        if value in (None, "", {}, []):
+            sc.pop(key, None)
+        elif not isinstance(value, dict):
+            raise VNError('wardrobe 는 객체({"CHAR-001": "outing"})여야 합니다.')
+        else:
+            cleaned = {}
+            for cid, vid in value.items():
+                cid, vid = _text(cid, 40), _text(vid, 60)
+                if cid and vid:
+                    cleaned[cid] = vid
+            if cleaned:
+                sc[key] = cleaned
+            else:
+                sc.pop(key, None)
     elif key == "dialogue":
         sc[key] = _clean_dialogue(value)
     elif key == "camera":
