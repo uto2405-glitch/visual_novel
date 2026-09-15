@@ -63,7 +63,7 @@ _REVISE_HINT = "  python tools/advance_scene.py revise {sid} IMAGE --note \"사�
 # 함수(set_prompt/register_images/select_image/approve/revise)만이 만든다. 편집 경로로
 # status 를 쓸 수 있으면 승인 게이트가 폼 하나로 우회된다.
 EDITABLE_FIELDS = ("purpose", "action_beat", "emotion", "intimacy", "time", "camera", "dialogue",
-                   "characters", "location_id", "episode", "ending", "ending_label",
+                   "characters", "location_id", "episode", "ending", "ending_label", "wardrobe",
                    "print", "choices", "branch")
 # 편집 경로가 손대면 안 되는 필드 — 상태 전이 함수만이 만드는 값들. 따로 이름을 두는
 # 이유는 오류 메시지 때문이다("오타난 필드"와 "건드리면 안 되는 필드"는 다른 사고다).

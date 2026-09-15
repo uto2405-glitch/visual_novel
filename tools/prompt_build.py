@@ -277,7 +277,7 @@ def composition_tags(sc: dict, mf: dict | None = None) -> str:
     return ", ".join(out)
 
 
-def character_tags(ch: dict) -> str:
+def character_tags(ch: dict, variant: dict | None = None) -> str:
     """캐릭터 기준정보 → 그 인물의 앵커 **바로 앞**에 붙일 짧은 태그 한 줄.
 
     앵커만으로는 옷·머리색이 옆 사람에게 샌다 — 앵커는 사람이 읽는 문장이라 태그로 학습된
@@ -288,8 +288,15 @@ def character_tags(ch: dict) -> str:
 
     LLM 을 부르지 않는다 — 기준정보를 적힌 순서 그대로 옮기고 중복만 지운다(결정적).
     태그는 앵커를 **대체하지 않는다**: 원문은 뒤에 그대로 남으므로 A6 판정은 달라지지 않는다.
+
+    ``variant`` 는 그 컷의 의상 배리에이션(:func:`wardrobe_variant`)이다. 배리에이션이
+    `tags` 를 적어 두었으면 **그 줄이 `prompt_tags` 를 대신한다** — 옷을 실제로 갈아입히는
+    힘은 앵커가 아니라 이 태그 줄에서 나오기 때문이다(§ :func:`_character_block`).
+    안 적어 두었으면 예전 그대로다.
     """
-    raw = ch.get("prompt_tags")
+    raw = (variant or {}).get("tags")
+    if not isinstance(raw, list):            # 배리에이션이 태그 줄을 안 적었으면 예전 그대로
+        raw = ch.get("prompt_tags")
     if not isinstance(raw, list):
         return ""
     out, seen = [], set()
@@ -301,9 +308,44 @@ def character_tags(ch: dict) -> str:
     return ", ".join(out)
 
 
-def _character_block(ch: dict) -> str:
-    """인물 한 사람이 프롬프트에서 차지하는 덩어리 — `<인물 태그>, <앵커 원문>`."""
-    return ", ".join(p for p in (character_tags(ch), str(ch.get("prompt_anchor", "") or "").strip()) if p)
+def wardrobe_variant(ch: dict, variant_id: str) -> dict:
+    """그 인물의 `wardrobe_variants[]` 에서 `variant_id` 가 같은 항목(없으면 빈 dict).
+
+    없는 이름을 가리켜도 프롬프트는 깨지지 않고 **예전 그대로** 나온다 —
+    오타는 `scene_lint` 가 자문으로 알려 준다(`wardrobe-variant`).
+    """
+    vid = str(variant_id or "").strip()
+    if not vid:
+        return {}
+    raw = ch.get("wardrobe_variants")
+    for v in (raw if isinstance(raw, list) else []):
+        if isinstance(v, dict) and str(v.get("variant_id", "") or "").strip() == vid:
+            return v
+    return {}
+
+
+def scene_wardrobe(sc: dict, cid: str) -> str:
+    """장면이 그 인물에게 지정한 배리에이션 id — `wardrobe` 가 없으면 ''(예전 그대로)."""
+    w = sc.get("wardrobe")
+    return str(w.get(cid, "") or "").strip() if isinstance(w, dict) else ""
+
+
+def _character_block(ch: dict, variant: dict | None = None) -> str:
+    """인물 한 사람의 덩어리 — `<인물 태그>, <앵커 원문>[, wearing <배리에이션 anchor>]`.
+
+    **앵커 원문은 글자 하나 건드리지 않는다**(A6). 옷을 갈아입히는 힘은 앞의 **태그 줄**에서
+    나온다 — 실측(SCENE-010 · 012 × 2시드 · 6안)에서 앵커를 갈아 끼우거나(SCHEMA 가 오래
+    제안해 두었던 방식 · A6 FAIL) 뒤에 덧붙이기만 해서는 **옷이 바뀌지 않았다**
+    (가슴 분홍 비율 .0636 → .0539 / .0744 = 변화 없음, 기존 옷 위에 새 옷이 겹쳤을 뿐).
+    태그 줄까지 바꾸면 .0095 로 떨어졌다(4/4). 덧붙인 앵커도 값은 한다 —
+    태그만 바꾸고 앵커를 안 붙이면 .0207 로 2.2배 지저분했다.
+    """
+    anchor = str(ch.get("prompt_anchor", "") or "").strip()
+    wear = str((variant or {}).get("anchor", "") or "").strip()
+    parts = [character_tags(ch, variant), anchor]
+    if wear:
+        parts.append("wearing " + wear)
+    return ", ".join(p for p in parts if p)
 
 
 def compose_image_prompt(sc: dict, action: str | None = None) -> str:
@@ -328,12 +370,17 @@ def compose_image_prompt(sc: dict, action: str | None = None) -> str:
     parts = [visual_style(sc) + ", portrait 2:3", _shot_phrase(cam.get("shot", "medium")),
              composition_tags(sc, mf)]
     ids = scene_cast(sc, mf)
+
+    def block(cid: str) -> str:
+        ch = chars[cid]
+        return _character_block(ch, wardrobe_variant(ch, scene_wardrobe(sc, cid)))
+
     # 인물 태그는 **그 인물의 앵커 바로 앞**에 붙는다(character_tags) — 앵커 원문은 그대로다.
     if ids:
-        parts.append(_character_block(chars[ids[0]]))
+        parts.append(block(ids[0]))
     parts.append(action)
     for cid in ids[1:]:
-        parts.append("with " + _character_block(chars[cid]))
+        parts.append("with " + block(cid))
     if sc.get("location_id") in locs:
         parts.append(locs[sc["location_id"]].get("prompt_anchor", ""))
     t = str(sc.get("time", "")).strip()

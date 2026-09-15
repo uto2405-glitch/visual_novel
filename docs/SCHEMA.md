@@ -201,8 +201,8 @@ SDXL 은 1MP 근처를 벗어날수록 인물이 갈라진다. 값을 지어내�
 | `reference_images` | list[str] | ⬜ | 사람 | **이미지 생성에 첨부**(`makefun_client` → `input_images`) · 프롬프트 입력의 첨부 안내 | — |
 | `prompt_anchor` | str | ⚠ | 사람 | 프롬프트 조립 · `scene_lint` 역방향 검사 | **A6 필수** |
 | `prompt_tags` | list[str] | ⬜ | 사람 | **프롬프트 조립**(`prompt_build.character_tags`) — 앵커 바로 앞에 붙는 짧은 인물 태그 | — |
-| `wardrobe_default` | str | ⬜ | 사람 | **(없음)** — 아래 참조 | — |
-| `wardrobe_variants[]` | list[obj] | ⬜ | 사람 | **(없음)** — 아래 참조 | — |
+| `wardrobe_default` | str | ⬜ | 사람 | **배리에이션의 기준 문구** — `prompt_anchor` 안에 글자 그대로 있어야 한다(`scene_lint` 자문 · 자가진단 U19) | — |
+| `wardrobe_variants[]` | list[obj] | ⬜ | 사람 | **프롬프트 조립**(`prompt_build.wardrobe_variant`) — 장면의 `wardrobe` 가 가리킬 때만 | — |
 
 **`prompt_anchor` 는 사실상 필수다.** 장면이 `IMAGE` 단계에 오르면 A6 이 "그 캐릭터의
 `prompt_anchor` 가 기준정보에 없음"으로 FAIL 한다. 컷 간 얼굴·의상 일관성의 유일한 근거다.
@@ -268,30 +268,56 @@ OK   레퍼런스 이미지: 2/3명 등록 (생성마다 최대 2장 첨부)
 > 워크플로우의 `visual_reference` 게이트(`workflow.human_gates`)가 `scene_plan` 앞에 있는
 > 이유가 이것이다.
 
-#### 의상 배리에이션 — 정의만 있고 **아직 연결되지 않았다**
+#### 의상 배리에이션 — 이제 **연결됐다** (장면의 `wardrobe` 가 가리킬 때만)
 
-`wardrobe_default` 와 `wardrobe_variants[]` 는 **어떤 코드도 읽지 않는다.** 장면에서
-어느 배리에이션을 쓸지 지정할 방법이 없어 연결 자체가 불가능한 상태다.
-
-배리에이션 항목의 모양(작성해 두면 나중에 그대로 쓰인다):
+장면이 `wardrobe` 로 가리키면 그 컷에서만 다른 옷을 입는다. 가리키지 않으면 예전 그대로다 —
+**이 연결은 기존 장면을 하나도 바꾸지 않는다**(선언하지 않은 12장의 프롬프트는 글자까지 동일).
 
 | 필드 | 타입 | 뜻 |
 |---|---|---|
 | `variant_id` | str | 장면에서 가리킬 키 (`"default"`, `"summer_festival"` …) |
 | `label` | str | 사람이 보는 이름 (`"여름 축제"`) |
 | `season` | str | 계절 힌트 (`"봄"` · `"공용"`) |
-| `anchor` | str | 프롬프트에 그대로 들어갈 영문 구절 |
+| `anchor` | str | 프롬프트에 그대로 들어갈 영문 구절 — 앵커 **뒤에** `wearing <anchor>` 로 붙는다 |
+| `tags` | list[str] | **그 의상일 때의 태그 줄 전체.** 있으면 `prompt_tags` 대신 이 값을 쓴다. 없으면 앵커만 붙고 — **옷은 안 바뀐다**(아래 실측) |
 
-연결될 때 장면 쪽에 붙을 규약(**지금은 쓰지 마라**):
+장면 쪽 규약(§2.2 `wardrobe`):
 
 ```json
-"wardrobe": { "CHAR-001": "summer_festival" }
+"wardrobe": { "CHAR-001": "outing", "CHAR-002": "outing" }
 ```
 
-장면의 선택 필드로 두고, 프롬프트 조립 시 그 캐릭터의 `prompt_anchor` 안 의상 구절을 해당
-`anchor` 로 갈아 끼우는 방식이다. **이 연결은 A6(앵커 포함 검사)의 판정 대상과 직접 맞물리므로**
-— 앵커 원문이 바뀌면 A6 이 "앵커가 프롬프트에 없음"으로 FAIL 할 수 있다 — 별도 작업으로
-A6 상호작용을 확인한 뒤에 구현한다. 그때까지 **장면 데이터에 `wardrobe` 를 넣지 않는다.**
+##### 옷을 바꾸는 것은 **태그 줄**이다 — 앵커가 아니다 (실측)
+
+오래도록 이 문서는 "그 캐릭터의 `prompt_anchor` 안 의상 구절을 배리에이션 `anchor` 로 갈아
+끼운다" 고 적어 두었다. **그 방식은 듣지 않을 뿐 아니라 A6 를 깬다.** SCENE-010 · 012 를
+2시드씩, 여섯 안으로 구워 가슴 부위 분홍(원래 가디건) 픽셀 비율을 쟀다:
+
+| 안 | 비율(4장 평균) | A6 | 결과 |
+|---|---|---|---|
+| 지금 | .0636 | PASS | 기준 |
+| 앵커 원문 + `, wearing <배리에이션 anchor>` | .0539 | PASS | **변화 없음** — 기존 옷 위에 새 옷이 겹쳤다 |
+| 앵커 안 의상 구절을 갈아 끼우기(옛 제안) | .0744 | **FAIL** | **변화 없음** — 게다가 앵커 원문이 사라져 A6 가 떨어진다 |
+| 갈아 끼우기 + 태그 줄 교체 | .0052 | **FAIL** | 옷은 깨끗이 바뀌지만 A6 가 떨어진다 |
+| **태그 줄 교체 + 앵커 원문 + `, wearing <anchor>`** | **.0095** | **PASS** | **채택.** 4/4 가 기준본 최저값보다 낮다 |
+| 태그 줄만 교체(앵커 덧붙이지 않음) | .0207 | PASS | 위보다 2.2배 지저분 — 덧붙인 앵커도 값을 한다 |
+
+그래서 조립 모양은 이렇다(§2.3):
+
+```
+<배리에이션 tags 또는 인물 prompt_tags>, <앵커 원문 그대로>, wearing <배리에이션 anchor>, …
+```
+
+**앵커 원문은 한 글자도 건드리지 않으므로 A6 는 그대로 통과한다**(검사기 수정 0줄).
+`wardrobe` 는 A2 의 필수 키 목록에도 없어 검사기에 보이지 않는다.
+
+| 항목 | 규칙 |
+|---|---|
+| 잠글 불변식 | `"default"` 배리에이션의 `tags` 는 그 인물의 `prompt_tags` 와 같아야 하고, `anchor` 는 `wardrobe_default` 문구를 담아야 한다(자가진단 U19 가 잠근다) |
+| 오타를 쓰면 | 프롬프트는 **깨지지 않고 예전 그대로** 나간다. 그 침묵은 `scene_lint` 가 자문으로 알려 준다(`wardrobe-variant`) |
+| `tags` 를 비우면 | 앵커만 덧붙고 옷은 안 바뀐다(위 표 2행). `scene_lint` 가 `wardrobe-tags` 로 알려 준다 |
+| 한 사람만 지정하면 | **하지 마라.** 실측에서 여자에게만 배리에이션을 준 4장 중 3장에서 그 트렌치코트가 **남자에게 번졌다**(§2.3 프린트 절의 같은 원인). 한 컷에 쓰면 등장인물 전원에게 준다 |
+| 다시 그려야 하나 | 그렇다. 선언은 프롬프트를 바꾸고, 프롬프트가 바뀐 컷은 다시 구워야 그림이 따라온다 |
 
 ### 1.7 `locations[]` · `props[]`
 
@@ -404,7 +430,7 @@ FAIL 이 아니다.
 
 | | 필드 | 쓰는 방법 |
 |---|---|---|
-| **편집 가능** | `purpose` · `action_beat` · `emotion` · `intimacy` · `time` · `camera` · `dialogue` · `characters` · `location_id` · `episode` · `choices` · `branch` · `ending` · `ending_label` · `print` | 스튜디오 장면 편집(`POST /api/set-scene` — 이 목록만 병합) 또는 직접 편집 |
+| **편집 가능** | `purpose` · `action_beat` · `emotion` · `intimacy` · `time` · `camera` · `dialogue` · `characters` · `location_id` · `episode` · `choices` · `branch` · `ending` · `ending_label` · `wardrobe` · `print` | 스튜디오 장면 편집(`POST /api/set-scene` — 이 목록만 병합) 또는 직접 편집 |
 | **도구 전용** (`PROTECTED_FIELDS` 7개) | `status` · `review` · `assets` · `prompt` · `scene_id` · `scene_order` · `version` | `scene_ops`/`advance_scene` 만. 편집 경로는 **"건드리면 안 되는 필드"** 로 거부한다 |
 | **직접 편집만** | `props` · `visual_style` | 편집 경로의 화이트리스트에 **없어서** `set-scene` 이 "모르는 필드" 로 거부한다. 파일을 직접 고친다 |
 
@@ -440,6 +466,7 @@ FAIL 이 아니다.
 | `location_id` | str | ✅ | 프롬프트 장소 앵커 | **A2** 매니페스트 등록 확인 |
 | `characters` | list[str] | ✅ (비면 FAIL) | 프롬프트 인물 앵커 | **A2** 등록 확인 · **A4** 화자 대조 |
 | `props` | list[str] | ⬜ | 프롬프트 소품 앵커 | **A2** 등록 확인 |
+| `wardrobe` | dict[str,str] | ⬜ | **프롬프트 의상 배리에이션**(`prompt_build.scene_wardrobe` → §1.6) — `{"CHAR-001": "outing"}`. 없으면 예전 그대로 | — |
 | `time` | str | ⬜ | 프롬프트 입력 · `scene_lint` 시간대 대조 | — |
 | `purpose` | str | ⬜ | 프롬프트 입력 · 스튜디오 카드 · 컨택트시트 라벨 · 감상본 | — |
 | `action_beat` | str | ⬜ | 프롬프트 입력 · 직전 장면 연속성 | — |
@@ -580,6 +607,17 @@ SCENE-010 을 3시드 × 5안으로 구워 본 결과:
 | 각 인물의 `prompt_tags` (§1.6) | 적힌 순서 그대로, 중복만 제거해 한 줄로. 비어 있으면 아무것도 붙지 않는다 |
 | 붙는 자리 | **그 인물의 `prompt_anchor` 바로 앞** — 두 번째 인물부터는 `with` 뒤 |
 | 인원수·구도 태그 | 그대로 맨 앞에 남는다(§ 위) — 두 줄은 서로 다른 문제를 고친다 |
+| 장면이 `wardrobe` 로 의상을 지정했으면(§1.6) | 그 인물의 태그 줄이 **배리에이션 `tags` 로 통째로 바뀌고**, 앵커 **뒤에** `wearing <배리에이션 anchor>` 가 붙는다 |
+
+인물 한 사람이 차지하는 덩어리의 최종 모양은 이것이다:
+
+```
+<배리에이션 tags 또는 인물 prompt_tags>, <앵커 원문 그대로>[, wearing <배리에이션 anchor>]
+```
+
+**옷을 실제로 바꾸는 것은 태그 줄이다.** 앵커를 갈아 끼우거나(A6 FAIL) 뒤에 덧붙이기만
+해서는 바뀌지 않았다 — 실측 4장 × 2시드에서 가슴 분홍 비율 .0636 → .0539 / .0744 로
+**변화 없음**(기존 옷 위에 새 옷이 겹쳤다), 태그 줄까지 바꾸면 .0095 였다(§1.6 표).
 
 앵커 원문은 손대지 않으므로 **A6 판정은 달라지지 않는다.** 네거티브 프롬프트는 **의상**
 드리프트에는 여전히 쓰지 않는다 — `dark jacket, black sweater` 를 넣어 봐도 효과가 시드

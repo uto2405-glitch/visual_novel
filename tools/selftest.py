@@ -1627,7 +1627,8 @@ def tpl01(b: Box):
 def tpl02(b: Box):
     """템플릿에 선택 필드를 박아 두면 모든 새 장면이 그 값을 갖고 태어난다 — 인화 기준점을
     한 번도 고르지 않았는데 crop_anchor 가 정해져 있는 식이다. 비어 있거나 없어야 한다."""
-    optional = ("print", "episode", "ending", "ending_label", "choices", "branch", "intimacy")
+    optional = ("print", "episode", "ending", "ending_label", "choices", "branch",
+                "intimacy", "wardrobe")
 
     def leaked(sc: dict) -> list[str]:
         return [k for k in optional if sc.get(k) not in (None, "", [], {}, False)]
@@ -6161,6 +6162,13 @@ def u18(b: Box):
                     "prompt_tags": ["black hair", "white shirt", " white shirt ", ""]})
         boy.setdefault("profile", {})["gender_presentation"] = "남성"
         girl["prompt_tags"] = ["light brown hair", "pink cardigan"]
+        girl["wardrobe_variants"] = [                      # ④ 의상 배리에이션(아래)
+            {"variant_id": "default", "tags": list(girl["prompt_tags"]),
+             "anchor": "pastel knit cardigan"},
+            {"variant_id": "outing", "tags": ["light brown hair", "cream trench coat"],
+             "anchor": "cream trench coat over a beige dress"},
+            {"variant_id": "no_tags", "anchor": "thick winter coat"},
+        ]
         mf["characters"].append(boy)
         write_json(mfp, mf)
         anchor_g, anchor_b = girl["prompt_anchor"], boy["prompt_anchor"]
@@ -6178,6 +6186,30 @@ def u18(b: Box):
            "태그 덩어리가 서로 섞임(두 인물 블록의 경계가 무너졌다)")
         ok(text.index("1girl") < text.index(anchor_g), "인원수 태그가 여전히 맨 앞에 있어야 한다")
 
+        # ④ 의상 배리에이션 — **태그 줄**이 통째로 바뀌고 앵커 원문은 그대로, 그 뒤에 wearing.
+        #    실측에서 앵커를 갈아 끼우거나 덧붙이기만 해서는 옷이 바뀌지 않았다(SCHEMA §1.6).
+        worn = pb.compose_image_prompt(dict(sc, wardrobe={girl["character_id"]: "outing"}),
+                                       action="walking side by side")
+        has(worn, "light brown hair, cream trench coat, " + anchor_g,
+            "배리에이션 태그 줄이 그 인물의 앵커 앞에 오지 않음(옷이 안 바뀐다)")
+        hasnt(worn, "pink cardigan", "배리에이션을 지정했는데 기본 태그 줄이 남음")
+        has(worn, anchor_g + ", wearing cream trench coat over a beige dress",
+            "앵커 **뒤에** wearing <배리에이션 anchor> 가 붙지 않음")
+        has(worn, "black hair, white shirt, " + anchor_b,
+            "지정하지 않은 인물의 태그가 함께 바뀜(남의 옷까지 갈아입혔다)")
+
+        # 없는 이름·빈 값·이상한 값이면 **예전 프롬프트 그대로**(기존 12장이 안 깨진다)
+        for bad in ({girl["character_id"]: "typo_variant"}, {girl["character_id"]: ""}, {}, "쓰레기", 7):
+            eq(pb.compose_image_prompt(dict(sc, wardrobe=bad), action="walking side by side"), text,
+               f"wardrobe={bad!r} 인데 프롬프트가 달라졌다(선언 안 한 장면이 바뀐다)")
+
+        # tags 없는 배리에이션은 앵커만 덧붙는다 — 옷은 안 바뀐다(scene_lint 가 자문한다)
+        thin = pb.compose_image_prompt(dict(sc, wardrobe={girl["character_id"]: "no_tags"}),
+                                       action="walking side by side")
+        has(thin, "light brown hair, pink cardigan, " + anchor_g,
+            "tags 가 없는 배리에이션이 태그 줄을 지웠다")
+        has(thin, anchor_g + ", wearing thick winter coat", "tags 가 없어도 앵커는 덧붙어야 한다")
+
         # ③ 태그가 없거나 망가진 값이면 예전 프롬프트 그대로(기존 작품이 깨지지 않는다)
         for bad in (None, [], "white shirt", 7, [None, "  ", ","]):
             mf2 = read_json(mfp)
@@ -6193,6 +6225,65 @@ def u18(b: Box):
             hasnt(plain, "pink cardigan, 18-year-old", f"prompt_tags={bad!r} 인데 태그가 붙음")
     finally:
         mfp.write_text(keep, encoding="utf-8")
+
+
+@test("unit", "U19 의상 배리에이션의 불변식 — 'default' 는 옷을 갈아입히지 않는다(린터가 지킨다)")
+def u19(b: Box):
+    """배리에이션은 **태그 줄을 통째로 대신한다**. 그래서 `"default"` 의 태그 줄이 그 인물의
+    `prompt_tags` 와 다르면, '기본 의상' 을 가리킨 컷이 조용히 다른 옷을 입는다 —
+    사람이 가장 안전하다고 믿는 값이 가장 위험해진다. `wardrobe_default` 도 같은 종류의
+    약속이다(앵커 안 의상 구절을 가리키는 기준점이라 앵커에 글자 그대로 없으면 두 곳이 서로
+    다른 옷을 말한다). 조립부는 앵커를 건드리지 않아 A6 가 이 둘을 못 보므로 린터가 지킨다.
+
+    여기서 잠그는 것은 셋이다 — ① `"default"` 를 가리켜도 태그 줄이 그대로다,
+    ② 어긋난 기준정보를 `scene_lint` 가 실제로 잡아낸다(경고가 나야 할 때만 난다),
+    ③ 손편집 JSON 이 무엇이든 조회가 흔들리지 않는다.
+    """
+    pb, sl = b.mod("prompt_build"), b.mod("scene_lint")
+    tags = ["light brown hair", "pink cardigan"]
+    ch = {"character_id": "CHAR-001", "prompt_tags": list(tags),
+          "prompt_anchor": "17-year-old girl, pastel knit cardigan, star earrings",
+          "wardrobe_default": "pastel knit cardigan",
+          "wardrobe_variants": [
+              {"variant_id": "default", "tags": list(tags),
+               "anchor": "pastel knit cardigan over a white blouse, pleated beige skirt"},
+              {"variant_id": "outing", "tags": ["light brown hair", "cream trench coat"],
+               "anchor": "cream trench coat"}]}
+
+    # ① 'default' 는 태그 줄을 바꾸지 않는다 — 바뀌는 것은 덧붙는 앵커 한 구절뿐이다
+    eq(pb.character_tags(ch, pb.wardrobe_variant(ch, "default")), pb.character_tags(ch),
+       "'default' 를 가리켰더니 태그 줄이 달라졌다(기본 의상인데 옷이 바뀐다)")
+    block = pb._character_block(ch, pb.wardrobe_variant(ch, "default"))
+    has(block, ch["prompt_anchor"], "앵커 원문이 사라짐(A6 FAIL)")
+    has(block, ch["prompt_anchor"] + ", wearing " + ch["wardrobe_variants"][0]["anchor"],
+        "배리에이션 앵커가 인물 앵커 **뒤에** 붙지 않음")
+    eq(pb._character_block(ch, pb.wardrobe_variant(ch, "없는이름")), pb._character_block(ch),
+       "없는 배리에이션을 가리켰는데 프롬프트가 달라졌다")
+
+    # ② 어긋난 기준정보를 린터가 잡는다(정상일 때는 조용하다)
+    def rules(char: dict) -> list:
+        got = []
+        sl._check_wardrobe([], {"characters": [char]},
+                           lambda lv, rule, msg, sid="-": got.append(rule))
+        return got
+
+    eq(rules(ch), [], "정상 기준정보에 경고가 남음")
+    drifted = json.loads(json.dumps(ch))
+    drifted["wardrobe_variants"][0]["tags"] = ["light brown hair", "cream trench coat"]
+    ok("wardrobe-default-tags" in rules(drifted),
+       "'default' 태그 줄이 prompt_tags 와 어긋났는데 린터가 그냥 보냄")
+    off = json.loads(json.dumps(ch))
+    off["wardrobe_default"] = "school blazer"
+    ok("wardrobe-anchor-key" in rules(off),
+       "wardrobe_default 가 앵커에 없는데 린터가 그냥 보냄")
+
+    # ③ 손편집 JSON 방탄 — 무엇이 들어와도 프롬프트가 깨지지 않는다
+    eq(pb.wardrobe_variant({"wardrobe_variants": "쓰레기"}, "default"), {}, "이상한 값에서 조회가 흔들림")
+    eq(pb.wardrobe_variant({}, ""), {}, "빈 id 조회")
+    eq(pb.scene_wardrobe({"wardrobe": "쓰레기"}, "CHAR-001"), "", "이상한 wardrobe 값")
+    eq(pb.scene_wardrobe({}, "CHAR-001"), "", "wardrobe 키가 없는 장면")
+    ok("wardrobe" in b.mod("scene_ops").EDITABLE_FIELDS,
+       "wardrobe 가 편집 화이트리스트에 없다 — 스튜디오가 '알 수 없는 장면 필드' 로 거부한다")
 
 
 @test("unit", "U20 prompt_build.is_distance_beat — 감정만 본다(목적을 훑으면 가장 따뜻한 컷이 걸린다)")

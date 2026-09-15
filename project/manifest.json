@@ -95,30 +95,35 @@
       "wardrobe_variants": [
         {
           "variant_id": "default",
+          "tags": ["light brown hair", "half updo", "pink cardigan", "star earrings"],
           "label": "기본 사복",
           "season": "봄",
           "anchor": "pastel knit cardigan over a white blouse, pleated beige skirt"
         },
         {
           "variant_id": "school",
+          "tags": ["light brown hair", "half updo", "navy school blazer", "red ribbon tie", "pleated skirt", "star earrings"],
           "label": "교복",
           "season": "공용",
           "anchor": "navy school blazer uniform with a red ribbon tie, pleated skirt"
         },
         {
           "variant_id": "outing",
+          "tags": ["light brown hair", "half updo", "cream trench coat", "beige dress", "star earrings"],
           "label": "외출복",
           "season": "공용",
           "anchor": "cream trench coat over a light beige one-piece dress, small shoulder bag"
         },
         {
           "variant_id": "summer_festival",
+          "tags": ["light brown hair", "half updo", "light blue floral dress", "white cardigan", "star earrings"],
           "label": "여름 축제",
           "season": "여름",
           "anchor": "light blue floral summer one-piece dress, thin white cardigan on the shoulders"
         },
         {
           "variant_id": "winter",
+          "tags": ["light brown hair", "half updo", "ivory wool coat", "red scarf", "star earrings"],
           "label": "겨울",
           "season": "겨울",
           "anchor": "thick ivory wool coat, red knitted scarf and mittens"
@@ -147,30 +152,35 @@
       "wardrobe_variants": [
         {
           "variant_id": "default",
+          "tags": ["black hair", "white shirt", "short sleeves"],
           "label": "기본 사복",
           "season": "봄",
           "anchor": "plain white casual shirt, dark slim jeans"
         },
         {
           "variant_id": "school",
+          "tags": ["black hair", "navy school blazer", "striped tie", "white dress shirt"],
           "label": "교복",
           "season": "공용",
           "anchor": "navy school blazer uniform with a striped tie, white dress shirt"
         },
         {
           "variant_id": "outing",
+          "tags": ["black hair", "light grey open shirt", "white tee"],
           "label": "외출복",
           "season": "공용",
           "anchor": "light grey open shirt over a white tee, canvas backpack"
         },
         {
           "variant_id": "summer_festival",
+          "tags": ["black hair", "navy linen shirt", "short sleeves"],
           "label": "여름 축제",
           "season": "여름",
           "anchor": "short-sleeved navy linen shirt, light cotton trousers"
         },
         {
           "variant_id": "winter",
+          "tags": ["black hair", "charcoal wool coat", "grey knit sweater"],
           "label": "겨울",
           "season": "겨울",
           "anchor": "charcoal wool coat over a grey knit sweater"

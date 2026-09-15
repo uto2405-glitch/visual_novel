@@ -231,6 +231,69 @@ def _check_composition(scenes, mf, add) -> None:
                 "characters 를 채우거나 샷을 medium/close-up 으로 바꿀 것", sid)
 
 
+def _check_wardrobe(scenes, mf, add) -> None:
+    """의상 배리에이션이 **실제로 갈아입혀지는가** — 조용히 예전 옷으로 나오는 두 경우.
+
+    `prompt_build` 는 없는 이름을 가리켜도 프롬프트를 깨뜨리지 않는다(예전 그대로 나온다).
+    그래서 오타는 아무 데서도 티가 나지 않고, 사람은 옷을 지정했다고 믿는다 — 그 침묵을
+    메우는 자문이다. PASS/FAIL 이 아니다.
+
+      * `wardrobe-variant` — 장면이 가리킨 `variant_id` 가 그 인물에게 없다(오타·지운 항목).
+      * `wardrobe-tags` — 배리에이션에 `tags` 가 없다. 실측에서 **옷을 실제로 바꾸는 것은
+        태그 줄**이고 앵커만으로는 기존 옷 위에 새 옷이 겹쳤다(SCHEMA §1.6).
+      * `wardrobe-anchor-key` — `wardrobe_default` 가 `prompt_anchor` 안에 글자 그대로 없다.
+        기준 문구가 앵커와 어긋나 있으면 '기본 의상' 이 무엇인지 두 곳이 다르게 말한다.
+      * `wardrobe-default-tags` — `"default"` 배리에이션의 `tags` 가 그 인물의 `prompt_tags` 와
+        다르다. 배리에이션은 태그 줄을 **통째로 대신하므로**, 사람이 가장 안전하다고 믿는
+        `"default"` 를 가리킨 컷이 조용히 다른 옷을 입게 된다.
+    """
+    chars = {_s(c.get("character_id")): c for c in mf.get("characters", []) if isinstance(c, dict)}
+    for cid, c in chars.items():
+        variants = c.get("wardrobe_variants")
+        variants = variants if isinstance(variants, list) else []
+        base = _s(c.get("wardrobe_default")).strip()
+        anchor = _s(c.get("prompt_anchor")).strip()
+        if base and anchor and base not in anchor:
+            add("info", "wardrobe-anchor-key",
+                f"{cid} 의 wardrobe_default '{base}' 가 prompt_anchor 안에 없음 — "
+                "기본 의상을 두 곳이 다르게 말하고 있다(앵커 쪽 문구로 맞출 것)")
+        dflt = next((v for v in variants
+                     if isinstance(v, dict) and _s(v.get("variant_id")).strip() == "default"), None)
+        if dflt is not None and isinstance(dflt.get("tags"), list)                 and isinstance(c.get("prompt_tags"), list) and dflt["tags"] != c["prompt_tags"]:
+            add("warn", "wardrobe-default-tags",
+                f"{cid} 의 'default' 배리에이션 tags 가 prompt_tags 와 다름 — "
+                "배리에이션은 태그 줄을 통째로 대신하므로 '기본 의상' 을 가리킨 컷이 "
+                "조용히 다른 옷을 입는다")
+    for sc in scenes:
+        w = sc.get("wardrobe")
+        if not isinstance(w, dict) or not w:
+            continue
+        sid = _s(sc.get("scene_id", "?"))
+        for cid, vid in w.items():
+            cid, vid = _s(cid), _s(vid).strip()
+            if not vid:
+                continue
+            c = chars.get(cid)
+            if c is None:
+                add("warn", "wardrobe-variant",
+                    f"wardrobe 가 기준정보에 없는 인물 {cid} 를 가리킴 — 프롬프트에 반영되지 않는다", sid)
+                continue
+            raw = c.get("wardrobe_variants")
+            found = next((v for v in (raw if isinstance(raw, list) else [])
+                          if isinstance(v, dict) and _s(v.get("variant_id")).strip() == vid), None)
+            if found is None:
+                names = ", ".join(sorted(_s(v.get("variant_id")).strip()
+                                         for v in (raw if isinstance(raw, list) else [])
+                                         if isinstance(v, dict) and _s(v.get("variant_id")).strip()))
+                add("warn", "wardrobe-variant",
+                    f"{cid} 에게 없는 의상 배리에이션 '{vid}' 을 가리킴 — "
+                    f"프롬프트는 조용히 기본 의상으로 나간다(있는 것: {names or '없음'})", sid)
+            elif not isinstance(found.get("tags"), list) or not found.get("tags"):
+                add("info", "wardrobe-tags",
+                    f"{cid} 의 배리에이션 '{vid}' 에 tags 가 없음 — 앵커만으로는 옷이 바뀌지 않는다"
+                    "(실측: 기존 의상 위에 새 의상이 겹쳤다). 그 의상일 때의 태그 줄 전체를 적을 것", sid)
+
+
 def _check_time(scenes, add) -> None:
     """time 필드와 프롬프트 시간대 표현의 불일치·혼재 — 장소 앵커의 시간대 묘사가 흔한 원인."""
     for sc in scenes:
@@ -570,6 +633,7 @@ def lint_scenes() -> dict:
 
     _check_offcast(scenes, mf, add)
     _check_composition(scenes, mf, add)
+    _check_wardrobe(scenes, mf, add)
     _check_time(scenes, add)
     _check_prompt_state(scenes, add)
     _check_camera_vocab(scenes, add)
