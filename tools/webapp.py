@@ -72,6 +72,7 @@ import gzip
 import hashlib
 import http.cookies
 import json
+import ipaddress
 import logging
 import logging.handlers
 import os
@@ -108,6 +109,7 @@ MANIFEST = vn_core.MANIFEST
 RAW_DIR = vn_core.IMAGES_RAW
 STORY_DIR = vn_core.STORY
 STUDIO_HTML = vn_core.TOOLS / "studio.html"
+CHAT_HTML = vn_core.TOOLS / "chat_ui.html"      # 통합 화면(/chat) — 없으면 그 경로만 404
 OUTPUT_DIR = vn_core.OUTPUT
 THUMB_DIR = OUTPUT_DIR / ".thumbs"      # 파생물 — output/ 는 이미 git 제외 대상
 THUMB_MAX_BYTES = 32 * 1024 * 1024      # 썸네일 캐시 예산(초과분은 오래된 것부터 정리)
@@ -119,6 +121,9 @@ WRITE_LOCK = vn_core.WRITE_LOCK
 CHAT_WINDOW = 24  # API 로 보내는 최근 대화 수 (전체 로그는 디스크에 보존)
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 LAN_URLS: list[str] = []     # LAN 모드에서 폰이 실제로 열 수 있는 주소(QR 용). 그 외에는 빈 목록.
+# --trust 로 지정한 기기(IP). 이 주소에서 오는 요청만 PIN 을 묻지 않는다.
+# 실행 중에만 유효하다 — 파일로 남기지 않으므로 다음 실행에서는 다시 적어야 한다.
+TRUSTED_IPS: set[str] = set()
 SERVER_PORT = 0              # 실제 바인딩된 포트 — CSRF 출처 검증에서 쓴다(0 = 미기동)
 IMG_MAX_AGE = 86400          # /img 브라우저 캐시(초) — ETag 로 무효화되므로 길게 잡는다
 GZIP_MIN = 1024              # 이보다 작은 응답은 압축 이득보다 오버헤드가 크다
@@ -357,15 +362,18 @@ def chat_count() -> int:
     return int(_CHAT_COUNT["n"])
 
 
-def do_chat(messages: list[dict]) -> str:
+def do_chat(messages: list[dict], chat_id: str = "") -> str:
     """스토리 챗 1턴 — 프롬프트 조립은 prompt_build, 모델 선택은 vn_compose 담당.
 
     (이 함수에 남는 일은 '창 자르기 → 호출 → 병합 저장' 뿐이다.)
     """
-    sys_msg = prompt_build.story_system_message()
+    # 이 갈래가 작품 문맥을 쓰는지는 서버에 저장된 값이 단일 출처다 — 클라이언트가
+    # 매번 보내면 기기마다 다른 값이 오가고, 어느 쪽이 맞는지 알 수 없게 된다.
+    sys_msg = prompt_build.story_system_message(talk_store.chat_use_context(chat_id))
     window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
     reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000)
-    path = talk_store.story_chat_path()
+    # 갈래마다 파일이 다르다 — 그래서 문맥이 섞이지 않는다. id 가 없으면 예전 그대로.
+    path = talk_store.story_chat_path_for(chat_id)
     with WRITE_LOCK:
         # 인물 대화와 같은 규칙: 클라이언트가 보낸 목록으로 덮어쓰지 않고 저장본과 병합한다.
         # (/api/state 가 더 이상 챗로그를 싣지 않으므로, 병합이 없으면 새 탭에서 보낸
@@ -399,12 +407,55 @@ def _load_scene(sid) -> dict:
 # ---------------------------------------------------------------- POST 라우팅
 # 각 핸들러는 요청 body(dict) 를 받아 응답 dict 를 반환하거나 RuntimeError 를 던진다.
 def r_chat(b):
-    return {"reply": do_chat(b.get("messages", []))}
+    return {"reply": do_chat(b.get("messages", []), str(b.get("chat_id") or ""))}
 
 
 def r_chat_history(b):
-    """저장된 스토리 대화 이력 → {messages}. /api/state 에서 분리한 무거운 부분이다."""
-    return {"messages": talk_store.load_log(talk_store.story_chat_path())}
+    """저장된 스토리 대화 이력 → {messages}. /api/state 에서 분리한 무거운 부분이다.
+
+    chat_id 를 주면 그 갈래의 것만 온다. 안 주면 예전과 같은 기본 갈래다.
+    """
+    path = talk_store.story_chat_path_for(b.get("chat_id"))
+    return {"messages": talk_store.load_log(path)}
+
+
+def r_chats(b):
+    """대화 갈래 목록 → {chats:[{id,title,count,mtime}]}. 최근 것이 앞."""
+    return {"chats": talk_store.list_story_chats()}
+
+
+def r_chat_trim(b):
+    """대화를 앞에서 keep 개만 남기고 자른다 → {kept, dropped}.
+
+    화면의 '수정'·'다시 생성'이 쓴다. 자른 뒤 곧바로 /api/chat 을 부르면 그 지점부터
+    다시 이어진다. 잘린 구간은 아카이브 파일로 옮겨지므로 사라지지 않는다.
+    """
+    keep = int(b.get("keep", 0) or 0)
+    path = talk_store.story_chat_path_for(b.get("chat_id"))
+    with WRITE_LOCK:
+        return talk_store.truncate_log(path, keep)
+
+
+def r_chat_meta(b):
+    """갈래 설정 저장 → {chat_id, use_context}.
+
+    use_context=False 면 그 갈래는 작품의 인물·장소·스토리라인을 모르는 채로 답한다.
+    새 대화에 "8살 민수의 등교" 만 적었는데 기존 작품의 인물이 따라 나오던 것이 이 값 때문이다.
+    """
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    with WRITE_LOCK:
+        val = talk_store.set_chat_use_context(cid, bool(b.get("use_context")))
+    return {"chat_id": cid, "use_context": val}
+
+
+def r_chat_delete(b):
+    """갈래 하나 삭제. 기본 갈래(id 없음)는 지우지 않는다 — 스튜디오가 같은 파일을 쓴다."""
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    if not cid:
+        raise VNError("기본 대화는 지울 수 없습니다 — 새 대화를 만들어 쓰세요.")
+    with WRITE_LOCK:
+        ok = talk_store.delete_story_chat(cid)
+    return {"deleted": ok, "chat_id": cid}
 
 
 def r_storyline(b):
@@ -421,6 +472,19 @@ def r_compose(b):
 def r_compose_input(b):
     return {"instruction": vn_compose.build_compose_instruction(
         int(b.get("count", 10)), bool(b.get("branching")))}
+
+
+def r_compose_batch(b):
+    """구간 조립 한 번 — 모델 원문을 그대로 돌려준다(저장하지 않는다).
+
+    통합 화면(/chat)이 장면을 3개씩 받아 모을 때 쓴다. /api/chat 을 쓰지 않는 이유는
+    vn_compose.compose_batch 의 주석에 있다(출력 상한 1000 · 챗로그 오염).
+    """
+    made = b.get("made")
+    return {"reply": vn_compose.compose_batch(
+        int(b.get("total", 1)), bool(b.get("branching")),
+        int(b.get("start", 1)), int(b.get("end", 1)),
+        made if isinstance(made, list) else [])}
 
 
 def r_compose_manual(b):
@@ -899,8 +963,11 @@ def r_logout_all(b):
 
 POST_ROUTES = {
     "/api/chat": r_chat, "/api/chat-history": r_chat_history,
+    "/api/chats": r_chats, "/api/chat-delete": r_chat_delete,
+    "/api/chat-meta": r_chat_meta, "/api/chat-trim": r_chat_trim,
     "/api/storyline": r_storyline,
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,
+    "/api/compose-batch": r_compose_batch,
     "/api/compose-manual": r_compose_manual, "/api/scene-brief": r_scene_brief,
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/set-crop": r_set_crop, "/api/set-scene": r_set_scene,
@@ -955,7 +1022,8 @@ document.getElementById("f").addEventListener("submit",async function(e){e.preve
  try{var r=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},
   body:JSON.stringify({pin:document.getElementById("p").value})});
   var d=await r.json();
-  if(r.ok){location.replace("/")}else{m.textContent=d.error||"인증 실패"}}
+  /* 보려던 화면으로 돌아간다. 늘 "/" 로 보내면 /chat 을 친 사람이 스튜디오로 끌려간다. */
+  if(r.ok){location.replace(location.pathname||"/")}else{m.textContent=d.error||"인증 실패"}}
  catch(err){m.textContent="연결 실패"}});
 </script></html>"""
 
@@ -1162,6 +1230,18 @@ class Handler(BaseHTTPRequestHandler):
         ip = self._client_ip()
         return ip.startswith("127.") or ip in ("::1", "localhost")
 
+    def _is_trusted(self) -> bool:
+        """--trust 로 지정한 기기인가 — 그 기기만 PIN 을 묻지 않는다.
+
+        --no-pin 과 다르다: --no-pin 은 같은 와이파이의 **모두**를 풀어 주지만, 이것은
+        적어 준 주소 하나만 푼다. 나머지 기기는 그대로 PIN 을 묻는다.
+
+        주의: IP 는 공유기가 빌려주는 번호다. 그 폰이 오래 꺼져 있으면 같은 번호가 다른
+        기기에 갈 수 있고, 그러면 그 기기가 PIN 없이 들어온다. 그래서 이 값은 실행할 때만
+        유효하고 파일로 남기지 않는다 — 켤 때마다 사람이 다시 적는다.
+        """
+        return self._client_ip() in TRUSTED_IPS
+
     def _origin_ok(self, url: str) -> bool:
         """그 URL 이 이 스튜디오 자신의 출처인지 — 허용 호스트(+LAN IP) & 서버 포트만."""
         try:
@@ -1197,8 +1277,8 @@ class Handler(BaseHTTPRequestHandler):
         return True                       # 비-브라우저 경로(curl·selftest·도구)
 
     def _authed(self) -> bool:
-        """PIN 미사용이거나 로컬 접속이면 통과. 그 외에는 인증 쿠키가 있어야 한다."""
-        if not AUTH["pin"] or self._is_local():
+        """PIN 미사용이거나 로컬·신뢰 기기 접속이면 통과. 그 외에는 인증 쿠키가 있어야 한다."""
+        if not AUTH["pin"] or self._is_local() or self._is_trusted():
             return True
         raw = self.headers.get("Cookie") or ""
         try:
@@ -1262,7 +1342,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._trace()
         if not self._authed():
-            if self.path == "/" or self.path.startswith("/?"):
+            # 사람이 직접 주소창에 치는 문서 경로에는 잠금 화면을 준다.
+            # /chat 을 빼놓았더니 폰에서 날 것의 JSON 이 떴다 — 사용자는 먼저 / 로 가서
+            # 인증하고 다시 /chat 을 쳐야 했고, 그걸 알 방법이 없었다.
+            page = self.path.partition("?")[0]
+            if page in ("/", "/chat", "/chat/"):
                 body = LOGIN_HTML.encode("utf-8")
                 self._bytes(body, "text/html; charset=utf-8",
                             [("Content-Security-Policy", csp_for(body))])
@@ -1287,6 +1371,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "tools/studio.html 이 없습니다. 패키지를 다시 확인하세요."}, 500)
                 return
             # CSP: 페이지는 자기 출처 안에서만 동작한다(외부 스크립트·외부 연결·프레임 금지).
+            self._bytes(body, "text/html; charset=utf-8",
+                        [("Content-Security-Policy", csp_for(body))])
+        elif path == "/chat" or path == "/chat/":
+            # 통합 화면(대화 우선). 스튜디오와 같은 API·같은 데이터를 쓰는 두 번째 입구다.
+            # 파일이 없으면 404 로 끝낸다 — 이 화면은 선택 사항이고, 없다고 해서
+            # 스튜디오가 못 뜨면 안 된다.
+            try:
+                body = CHAT_HTML.read_bytes()
+            except OSError:
+                self._json({"error": "tools/chat_ui.html 이 없습니다."}, 404)
+                return
             self._bytes(body, "text/html; charset=utf-8",
                         [("Content-Security-Policy", csp_for(body))])
         elif path == "/api/state":
@@ -1574,6 +1669,9 @@ def main() -> int:
     ap.add_argument("--pin", nargs="?", const="", default=None,
                     help="외부 기기 접속에 PIN 인증 요구(LAN 모드 기본값). 값을 주면 그 PIN 사용")
     ap.add_argument("--no-pin", action="store_true", help="LAN 모드에서도 PIN 을 쓰지 않음")
+    ap.add_argument("--trust", action="append", default=[], metavar="IP",
+                    help="이 기기(IP)만 PIN 을 묻지 않는다. 여러 번 쓸 수 있다. "
+                         "--no-pin 과 달리 나머지 기기는 그대로 PIN 을 묻는다.")
     ap.add_argument("--verbose", action="store_true", help="요청까지 logs/webapp.log 에 기록")
     args = ap.parse_args()
 
@@ -1585,7 +1683,20 @@ def main() -> int:
     port = srv.server_address[1]
     globals()["SERVER_PORT"] = port
 
-    log.info("서버 기동 bind=%s port=%s pin=%s", bind, port, "on" if AUTH["pin"] else "off")
+    # --trust 는 LAN 모드에서만 뜻이 있다(로컬은 이미 면제다). 형식이 아닌 값은 버리고 말한다.
+    for raw in (getattr(args, "trust", None) or []):
+        ip = str(raw).strip()
+        if not ip:
+            continue
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            print(f"경고: --trust {ip!r} 은 IP 주소가 아닙니다 — 무시합니다.")
+            continue
+        TRUSTED_IPS.add(ip)
+
+    log.info("서버 기동 bind=%s port=%s pin=%s trust=%s", bind, port,
+             "on" if AUTH["pin"] else "off", ",".join(sorted(TRUSTED_IPS)) or "-")
 
     if args.lan:
         ips = _lan_ips()
@@ -1595,6 +1706,11 @@ def main() -> int:
         print("LAN 모드 — 같은 와이파이의 폰/태블릿에서 아래 주소로 접속:")
         for ip in ips:
             print(f"  http://{ip}:{port}/")
+        if TRUSTED_IPS:
+            # 무엇을 풀어 줬는지는 반드시 화면에 남아야 한다. 조용히 열린 문은 잊힌다.
+            for ip in sorted(TRUSTED_IPS):
+                print(f"\n  ★ {ip} 는 PIN 없이 들어옵니다 (--trust)")
+            print("  (이 설정은 이번 실행에만 유효합니다 — 서버를 끄면 사라집니다)")
         if AUTH["pin"]:
             print(f"\n  접속 PIN:  {AUTH['pin']}   ← 폰 화면에 이 숫자를 입력하세요")
             print("  (이 PC 화면 = 127.0.0.1 접속은 PIN 없이 그대로 사용)")

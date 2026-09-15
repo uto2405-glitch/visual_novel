@@ -593,6 +593,46 @@ def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
     return _create_scenes_from_items(items, force, expected=count)
 
 
+def compose_batch(total: int, branching: bool, start: int, end: int,
+                  made: list | None = None) -> str:
+    """장면 구성을 **구간으로 나눠** 한 번 부른다 → 모델의 원문 응답 그대로.
+
+    왜 나누는가: 장면 1개에 약 30초다(실측 12~14 tok/s). 10개를 한 번에 시키면 254초가
+    걸리고 출력이 4천 토큰을 넘는다. 3개씩이면 95~115초·1천여 토큰이라 양쪽 다 여유가 있다.
+
+    왜 /api/chat 을 쓰지 않는가 — 두 가지가 조용히 망가진다:
+      * 그 경로는 max_tokens=1000 으로 묶여 있다(webapp.do_chat). 장면 3개는 그보다 크고,
+        넘치면 배열이 중간에서 잘린 채 200 으로 온다. 사용자에게는 "읽지 못했습니다" 로만
+        보이고 원인이 보이지 않는다.
+      * 그 경로는 주고받은 것을 스토리 챗로그에 병합 저장한다. 조립 지시문은 수천 자라,
+        사용자가 쓰던 대화창이 기계용 지시문으로 뒤덮인다.
+    그래서 여기서 직접 부른다. 저장은 하지 않는다 — 이 함수는 글자만 돌려준다.
+
+    made 는 앞 구간에서 이미 만든 장면 요약([{order, purpose}, …])이다. 이게 없으면 매 구간이
+    이야기를 처음부터 다시 시작해 도입부만 여러 벌 나온다.
+    """
+    if not isinstance(total, int) or total < 1:
+        raise VNError("전체 장면 수는 1 이상의 정수여야 합니다.")
+    if not isinstance(start, int) or not isinstance(end, int) or start < 1 or end < start:
+        raise VNError(f"구간이 올바르지 않습니다: {start}~{end}")
+    if end > total:
+        raise VNError(f"구간 끝({end})이 전체({total})보다 큽니다.")
+
+    want = end - start + 1
+    lines = [build_compose_instruction(total, branching), "", "[이번 요청]",
+             f"전체 {total}개 장면 중 {start}번째부터 {end}번째까지, {want}개만 출력하라.",
+             f"order 에는 전체 기준 번호({start}~{end})를 그대로 넣어라. 1 부터 다시 세지 마라.",
+             f"{want}개보다 많이도 적게도 쓰지 마라."]
+    prev = [m for m in (made or []) if isinstance(m, dict)]
+    if prev:
+        lines += ["", "[앞 구간에서 이미 만든 장면 — 이어서 쓰되 같은 장면을 다시 쓰지 마라]"]
+        for m in prev[-24:]:          # 앞이 길어져도 지시문이 무한정 커지지 않게 최근 것만
+            order = m.get("order")
+            purpose = str(m.get("purpose") or "").strip().replace("\n", " ")[:80]
+            lines.append(f"  {order if order is not None else '?'}. {purpose}")
+    return orch_chat([{"role": "user", "content": "\n".join(lines)}], temperature=0.6)
+
+
 def compose_from_json(text: str, force: bool, expected: int | None = None) -> dict:
     """직접 입력: 어디서 받았든 붙여넣은 SCENES_JSON 배열 → 장면 생성 (LLM 불필요)."""
     if not (text or "").strip():

@@ -5395,6 +5395,126 @@ def j01(b: Box):
     _node_check(b, html, "studio")
 
 
+@test("arch", "L10 사적 대화 파일은 전부 .gitignore 에 걸린다 — 저장 계층이 만드는 모든 경로")
+def l10(b: Box):
+    """talk_store 가 만들 수 있는 모든 대화 파일 경로가 제외 규칙에 실제로 걸리는지 본다.
+
+    왜 기계로 확인하는가: 규칙이 `chatlog.json` 한 줄이던 시절에 쓰였고, 그 뒤 갈래 기능이
+    생기며 `chat_<id>.json` 과 `chats_meta.json` 이 늘었다. 목록은 자동으로 자라지 않으므로
+    새 파일이 조용히 커밋 대상이 된다 — 그게 개인 대화라면 되돌릴 수 없다.
+    """
+    ts = b.mod("talk_store")
+    rules = (SRC / ".gitignore").read_text(encoding="utf-8")
+
+    def covered(name: str) -> bool:
+        """이 파일 이름을 덮는 줄이 있는가 — 정확한 이름 또는 그것을 포함하는 글롭."""
+        for raw in rules.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            pat = line.split("/")[-1]
+            if fnmatch.fnmatch(name, pat):
+                return True
+        return False
+
+    made = [
+        ts.story_chat_path().name,                    # 기본 갈래
+        ts.story_chat_path_for("abc123").name,        # 갈래
+        ts.chat_meta_path().name,                     # 갈래 설정
+        ts.talk_path("CHAR-001").name,                # 인물 대화
+        ts.archive_path(ts.story_chat_path_for("abc123")).name,   # 갈래 아카이브
+        ts.archive_path(ts.talk_path("CHAR-001")).name,           # 인물 아카이브
+    ]
+    missing = [n for n in made if not covered(n)]
+    eq(missing, [], "저장 계층이 만드는 사적 파일이 .gitignore 에 안 걸린다 — 커밋되면 되돌릴 수 없다")
+
+    # 이미 추적 중인 것이 있으면 규칙이 있어도 소용없다(추적된 파일은 제외 규칙을 무시한다)
+    try:
+        tracked = subprocess.run([shutil.which("git") or "git", "ls-files", "project/story"],
+                                 cwd=SRC, capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise Skip("git 없음 — 추적 여부는 확인 생략")
+    bad = [l for l in tracked.splitlines()
+           if l.strip() and any(fnmatch.fnmatch(l.rsplit("/", 1)[-1], p)
+                                for p in ("chatlog.json", "chat_*.json", "chats_meta.json",
+                                          "talk_*.json", "*.archive.jsonl"))]
+    eq(bad, [], "사적 대화 파일이 이미 git 에 추적되고 있다")
+
+
+@test("unit", "U32 대화 갈래 — 설정 파일이 대화로 둔갑하지 않고, 자르기는 잘린 말을 보관한다")
+def u32(b: Box):
+    """두 가지를 잠근다.
+
+    (1) 갈래 목록은 `chat_<id>.json` 을 훑는다. 설정 파일 이름이 그 규칙과 겹치면 설정
+        파일 자신이 빈 대화로 목록에 뜬다 — 실제로 `chat_meta.json` 이 'meta' 라는 대화로
+        나타났다. 이름 규칙을 바꿔 막았고, 여기서 되돌아오지 않는지 본다.
+    (2) truncate_log 는 이 모듈에서 대화를 짧게 만드는 **유일한** 함수다. 짧게 만들되
+        잘린 말은 아카이브로 옮겨야 한다. 옮기지 않고 자르면 사용자 대화가 사라진다.
+    """
+    ts = b.mod("talk_store")
+
+    meta = ts.chat_meta_path()
+    ok(not meta.name.startswith(ts.CHAT_PREFIX),
+       f"설정 파일 이름 {meta.name!r} 이 갈래 파일 규칙({ts.CHAT_PREFIX}*.json)과 겹친다 "
+       "— 설정이 빈 대화로 목록에 뜬다")
+
+    story = b.root / "project" / "story"
+    story.mkdir(parents=True, exist_ok=True)
+    ts.set_chat_use_context("alpha", False)
+    ids = [c["id"] for c in ts.list_story_chats()]
+    eq([i for i in ids if i == "meta"], [], "설정 파일이 대화로 잡힘")
+
+    path = ts.story_chat_path_for("trimtest")
+    ts.save_log(path, [{"role": "user", "content": "1"}, {"role": "assistant", "content": "2"},
+                       {"role": "user", "content": "3"}, {"role": "assistant", "content": "4"}])
+    res = ts.truncate_log(path, 2)
+    eq(res["kept"], 2, "자른 뒤 남은 수가 다름")
+    eq(res["dropped"], 2, "옮긴 수가 다름")
+    eq(len(ts.load_log(path)), 2, "실제 파일이 잘리지 않음")
+    arch = ts.archive_path(path)
+    ok(arch.is_file(), "잘라낸 구간이 아카이브로 옮겨지지 않음 — 사용자 대화가 사라진다")
+    body = arch.read_text(encoding="utf-8")
+    for want in ("3", "4"):
+        has(body, want, "아카이브에 잘린 말이 없음")
+    eq(ts.truncate_log(path, 99)["dropped"], 0, "남은 것보다 크게 자르라 하면 아무것도 안 해야 한다")
+
+
+@test("js", "J14 통합 화면(/chat) — 스튜디오와 같은 강도로 잠근다(주입 API 0 · 인라인 0 · 파괴 경로 0)")
+def j14(b: Box):
+    """두 번째 화면이 생겼다고 규칙이 반값이 되면 안 된다.
+
+    J01 이 studio.html 만 훑기 때문에, 새 화면은 아무 검사도 받지 않은 채 같은 서버에서
+    같은 데이터를 고칠 수 있었다. 여기서 세 가지를 같은 강도로 건다.
+      1) 문자열 주입 DOM API 0 — studio.html 과 같은 기준(BANNED_DOM).
+      2) 인라인 스크립트 0 — 이 문서가 CSP 에서 'unsafe-inline' 을 떼는 조건이다(W27 과 같은 이유).
+         한 번 깨진 적이 있다: 주석에 스크립트 여는 태그를 글자로 적었더니 has_inline_script
+         가 그것을 세어 CSP 가 조용히 느슨해졌다.
+      3) 파괴 경로 0 — /api/compose 의 force 는 승인된 장면을 전부 밀어낸다. 이 화면은
+         대화로 굴리는 곳이라 그 버튼이 있어서는 안 된다. 조립은 compose-manual 로만 한다.
+    """
+    p = b.p("tools/chat_ui.html")
+    if not p.exists():
+        raise Gap("tools/chat_ui.html 아직 없음 — 통합 화면 미도입")
+    html = p.read_text(encoding="utf-8")
+    sources = [html] + _page_js(b, html, "chat_ui")
+
+    for src in sources:
+        for api in BANNED_DOM:
+            eq(src.count(api), 0, f"통합 화면이 실행하는 JS 가 {api} 사용")
+
+    eq(len(_scripts(html)), 0,
+       "통합 화면에 인라인 스크립트가 있다 — csp_for 가 'unsafe-inline' 을 남긴다")
+
+    js = "\n".join(sources)
+    eq(js.count("/api/compose\""), 0, "통합 화면이 /api/compose 를 부른다(force 로 앨범이 날아간다)")
+    eq(js.count("/api/compose'"), 0, "통합 화면이 /api/compose 를 부른다(force 로 앨범이 날아간다)")
+    ok(not re.search(r"force\s*:\s*true", js),
+       "통합 화면이 force:true 를 보낸다 — 승인된 장면을 지우는 경로다")
+    has(js, "/api/compose-manual", "조립 저장 경로(compose-manual)가 없다")
+    has(js, "/api/select", "사람이 고르는 경로(select)가 없다 — 자동 선택이면 A3 가 무너진다")
+
+    _node_check(b, html, "chat_ui")
+
 
 @test("js", "J02 감상본 HTML — JS 문법 통과(내보낸 결과물 그대로)")
 def j02(b: Box):

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,160 @@ def talk_path(cid: Any) -> Path:
 def story_chat_path() -> Path:
     """스토리 기획 대화 로그(작품 단위 하나)."""
     return STORY_DIR / "chatlog.json"
+
+
+# 여러 갈래의 스토리 대화 — 통합 화면의 '목록'이 쓴다.
+# 기본 갈래(chat_id 없음)는 위의 chatlog.json 그대로다. 스튜디오의 스토리 탭과 같은 파일을
+# 계속 쓰므로, 목록 기능이 생겨도 예전 대화가 사라지지 않는다.
+CHAT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+CHAT_PREFIX = "chat_"
+
+
+def normalize_chat_id(chat_id: Any) -> str:
+    """대화 갈래 id → 안전한 문자열. 빈 값·형식 위반은 '' (=기본 갈래)로 떨어뜨린다.
+
+    파일 이름이 되는 값이라 형식 관문이 곧 경로 탈출 방어다. vn_core.safe_path 도 뒤에
+    있지만, 이름 단계에서 먼저 막는 편이 무엇이 거부됐는지 읽기 쉽다.
+    """
+    s = str(chat_id or "").strip()
+    return s if CHAT_ID_RE.match(s) else ""
+
+
+def story_chat_path_for(chat_id: Any = None) -> Path:
+    """갈래별 스토리 대화 로그 경로. id 가 없으면 기본 갈래(chatlog.json)."""
+    cid = normalize_chat_id(chat_id)
+    return STORY_DIR / f"{CHAT_PREFIX}{cid}.json" if cid else story_chat_path()
+
+
+def chat_meta_path() -> Path:
+    """갈래별 설정(작품 문맥 사용 여부 등) — 한 파일에 모은다.
+
+    갈래마다 파일을 하나 더 만들지 않는 이유: 설정은 몇 바이트인데 파일 수만 두 배가 되고,
+    git 제외 규칙이 파일 이름을 따라가야 하는 부담이 늘어난다.
+
+    이름이 ``chats_meta`` 인 이유: 예전엔 ``chat_meta.json`` 이었는데 그게 갈래 파일 규칙
+    (``chat_<id>.json``)과 겹쳐서, 설정 파일 자신이 'meta' 라는 이름의 빈 대화로 목록에
+    나타났다. 접두사를 달리해 충돌 자체를 없앤다.
+    """
+    return STORY_DIR / "chats_meta.json"
+
+
+def _default_use_context(chat_id: str) -> bool:
+    """기본 갈래는 작품을 아는 채로, 새 갈래는 백지로 시작한다.
+
+    기본 갈래는 스튜디오의 스토리 탭과 같은 기록이라 예전 동작(작품 문맥 포함)을 지킨다.
+    새로 만든 갈래는 '새 이야기'라는 뜻이므로 백지가 맞다 — 그렇지 않으면 사용자가
+    말하지도 않은 인물이 답에 섞여 나온다.
+    """
+    return not chat_id
+
+
+def load_chat_meta() -> dict:
+    """{chat_id: {use_context: bool}} — 파일이 없거나 깨졌으면 빈 dict."""
+    raw = vn_core.load_json_safe(chat_meta_path(), {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def chat_use_context(chat_id: Any) -> bool:
+    """이 갈래가 작품 문맥을 쓰는가. 저장된 값이 없으면 기본값."""
+    cid = normalize_chat_id(chat_id)
+    rec = load_chat_meta().get(cid or "")
+    if isinstance(rec, dict) and isinstance(rec.get("use_context"), bool):
+        return rec["use_context"]
+    return _default_use_context(cid)
+
+
+def set_chat_use_context(chat_id: Any, value: bool) -> bool:
+    """이 갈래의 작품 문맥 사용 여부를 저장한다."""
+    cid = normalize_chat_id(chat_id)
+    meta = load_chat_meta()
+    rec = meta.get(cid or "")
+    meta[cid or ""] = {**(rec if isinstance(rec, dict) else {}), "use_context": bool(value)}
+    vn_core.atomic_write_json(chat_meta_path(), meta)
+    return bool(value)
+
+
+def list_story_chats() -> list[dict]:
+    """대화 갈래 목록 → [{id, title, count, mtime}] · 최근에 쓴 것이 앞.
+
+    title 은 첫 사용자 발화의 앞부분이다. 따로 이름을 받지 않는 이유는, 이름을 묻는 순간
+    사용자가 대화를 시작하기 전에 한 번 멈춰야 하기 때문이다(요즘 챗 UI 가 그렇게 한다).
+    """
+    out: list[dict] = []
+    seen: set[Path] = set()
+    candidates = [story_chat_path()]
+    try:
+        meta = chat_meta_path()
+        candidates += [p for p in sorted(STORY_DIR.glob(f"{CHAT_PREFIX}*.json")) if p != meta]
+    except OSError:
+        pass
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        if not path.is_file():
+            if path == story_chat_path():
+                continue
+            continue
+        msgs = load_log(path)
+        cid = "" if path == story_chat_path() else path.stem[len(CHAT_PREFIX):]
+        title = ""
+        for m in msgs:
+            if m.get("role") == "user":
+                title = str(m.get("content") or "").strip().replace("\n", " ")[:40]
+                break
+        try:
+            mtime = int(path.stat().st_mtime)
+        except OSError:
+            mtime = 0
+        out.append({"id": cid, "title": title, "count": len(msgs), "mtime": mtime,
+                    "use_context": chat_use_context(cid)})
+    out.sort(key=lambda r: r["mtime"], reverse=True)
+    return out
+
+
+def truncate_log(path: Path | str, keep: int) -> dict:
+    """대화를 앞에서 ``keep`` 개만 남기고 자른다. **잘린 부분은 버리지 않는다.**
+
+    이 모듈의 규칙은 "대화 로그는 조용히 짧아지지 않는다" 이고, 이 함수는 그 규칙의
+    **유일한 예외**다 — 사용자가 화면에서 '수정'·'다시 생성'을 눌러 명시적으로 요청했을 때만
+    불린다. 그래서 조용하지 않다: 잘라낸 구간을 save_log 와 같은 아카이브 파일로 옮긴 뒤에만
+    자르고, 옮기지 못하면 자르지 않는다(실패하면 아무것도 잃지 않는 쪽으로 넘어진다).
+
+    반환: {"kept": 남은 수, "dropped": 옮긴 수}
+    """
+    path = Path(path)
+    msgs = load_log(path)
+    keep = max(0, int(keep))
+    if keep >= len(msgs):
+        return {"kept": len(msgs), "dropped": 0}
+    dropped = msgs[keep:]
+    if dropped:
+        try:
+            _append_archive(archive_path(path), dropped)
+        except OSError:
+            # 이관 실패 → 자르지 않는다. 사용자는 다시 시도할 수 있지만, 지워진 말은 못 돌린다.
+            return {"kept": len(msgs), "dropped": 0, "error": "아카이브 저장 실패 — 자르지 않았습니다."}
+    vn_core.atomic_write_text(
+        path, json.dumps({"messages": msgs[:keep]}, ensure_ascii=False, indent=2))
+    return {"kept": keep, "dropped": len(dropped)}
+
+
+def delete_story_chat(chat_id: Any) -> bool:
+    """갈래 하나를 지운다. 기본 갈래는 지우지 않는다(스튜디오가 같은 파일을 쓴다)."""
+    cid = normalize_chat_id(chat_id)
+    if not cid:
+        return False
+    path = story_chat_path_for(cid)
+    ok = False
+    for p in (path, archive_path(path)):
+        try:
+            if p.is_file():
+                p.unlink()
+                ok = True
+        except OSError:
+            pass
+    return ok
 
 
 def archive_path(path: Path | str) -> Path:

@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>로컬 LLM 스튜디오 — 비주얼 노벨 생성기</title>
+<!--
+  비주얼 노벨 생성기. 한 작품 전용 화면이 아니다 — 대화를 여러 갈래로 두고 아무 이야기나
+  시작할 수 있고, 그중 하나를 장면으로 조립해 그림을 붙이고 감상한다.
+  머리에 작품 이름을 싣지 않는 이유가 그것이다(지금 열린 작품은 장면·갤러리·감상에서 말한다).
+  기존 스튜디오(tools/studio.html)는 그대로 두고 옆에 하나 더 둔다 — 같은 서버, 같은 데이터.
+
+  규약:
+   * 인라인 스크립트를 두지 않는다 — 그래야 csp_for() 가 script-src 에서 'unsafe-inline'
+     을 빼고, 주입된 스크립트 조각이 아예 실행되지 못한다. JS 는 /studio/chat_ui.js 하나뿐.
+     (이 주석에 스크립트 여는 태그를 글자로라도 적으면 has_inline_script 가 그걸 세어
+      CSP 가 느슨해진다. 실제로 한 번 그렇게 됐다 — 태그 이름을 적지 마라.)
+   * 화면 조립은 전부 chat_ui.js 가 DOM 으로 한다. 문자열을 마크업으로 집어넣는 DOM API 는
+     쓰지 않는다 — selftest 의 BANNED_DOM 목록이 막는다(이름은 여기 적지 않는다).
+   * 색·여백은 studio.html 의 토큰을 그대로 쓴다. 두 화면이 같은 작품처럼 보여야 한다.
+-->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23241C15'/%3E%3Cpath d='M23 17h54a11 11 0 0 1 11 11v27a11 11 0 0 1-11 11H41L30 85l-1-19h-6a11 11 0 0 1-11-11V28a11 11 0 0 1 11-11z' fill='%235FB39A'/%3E%3Crect x='26' y='31' width='48' height='7' rx='3.5' fill='%23241C15'/%3E%3Crect x='26' y='45' width='34' height='7' rx='3.5' fill='%23241C15'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#241C15;--panel:#2E251C;--panel2:#372D22;--line:#453828;--ink:#EDE4D3;
+--sub:#A79680;--jade:#5FB39A;--jade-d:#2F6B59;--seal:#C43D2B;--warn:#D9A441;
+--hanji:#F2EAD9;--hanji-ink:#2A2118;--seal-ink:#EC7A62}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);
+ font-family:system-ui,"Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+ font-size:15px;line-height:1.6;
+ display:flex;flex-direction:column;
+ padding-bottom:env(safe-area-inset-bottom)}
+
+/* ---------------------------------------------------------------- 머리말 */
+header{flex:0 0 auto;border-bottom:1px solid var(--line);background:var(--panel);
+ padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.02em;white-space:nowrap}
+/* 작품 이름은 앱 이름이 아니다 — 작게 옆에 둔다. 비어 있으면 자리도 차지하지 않는다. */
+.work{font-size:12px;color:var(--sub);min-width:0;overflow:hidden;text-overflow:ellipsis;
+ white-space:nowrap}
+.work:empty{display:none}
+.chips{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
+.chip{font-size:12px;padding:3px 9px;border-radius:999px;
+ border:1px solid var(--line);color:var(--sub);background:var(--panel2);white-space:nowrap}
+.chip.ok{color:var(--jade);border-color:var(--jade-d)}
+.chip.bad{color:var(--seal-ink);border-color:var(--seal)}
+
+nav{flex:0 0 auto;display:flex;gap:4px;padding:0 12px;background:var(--panel);
+ border-bottom:1px solid var(--line);overflow-x:auto}
+nav a,nav button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+ color:var(--sub);font:inherit;font-size:14px;padding:9px 14px;cursor:pointer;
+ text-decoration:none;white-space:nowrap}
+nav .on{color:var(--ink);border-bottom-color:var(--jade)}
+nav a:hover,nav button:hover{color:var(--ink)}
+
+/* ---------------------------------------------------------------- 대화 */
+main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
+ padding:16px;display:flex;flex-direction:column;gap:14px;
+ -webkit-overflow-scrolling:touch}
+.turn{max-width:min(760px,100%);display:flex;flex-direction:column;gap:6px}
+.turn.me{align-self:flex-end;align-items:flex-end}
+.who{font-size:12px;color:var(--sub);padding:0 4px}
+.bubble{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+ padding:11px 14px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.turn.me .bubble{background:var(--jade-d);border-color:var(--jade-d);color:var(--hanji)}
+.bubble.sys{background:transparent;border-style:dashed;color:var(--sub);font-size:13px}
+.bubble.err{border-color:var(--seal);color:var(--seal-ink)}
+
+/* 말풍선마다 붙는 동작들. 폰에는 hover 가 없으므로 항상 보인다 —
+   데스크톱에서만 평소 흐리게 두고 가까이 가면 또렷해진다. */
+.acts{display:flex;gap:6px;padding:0 4px;flex-wrap:wrap}
+.turn.me .acts{justify-content:flex-end}
+.acts button{background:none;border:1px solid transparent;color:var(--sub);
+ border-radius:8px;padding:3px 8px;font:inherit;font-size:12px;cursor:pointer;line-height:1.5}
+.acts button:hover{border-color:var(--line);color:var(--ink)}
+.acts button[disabled]{opacity:.4;cursor:default}
+.acts .done{color:var(--jade)}
+@media(hover:hover){
+ .acts{opacity:.45;transition:opacity .15s}
+ .turn:hover .acts,.turn:focus-within .acts{opacity:1}
+}
+
+/* 수정 중인 말풍선 */
+.editbox{display:flex;flex-direction:column;gap:8px;width:min(760px,100%)}
+.editbox textarea{background:var(--panel2);color:var(--ink);border:1px solid var(--jade-d);
+ border-radius:12px;padding:10px 12px;font:inherit;min-height:80px;resize:vertical;width:100%}
+.editbox .row button.go{border-color:var(--jade-d);color:var(--jade)}
+
+/* 아래로 내리는 단추 — 긴 대화에서 손가락으로 끝까지 쓸어내리지 않아도 되게 */
+.jump{position:fixed;right:14px;bottom:96px;z-index:5;
+ background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+ border-radius:999px;padding:8px 14px;font:inherit;font-size:13px;cursor:pointer;
+ box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.jump[hidden]{display:none}
+
+/* 모델이 제안한 행동 — 글자는 글자일 뿐이고, 실행은 사람이 누를 때만 일어난다 */
+.offer{display:flex;flex-wrap:wrap;gap:8px;padding:2px 4px}
+.offer button{background:var(--panel2);color:var(--ink);border:1px solid var(--jade-d);
+ border-radius:10px;padding:8px 13px;font:inherit;font-size:14px;cursor:pointer}
+.offer button:hover{background:var(--jade-d)}
+.offer button[disabled]{opacity:.5;cursor:default}
+
+/* ---------------------------------------------------------------- 장면 카드 */
+.card{border:1px solid var(--line);border-radius:14px;background:var(--panel);
+ padding:12px;display:flex;flex-direction:column;gap:9px;max-width:min(760px,100%)}
+/* 제목은 줄어들고 배지는 줄어들지 않는다 — 배지가 눌리면 글자가 세로로 쪼개진다
+   ("승 인 됨"). 폰 폭에서 실제로 그렇게 나왔다. */
+.card h2{margin:0;font-size:14px;font-weight:600;display:flex;gap:8px;align-items:flex-start}
+.card h2 > span.title{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.state{flex:0 0 auto;white-space:nowrap;align-self:flex-start;
+ font-size:11px;padding:2px 8px;border-radius:999px;background:var(--panel2);
+ border:1px solid var(--line);color:var(--sub)}
+.state.done{color:var(--jade);border-color:var(--jade-d)}
+.state.wait{color:var(--warn);border-color:var(--warn)}
+.line{font-size:13px;color:var(--sub);white-space:pre-wrap;word-break:break-word}
+
+.shots{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+.shot{flex:0 0 auto;border:2px solid transparent;border-radius:10px;padding:0;
+ background:none;cursor:pointer;line-height:0}
+.shot img{width:96px;height:140px;object-fit:cover;border-radius:8px;display:block;
+ background:var(--panel2)}
+.shot.pick{border-color:var(--jade)}
+.shot:focus-visible{outline:2px solid var(--jade);outline-offset:2px}
+
+/* 지금 어느 대화를 보고 있고, 그 대화가 작품을 아는지 한 줄로 알려 준다.
+   이게 없으면 "왜 시키지도 않은 인물이 나오지?" 를 화면에서 알 길이 없다. */
+.ctxbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+ border:1px dashed var(--line);border-radius:10px;padding:6px 10px;
+ max-width:min(760px,100%);align-self:stretch}
+.ctxname{flex:1 1 auto;min-width:0;font-size:12px;color:var(--sub);
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctxbar button{flex:0 0 auto;background:var(--panel2);color:var(--sub);
+ border:1px solid var(--line);border-radius:999px;padding:4px 11px;
+ font:inherit;font-size:12px;cursor:pointer}
+.ctxbar button.on{color:var(--jade);border-color:var(--jade-d)}
+.ctxbar button[disabled]{opacity:.5;cursor:default}
+
+/* ---------------------------------------------------------------- 대화 목록 */
+.chatlist{display:flex;flex-direction:column;gap:8px;max-width:760px;width:100%}
+.chatrow{display:flex;gap:10px;align-items:center;
+ border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:10px 12px}
+.chatrow.on{border-color:var(--jade-d);background:var(--panel2)}
+.chatrow > button.open{flex:1 1 auto;min-width:0;text-align:left;background:none;border:0;
+ color:var(--ink);font:inherit;cursor:pointer;padding:0;display:flex;flex-direction:column;gap:3px}
+.chatrow .nm{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chatrow .meta{font-size:11px;color:var(--sub)}
+.chatrow .del{flex:0 0 auto;background:none;border:1px solid var(--line);color:var(--sub);
+ border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
+.chatrow .del:hover{border-color:var(--seal);color:var(--seal-ink)}
+.chatrow .del[disabled]{opacity:.35;cursor:default}
+
+/* ---------------------------------------------------------------- 갤러리 */
+.gbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+ padding:2px 0 8px;position:sticky;top:0;background:var(--bg);z-index:2}
+.gbar button{background:var(--panel2);color:var(--sub);border:1px solid var(--line);
+ border-radius:999px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+.gbar button.on{color:var(--ink);border-color:var(--jade-d)}
+.gbar .count{margin-left:auto;font-size:12px;color:var(--sub)}
+
+.grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(104px,1fr))}
+.cell{position:relative;border:2px solid transparent;border-radius:10px;padding:0;
+ background:var(--panel);cursor:pointer;line-height:0;overflow:hidden}
+.cell img{width:100%;aspect-ratio:832/1216;object-fit:cover;display:block;background:var(--panel2)}
+.cell.pick{border-color:var(--jade)}
+.cell .tag{position:absolute;left:4px;top:4px;font-size:10px;line-height:1.4;
+ padding:1px 6px;border-radius:999px;background:rgba(36,28,21,.86);color:var(--ink)}
+.cell .tag.sel{color:var(--jade)}
+.cell .cap{position:absolute;left:0;right:0;bottom:0;font-size:10px;line-height:1.5;
+ padding:3px 5px;background:rgba(36,28,21,.86);color:var(--sub);
+ white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------------------------------------------------------------- 감상 */
+.viewpane{display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.viewpane .row{margin-top:4px}
+
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+ border-radius:10px;padding:8px 13px;font:inherit;font-size:14px;cursor:pointer}
+.row button:hover{border-color:var(--jade-d)}
+.row button[disabled]{opacity:.45;cursor:default}
+.row button.go{border-color:var(--jade-d);color:var(--jade)}
+
+/* ---------------------------------------------------------------- 입력 */
+footer{flex:0 0 auto;border-top:1px solid var(--line);background:var(--panel);padding:10px 12px}
+.ask{display:flex;gap:8px;align-items:flex-end;max-width:900px;margin:0 auto}
+textarea{flex:1 1 auto;resize:none;background:var(--panel2);color:var(--ink);
+ border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit;
+ min-height:44px;max-height:180px;line-height:1.5}
+textarea:focus{outline:none;border-color:var(--jade-d)}
+.send{flex:0 0 auto;background:var(--jade-d);color:var(--hanji);border:0;border-radius:12px;
+ padding:11px 18px;font:inherit;font-size:15px;cursor:pointer;min-height:44px}
+.send[disabled]{opacity:.5;cursor:default}
+.hint{max-width:900px;margin:8px auto 0;text-align:center}
+.hint button{background:var(--panel2);color:var(--ink);border:1px solid var(--jade-d);
+ border-radius:999px;padding:7px 18px;font:inherit;font-size:13px;cursor:pointer}
+.hint button:hover{background:var(--jade-d);color:var(--hanji)}
+.bubble strong{color:var(--hanji);font-weight:600}
+
+/* ---------------------------------------------------------------- 조립 서랍 */
+.drawer{border-top:1px solid var(--line);background:var(--panel2);padding:12px 16px;
+ display:none;flex-direction:column;gap:10px}
+.drawer.open{display:flex}
+.drawer label{font-size:13px;color:var(--sub);display:flex;gap:8px;align-items:center}
+.drawer input[type=number]{width:70px;background:var(--panel);color:var(--ink);
+ border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit}
+.bar{height:6px;border-radius:999px;background:var(--panel);overflow:hidden}
+.bar > i{display:block;height:100%;width:0;background:var(--jade);transition:width .3s}
+
+@media(max-width:480px){
+ body{font-size:14px}
+ header{padding:8px 12px;gap:8px}
+ h1{font-size:15px}
+ main{padding:12px;gap:12px}
+ .shot img{width:84px;height:122px}
+ nav a,nav button{padding:8px 11px}
+}
+</style>
+
+<header>
+  <h1>로컬 LLM 스튜디오</h1>
+  <div class="chips">
+    <span class="chip" id="chipLlm">글자 확인 중</span>
+    <span class="chip" id="chipImg">그림 확인 중</span>
+  </div>
+</header>
+
+<nav>
+  <button id="tabList" type="button">목록</button>
+  <button id="tabTalk" class="on" type="button">대화</button>
+  <button id="tabScenes" type="button">장면</button>
+  <button id="tabGallery" type="button">갤러리</button>
+  <button id="tabView" type="button">감상</button>
+</nav>
+
+<main id="stream" aria-live="polite"></main>
+<button class="jump" id="jump" type="button" hidden>맨 아래로</button>
+
+<section class="drawer" id="drawer">
+  <label>한 번에 조립할 장면 수
+    <input type="number" id="batch" value="3" min="1" max="6">
+    <span class="line">3개가 95~115초. 그 이상은 시간초과 위험이 커집니다.</span>
+  </label>
+  <label>이번 회차에서 만들 장면 수
+    <input type="number" id="total" value="6" min="1" max="24">
+  </label>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="row">
+    <button id="runCompose" class="go" type="button">조립 시작</button>
+    <button id="closeDrawer" type="button">닫기</button>
+  </div>
+  <p class="line" id="drawerNote">모아서 한 번에 저장합니다. 개수가 맞지 않으면 저장 전에 멈춥니다.</p>
+</section>
+
+<footer>
+  <div class="ask">
+    <textarea id="box" rows="1" placeholder="이야기를 이어서 써 보세요" aria-label="메시지"></textarea>
+    <button class="send" id="send" type="button">보내기</button>
+  </div>
+  <p class="hint" id="hint">대화로 소설을 쓰고, 준비되면 &ldquo;장면으로 조립&rdquo; 을 누르세요.</p>
+</footer>
+
+<script src="/studio/vn_runtime.js" defer></script>
+<script src="/studio/chat_ui.js" defer></script>
+</html>

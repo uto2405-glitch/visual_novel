@@ -22,6 +22,13 @@ logs/
 # 개인 대화 기록 — 인물과 나눈 사적 대화는 저장소에 올리지 않는다
 project/story/chatlog.json
 project/story/talk_*.json
+# 통합 화면의 대화 갈래도 같은 사적 기록이다 (talk_store.story_chat_path_for).
+# chatlog.json 한 줄만 있던 시절의 규칙이라 갈래 파일이 그대로 새어나갈 뻔했다.
+project/story/chat_*.json
+# 갈래별 설정(작품 문맥 사용 여부) — 대화 내용은 아니지만 사용 흔적이라 함께 뺀다.
+project/story/chats_meta.json
+# 낮에 담아 둔 착상 메모도 개인 기록이다 (앞으로 생길 자리를 미리 막아 둔다).
+project/story/notes.json
 # 상한(LOG_CAP)을 넘겨 이관된 대화 아카이브도 같은 사적 기록이다 (talk_store.archive_path).
 # 확장자가 .jsonl 이라 위 두 줄에 걸리지 않는다 — 이 줄이 없으면 `git add .` 한 번에 커밋된다.
 project/story/*.archive.jsonl
