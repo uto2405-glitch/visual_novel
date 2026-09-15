@@ -1915,6 +1915,41 @@ def w13(b: Box):
         eq(sc["prompt"]["grok_output"], ptext, "저장 내용")
 
 
+@test("webapp", "W37 로컬 LLM 켜짐/꺼짐 — 자동 경로는 되거나 안내하고, 직접 입력은 어느 쪽이든 된다", web=True)
+def w37(b: Box):
+    """이 사이클의 계약을 한 테스트가 통째로 지난다.
+
+    · LLM 이 있으면 ``/api/gen-prompt`` 가 프롬프트를 만든다. 모의 서버를 쓰므로 **이 PC 에
+      모델이 없어도 '켜짐' 경로가 검증된다** — 지금 이 저장소의 로컬 LLM 은 실제로 꺼져 있다.
+    · LLM 이 없으면 같은 라우트는 **이름을 가진 안내**로 끝나야 한다. 조용한 500·역추적이면
+      사람은 무엇을 해야 할지 모른 채 멈춘다.
+    · 어느 쪽이든 직접 입력(브리프 → set-prompt)은 그대로 돈다 — 브리프 조립에는 모델이
+      필요 없기 때문이다. 오늘 이것이 사람이 장면을 쓸 수 있는 **유일한** 길이라,
+      기능 정리 때 먼저 지워지지 않게 여기서 잠근다.
+    """
+    anchor_c, anchor_l = b.anchors()
+    # (1) 켜짐 — 웹 서버는 모의 LLM 을 보고 있다
+    with fresh_scene(b) as sid:
+        st, d = b.wapi("/api/gen-prompt", {"scene_id": sid})
+        eq(st, 200, f"gen-prompt(LLM 켜짐) — {str(d)[:200]}")
+        sc = b.scene(sid)
+        eq(sc["status"], "PROMPT", "status")
+        has(sc["prompt"]["grok_output"], anchor_c, "앵커 원문")
+    # (2) 꺼짐 — 같은 라우트가 이름을 가진 안내로 끝나고, 직접 입력의 입구는 열려 있다
+    wa, gen = _route(b, "/api/gen-prompt", "프롬프트 생성을 웹에서 부를 수 없다")
+    _wa2, brief = _route(b, "/api/scene-brief", "브리프를 웹에서 부를 수 없다")
+    err = getattr(wa, "VNError", RuntimeError)
+    with fresh_scene(b) as sid, env_var("LOCAL_LLM_URL", "http://127.0.0.1:59999/v1"):
+        exc = raises(lambda: gen({"scene_id": sid}), err, "LLM 꺼짐")
+        has(str(exc), "로컬 LLM", "무엇이 없는지 말하지 않는다")
+        text = brief({"scene_id": sid})["text"]     # 모델 없이 조립된다
+        has(text, anchor_c, "브리프 앵커 — 여기가 빠지면 두 단계 뒤 A6 FAIL 이 된다")
+        st2, d2 = b.wapi("/api/set-prompt", {"scene_id": sid,
+                         "text": f"SCENE_PROMPT: medium shot, {anchor_c}, {anchor_l}, cel shading"})
+        eq(st2, 200, f"set-prompt — {d2}")
+        eq(b.scene(sid)["status"], "PROMPT", "직접 입력만으로 PROMPT 에 닿지 못한다")
+
+
 @test("webapp", "W14 빈 프롬프트 set-prompt → 400 거부", web=True)
 def w14(b: Box):
     with fresh_scene(b) as sid:
@@ -5754,6 +5789,54 @@ function zero(){nScenes=0;nGallery=0;nAlbum=0}
  console.log(JSON.stringify(out));
 })();
 """
+
+
+_J12_HARNESS = """
+const nodes={};
+function node(id){if(!nodes[id])nodes[id]={id:id,textContent:"",className:"",hidden:false};
+ return nodes[id]}
+function $(id){return node(id)}
+function imageChip(){}
+let llmUp=null,S={title:"작품"};
+__FUNCS__
+function snap(){return {chip:node("chipLLM").textContent,cls:node("chipLLM").className,
+ story:node("storyNotice").hidden?"":node("storyNotice").textContent,
+ compose:node("composeNotice").hidden?"":node("composeNotice").textContent}}
+const out={};
+renderChips();out.unknown=snap();
+llmUp=true;renderChips();out.up=snap();
+llmUp=false;renderChips();out.down=snap();
+console.log(JSON.stringify(out));
+"""
+
+
+@test("js", "J12 로컬 LLM 이 꺼지면 그것을 필요로 하는 화면이 각자 말하고 대신 쓸 길을 준다")
+def j12(b: Box):
+    """오늘 이 저장소의 로컬 LLM 은 꺼져 있다. 그 상태에서 [전송]·[장면 구성]·[프롬프트 생성]은
+    전부 실패하는데, 예전에는 그것을 머리말 칩 하나만 알고 있었다 — 폰에서는 칩이 접히거나
+    스크롤 위로 사라져 사용자는 버튼부터 누르고 2초 뒤에 배운다.
+
+    화면이 **스스로** 말해야 하고, 말할 때는 대신 쓸 길의 **이름**을 줘야 한다. 그리고
+    '모른다'(probe 전, llmUp=null)일 때는 단정하지 않는다 — 꺼졌다고 겁주는 쪽도 틀렸다.
+    """
+    src = b.p("tools/studio.js")
+    if not src.exists():
+        raise Gap("tools/studio.js 아직 없음")
+    r = _node_json(b, _J12_HARNESS.replace("__FUNCS__", _js_funcs(src.read_text(encoding="utf-8"),
+                                                                 "renderChips")), "studio_llmoff")
+    down, up, unk = r["down"], r["up"], r["unknown"]
+    has(down["chip"], "꺼짐", "칩이 꺼짐을 말하지 않는다")
+    has(down["chip"], "직접 입력", "칩이 대신 쓸 길을 말하지 않는다")
+    has(down["cls"], "bad", "꺼진 칩이 붉지 않다")
+    for where, txt in (("스토리", down["story"]), ("장면", down["compose"])):
+        ok(txt.strip(), f"{where} 화면이 LLM 꺼짐을 스스로 말하지 않는다(칩 하나에만 의존)")
+        ok("직접 입력" in txt or "프롬프트 틀" in txt,
+           f"{where} 화면이 대신 쓸 길의 이름을 주지 않는다 — {txt[:80]}")
+    eq((up["story"], up["compose"]), ("", ""), "LLM 이 살아 있는데 경고가 떠 있다")
+    eq((unk["story"], unk["compose"]), ("", ""), "아직 모르는 동안 꺼졌다고 단정한다")
+    for k in ("chip", "story", "compose"):
+        for bad in ("그록", "Grok", "grok.com"):
+            hasnt(down[k], bad, f"은퇴한 공급자 이름이 {k} 에 남아 있다")
 
 
 @test("js", "J09 폰 데이터 — 보이지 않는 탭은 그리지 않고, 이미지는 보이는 크기만큼만 받는다")
