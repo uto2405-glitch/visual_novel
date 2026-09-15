@@ -33,6 +33,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -48,6 +49,32 @@ TIMEOUT = 120
 TALK_WINDOW = 16   # 서버가 모델에 넘기는 최근 대화 수 — 창 밖 맥락은 prompt_build.memory_digest 가 잇는다
 # 이름으로 허용하는 것은 루프백 별칭뿐. 그 외 호스트명은 DNS 가 어디로든 향할 수 있어 거부한다.
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+# 사고 과정 태그 — 답이 아니라 모델이 혼잣말한 흔적이다.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S)
+_THINK_CLOSE = "</think>"
+
+
+def strip_reasoning(text: str) -> str:
+    """``<think>…</think>`` 를 걷어낸 본문. 없으면 한 글자도 바뀌지 않는다.
+
+    이 모델(Qwen3.6)의 ChatML 템플릿은 판본에 따라 생성 프리픽스로 ``<think>`` 를 먼저
+    붙인다 — 그러면 **여는 태그 없이 ``</think>`` 로 시작하는 응답**이 온다. 실측에서
+    ``'</think>
+
+Hello! How can I help'`` 를 받았다. 그대로 두면 인물의 첫마디가
+    ``</think>`` 로 시작하고, 장면 JSON 앞에는 혼잣말이 붙는다.
+
+    거르는 자리를 여기로 정한 이유: 네 기능(스토리 챗·장면 구성·이미지 프롬프트·인물 대화)이
+    모두 :func:`chat` 하나를 지난다. 화면마다 따로 지우면 새로 붙는 화면이 반드시 빠뜨리고,
+    프롬프트를 만드는 층(prompt_build·vn_compose)에 두면 '무엇을 시킬까' 와 '무엇을 받았나' 가
+    한 파일에서 섞인다. 접어서 보여 주는 선택지도 있었지만, 이 저장소에서 모델의 사고 과정을
+    읽어야 하는 화면은 하나도 없다 — 원고·대사·JSON 만 쓴다.
+    """
+    out = _THINK_BLOCK.sub("", str(text or ""))
+    i = out.find(_THINK_CLOSE)          # 여는 태그가 프롬프트 쪽에 있던 경우
+    if i >= 0:
+        out = out[i + len(_THINK_CLOSE):]
+    return out.strip()
 
 
 def serve_script() -> Path:
@@ -370,7 +397,9 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
     try:
         with _OPENER.open(req, timeout=TIMEOUT) as r:
             if stream:
-                content = _read_stream(r, on_token)
+                # 조각은 그대로 흘려 보내고(콜백은 실시간 표시용) **반환값만** 정리한다 —
+                # 저장·파싱되는 것은 반환값이다.
+                content = strip_reasoning(_read_stream(r, on_token))
                 if not content:
                     raise VNError("로컬 LLM 응답에 텍스트가 없습니다.")
                 return content
@@ -390,7 +419,7 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
         raise VNError("로컬 LLM 응답 형식이 예상과 다릅니다.")
     if not isinstance(content, str):
         raise VNError("로컬 LLM 응답에 텍스트가 없습니다.")
-    return content.strip()
+    return strip_reasoning(content)
 
 
 def main() -> int:

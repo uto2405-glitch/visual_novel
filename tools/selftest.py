@@ -8064,6 +8064,25 @@ def u27(b: Box):
     raises(lambda: vc._extract_json_array("미안, 장면을 못 만들겠어."), ValueError, "JSON 없음")
 
 
+@test("unit", "U31 사고 과정(<think>)은 화면에 닿지 않는다 — 네 기능이 지나는 한 곳에서 걷어낸다")
+def u31(b: Box):
+    """이 모델의 ChatML 템플릿은 판본에 따라 생성 프리픽스로 ``<think>`` 를 먼저 붙인다.
+    그러면 **여는 태그 없이 ``</think>`` 로 시작하는 응답**이 온다 — 실측으로 받은 것이
+    ``'</think>\\n\\nHello! How can I help'`` 였다. 그대로 두면 인물의 첫마디가 ``</think>``
+    로 시작하고, 장면 JSON 앞에는 혼잣말이 붙는다.
+
+    거르는 자리는 전송 계층 하나다. 네 기능이 모두 ``local_llm.chat`` 을 지나므로 화면마다
+    따로 지울 이유가 없고, 따로 지우면 다음에 붙는 화면이 반드시 빠뜨린다.
+    """
+    ll = b.mod("local_llm")
+    fn = need_attr(ll, "strip_reasoning", "<think> 제거")
+    eq(fn("</think>\n\n안녕!"), "안녕!", "여는 태그 없이 닫는 태그만 온 응답(실측 모양)")
+    eq(fn("<think>음… 뭐라 하지</think>\n오늘 뭐 해?"), "오늘 뭐 해?", "온전한 사고 블록")
+    eq(fn("<think>a</think>앞<think>b</think>뒤"), "앞뒤", "블록이 여러 개")
+    eq(fn('[{"order":1}]'), '[{"order":1}]', "태그가 없으면 한 글자도 바뀌지 않아야 한다")
+    eq(fn(""), "", "빈 응답")
+
+
 @test("unit", "U30 장면 구성 지시문이 인물의 말투를 싣는다 — 새 장면만 존댓말로 갈리지 않게")
 def u30(b: Box):
     """대화 탭은 `profile.speech_style` 을 읽어 페르소나를 만드는데(prompt_build `[말투 규칙]`)
