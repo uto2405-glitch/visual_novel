@@ -5486,6 +5486,95 @@ function copyBtns(prompt){scDraft.clear();
 """
 
 
+VNR_BRANCH_DRIVER = r"""
+/* 분기가 있는 작품에서 **화면이 사실만 말하는가**: 엔딩 카드가 세는 장면 수와,
+   세로 스크롤 리딩의 갈림길·서로 배타적인 결말 표시. JSON 한 줄만 낸다. */
+var OUT = {};
+function vnrScenes() {
+  return [
+    { id: "A", order: 1, purpose: "a", img: "", lines: [{ n: "", c: null, t: "a1", p: "bottom" }] },
+    { id: "B", order: 2, purpose: "b", img: "", lines: [{ n: "", c: null, t: "b1", p: "bottom" }],
+      choices: [{ text: "up", affection: 8, goto: "C" }, { text: "down", affection: -4, goto: "C" }] },
+    { id: "C", order: 3, purpose: "c", img: "", lines: [{ n: "", c: null, t: "c1", p: "bottom" }],
+      branch: [{ min: 35, goto: "D" }, { min: 0, goto: "E" }] },
+    { id: "D", order: 4, purpose: "good", img: "", lines: [{ n: "", c: null, t: "그럼 없던 걸로 해줄게", p: "bottom" }],
+      ending: true, ending_label: "호감 엔딩" },
+    { id: "E", order: 5, purpose: "soft", img: "", lines: [{ n: "", c: null, t: "여기서 헤어지자", p: "bottom" }],
+      ending: true, ending_label: "여운 엔딩" }
+  ];
+}
+var VDATA = { title: "T", scenes: vnrScenes(), dating: { max: 100, start_affection: 30 }, episodes: [] };
+STORE["k:settings"] = JSON.stringify({ textSpeed: 0, autoDelay: 1500, fs: 17, skipAll: false, cinema: false });
+var P = WIN.VNRuntime.mount({ data: VDATA, root: DOC.body, storageKey: "k" });
+var ST = DOC.body.kids[DOC.body.kids.length - 1];
+function picks() { return ST.querySelector(".vnr-choices").kids; }
+function press(k) { DOC.fire("keydown", { key: k, target: ST, preventDefault: function () {} }); }
+function endSub() { return ST.querySelector(".vnr-sub").textContent; }
+
+// 1. 한 경로를 끝까지 걷고 엔딩 카드가 **본 장면 수**를 말하는지 본다(A·B·C·D 네 장면)
+P.start(false, 0);
+press("ArrowRight");            // A → B
+press("ArrowRight");            // B 의 대사 끝 → 선택지
+picks()[0].click();             // +8 → C
+press("ArrowRight");            // C → D(호감)
+press("ArrowRight");            // 엔딩 카드
+OUT.walked = endSub();
+OUT.total = P.data().scenes.length;
+
+// 2. 세로 스크롤 리딩 — 갈림길과 서로 배타적인 결말에 이름표가 있는가
+var box = DOC.createElement("div");
+DOC.body.appendChild(box);
+WIN.VNRuntime.renderScroll(VDATA, box, {});
+var txt = box.textContent;
+function classCount(node, cls, n) {
+  n = n || 0;
+  (node.kids || []).forEach(function (k) {
+    if ((k.className || "").split(/\s+/).indexOf(cls) >= 0) n++;
+    n = classCount(k, cls, n);
+  });
+  return n;
+}
+OUT.forks = classCount(box, "fork");
+OUT.endmarks = classCount(box, "endmark");
+OUT.scrollText = txt;
+console.log(JSON.stringify(OUT));
+"""
+
+
+@test("js", "J10 분기 있는 작품 — 엔딩 카드는 본 장면만 세고, 스크롤 모드는 갈림길·결말에 이름표를 단다")
+def j10(b: Box):
+    """감상본이 사실이 아닌 말을 하던 두 자리.
+
+      · 엔딩 카드가 **작품 전체 장면 수**를 "감상 완료" 라고 적었다 — 11장을 본 독자에게
+        "장면 12개 감상 완료", 여운 엔딩 쪽 독자는 한 번도 못 본 장면까지 축하받았다.
+      · 세로 스크롤 리딩은 분기를 모르고 전 장면을 차례로 싣는다. 선택지 셋이 전부 일어난
+        일처럼 ▸ 목록으로 찍히고, 호감 엔딩의 "없던 걸로 해줄게" 바로 다음 줄에 여운 엔딩의
+        "여기서 헤어지자" 가 왔다 — 세 줄 만에 작품이 스스로를 두 번 부정한다.
+
+    고치는 방법은 둘 다 **이름표**다(재생 방식 자체는 바꾸지 않는다).
+    """
+    p = b.p("tools/vn_runtime.js")
+    if not p.exists():
+        raise Gap("tools/vn_runtime.js 아직 없음 — 공용 재생 엔진 이관 대기")
+    code = "\n;\n".join([VNR_DOM_STUB, p.read_text(encoding="utf-8"), VNR_BRANCH_DRIVER])
+    r = _node_json(b, code, "vn_branch")
+
+    eq(r["total"], 5, "픽스처가 5장면이어야 이 검사가 뜻이 있다")
+    hasnt(r["walked"], "5개 감상 완료",
+          f"한 경로만 걸었는데 전체 장면 수를 '감상 완료' 라고 말한다 — {r['walked']!r}")
+    has(r["walked"], "4", f"이 경로에서 본 장면 수(4)가 엔딩 카드에 없다 — {r['walked']!r}")
+    has(r["walked"], "5", f"전체 장면 수(5)를 함께 보여 주지 않는다 — {r['walked']!r}")
+
+    eq(r["forks"], 1, "스크롤 모드의 선택지 목록에 '여기서 갈립니다' 이름표가 없다")
+    eq(r["endmarks"], 2, "스크롤 모드의 엔딩 둘에 이름표가 없다(서로 배타적인 결말이 붙어 나온다)")
+    for label in ("호감 엔딩", "여운 엔딩", "갈립니다"):
+        has(r["scrollText"], label, f"스크롤 모드 본문에 {label!r} 이름표가 없다")
+    idx_good = r["scrollText"].index("호감 엔딩")
+    idx_soft = r["scrollText"].index("여운 엔딩")
+    ok(idx_good < r["scrollText"].index("그럼 없던 걸로 해줄게") < idx_soft,
+       "엔딩 이름표가 그 엔딩의 대사보다 뒤에 온다 — 독자는 이미 다 읽은 뒤에야 알게 된다")
+
+
 @test("js", "J08 장면 카드는 서버가 거절할 일을 권하지 않는다 · 결과 한 줄이 카드 재생성보다 오래 산다")
 def j08(b: Box):
     """화면이 사실과 다른 말을 하던 자리들의 잠금장치(브라우저 없이 함수를 실제로 굴린다).

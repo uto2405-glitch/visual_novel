@@ -221,6 +221,14 @@
     ".vnr-scroll .say .nar{color:var(--vnr-sub,#A79680);font-style:italic;display:block;",
     "text-align:center}",
     ".vnr-scroll .say .pick{color:var(--vnr-pick,#D9A441)}",
+    /* 분기 표시 — 스크롤 모드는 모든 가지를 한 줄로 이어 붙여 읽는 방식이라, 갈림길과
+       서로 배타적인 결말에 이름표가 없으면 작품이 스스로를 부정하는 것처럼 읽힌다. */
+    ".vnr-scroll .fork,.vnr-scroll .endmark{padding:14px 18px 10px;text-align:center;",
+    "font-size:12.5px;font-weight:800;letter-spacing:.04em;color:var(--vnr-accent,#5FB39A);",
+    "border-bottom:1px solid var(--vnr-line,#453828)}",
+    ".vnr-scroll .endmark{color:var(--vnr-pick,#D9A441)}",
+    ".vnr-scroll .fork small,.vnr-scroll .endmark small{display:block;margin-top:4px;",
+    "font-weight:500;letter-spacing:0;color:var(--vnr-sub,#A79680)}",
     ".vnr-scroll .ep{padding:20px 18px 9px;color:var(--vnr-accent,#5FB39A);font-weight:800;",
     "font-size:13px;letter-spacing:.06em;border-bottom:1px solid var(--vnr-line,#453828)}",
     "@media(max-width:720px){.vnr-scroll .say{padding:11px 14px}",
@@ -375,6 +383,7 @@
 
     container.replaceChildren();
     var curEp = null, count = 0;
+    var endings = d.scenes.filter(function (s) { return s && s.ending; }).length;
     d.scenes.forEach(function (sc) {
       var url = imgOf(sc, "scroll") || "";
       var lines = sc.lines || [], choices = sc.choices || [];
@@ -384,6 +393,14 @@
       if (sc.ep && sc.ep !== curEp) {
         curEp = sc.ep;
         blk.appendChild(el("div", "ep", epLabel(sc.ep)));
+      }
+      if (sc.ending) {
+        // 서로 배타적인 결말이 이름표 없이 잇달아 실리면, 용서하는 대사 바로 다음 줄에
+        // 헤어지는 대사가 와서 작품이 스스로를 부정하는 것처럼 읽힌다.
+        var em = el("div", "endmark");
+        em.appendChild(el("span", null, "— " + (sc.ending_label || "엔딩") + " —"));
+        if (endings > 1) em.appendChild(el("small", null, "다른 선택으로 가는 또 하나의 결말입니다"));
+        blk.appendChild(em);
       }
       if (url) {
         var im = el("img");
@@ -403,11 +420,19 @@
         } else s.appendChild(el("span", "nar", l.t || ""));
         blk.appendChild(s);
       });
-      choices.forEach(function (c) {          // 스크롤 모드는 선택지를 목록으로만 보여준다
-        var s = el("div", "say");
-        s.appendChild(el("span", "pick", "▸ " + ((c && c.text) || "")));
-        blk.appendChild(s);
-      });
+      if (choices.length) {                   // 스크롤 모드는 선택지를 목록으로만 보여준다
+        // …그러나 **목록이라고 말해 줘야** 한다. 이름표가 없을 때는 세 선택지가 모두
+        // 일어난 일처럼 읽혔다(감상 모드에서는 하나만 고른다).
+        var fk = el("div", "fork");
+        fk.appendChild(el("span", null, "여기서 이야기가 갈립니다"));
+        fk.appendChild(el("small", null, "감상 모드에서는 아래 중 하나만 고릅니다"));
+        blk.appendChild(fk);
+        choices.forEach(function (c) {
+          var s = el("div", "say");
+          s.appendChild(el("span", "pick", "▸ " + ((c && c.text) || "")));
+          blk.appendChild(s);
+        });
+      }
       container.appendChild(blk);
       count++;
     });
@@ -484,6 +509,7 @@
     var autoOn = false, skipOn = false, isOpen = false;
     var revealTimer = null, autoTimer = null, affTimer = null, wakeLock = null, idleTimer = null;
     var aff = 0, affPicks = {}, navStack = [], backlog = [], backlogKeys = new Set(), seen = new Set();
+    var visited = new Set();   // 이번 재생에서 **실제로 지나온** 장면 — 엔딩 카드가 세는 수
     var guardUntil = 0;        // 이 시각까지는 포인터 활성화를 무시한다(아래 guardPointer 설명)
     var preloaded = new Set(), lastFocus = null, returnFocus = null;
     var SET = { textSpeed: 26, autoDelay: 1500, fs: 17, skipAll: false, cinema: false };
@@ -515,7 +541,8 @@
     }
     function savePos() {
       lsSet(kPos(), JSON.stringify({ vi: vi, di: di, aff: aff, picks: affPicks,
-                                    stack: navStack.slice(-300) }));
+                                    stack: navStack.slice(-300),
+                                    vis: Array.from(visited).slice(-300) }));
       fire("onSavedChange", true);
     }
     function clearPos() { lsDel(kPos()); fire("onSavedChange", false); }
@@ -1012,6 +1039,7 @@
       if (!sc) return;
       updateProg();
       if (hintLeft > 0 && --hintLeft === 0) E.hint.hidden = true;   // 조작법을 익힌 뒤엔 자리를 돌려준다
+      visited.add(vi);            // 분기가 있는 작품에서 '전체 장면 수' 는 읽은 수가 아니다
       var wasSeen = markSeen();
       if (skipOn && !wasSeen && !SET.skipAll) setSkip(false);   // 스킵은 안 읽은 대사에서 멈춘다
       var line = (sc.lines || [])[di];
@@ -1178,7 +1206,12 @@
       E.endName.textContent = nm;
       var parts = [];
       if (data.dating) parts.push("호감도 ♥ " + aff + " / " + affMax());
-      parts.push("장면 " + data.scenes.length + "개 감상 완료");
+      // **이번 경로에서 본 장면 수**를 센다. 예전에는 작품 전체 장면 수를 적어, 분기 하나만
+      // 지나온 독자에게 "장면 12개 감상 완료" 라고 말했다 — 여운 엔딩 쪽 독자는 한 번도
+      // 보지 못한 장면까지 다 봤다는 축하를 받았다.
+      var walked = Math.max(1, visited.size || 0), total = data.scenes.length;
+      parts.push(walked >= total ? ("장면 " + total + "개 감상 완료")
+                                 : ("이 경로 " + walked + "장면 · 전체 " + total + "장면"));
       var eps = presentEps();
       if (eps.length > 1) parts.push(eps.length + "화");
       E.endSub.textContent = parts.join("   ·   ");
@@ -1398,8 +1431,12 @@
           ? pos.stack.filter(function (n) {
             return Number.isInteger(n) && n >= 0 && n < data.scenes.length;
           }) : [];
+        visited = new Set(Array.isArray(pos.vis)
+          ? pos.vis.filter(function (n) {
+            return Number.isInteger(n) && n >= 0 && n < data.scenes.length;
+          }) : []);
       } else {
-        backlog = []; backlogKeys = new Set(); navStack = [];
+        backlog = []; backlogKeys = new Set(); navStack = []; visited = new Set();
         saveHist();
       }
       // 위치·호감도는 **정수·유한수만** 통과한다(intIn 주석: 손상된 저장이 뷰어를 멈춰 세웠다)
