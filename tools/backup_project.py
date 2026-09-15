@@ -13,11 +13,13 @@ schedule: 주기 자동 스냅샷+verify 용 스크립트/등록 명령 안내(�
   python tools/backup_project.py snapshot                  # 백업 + 체크섬 스냅
   python tools/backup_project.py snapshot --with-images    # 승인 이미지 원본까지 zip 에 포함
   python tools/backup_project.py snapshot --dest D:/backup # 외장드라이브/클라우드 폴더에 사본
+  python tools/backup_project.py snapshot --force          # 내용이 같아도 zip 을 새로 굽는다
   python tools/backup_project.py verify                    # 최신 스냅과 현재 비교
   python tools/backup_project.py list
   python tools/backup_project.py restore --dry-run         # 복원 차이만 미리보기
   python tools/backup_project.py restore --snapshot 20260824_224601
   python tools/backup_project.py prune --keep 10
+  python tools/backup_project.py prune --keep 10 --keep-images 3   # 이미지 든 스냅샷은 따로 상한
   python tools/backup_project.py migrate --dry-run          # project/scenes_backup_* → backups/legacy/
   python tools/backup_project.py schedule --time 21:00
 
@@ -51,7 +53,11 @@ BACKUPS = ROOT / "backups"
 TARGETS = ["project", "images"]          # 체크섬 대상
 SKIP_PARTS = {"__pycache__", ".git"}
 RESTORE_TOPS = ("project", "images")     # 복원이 건드릴 수 있는 최상위 폴더(그 밖은 거부)
-KEEP_DEFAULT = 12                        # prune 기본 보존 개수
+KEEP_DEFAULT = 12                        # prune 기본 보존 개수(체크섬만 있는 가벼운 스냅샷 기준)
+# 이미지 원본을 담은 스냅샷은 한 장이 수백 MB 다(실측 118.4MB). 가벼운 스냅샷과 같은 상한(12)을
+# 쓰면 backups/ 가 GB 단위로 자란다 — 그래서 '이미지 든 스냅샷' 만 따로 더 짧게 센다.
+# 몇 개를 남기든 **최신 스냅샷과 이미지가 든 최신 스냅샷은 절대 지우지 않는다**(prune 의 안전장치).
+KEEP_IMAGES_DEFAULT = 3
 TASK_NAME_DEFAULT = "VN-AutoBackup"
 LEGACY_SCENE_DIRS = "scenes_backup_*"    # 옛 도구가 project/ 안에 남긴 사본(백업 폴더로 이관 대상)
 
@@ -255,10 +261,51 @@ def _write_zip(zpath: Path, files: list[Path]) -> int:
 
 # ---------------------------------------------------------------- snapshot
 
+def _same_as_latest(sums: dict, files: list[Path]) -> Path | None:
+    """지금 뜨려는 스냅샷이 **최신 스냅샷과 내용이 같은가** — 같으면 그 매니페스트를 돌려준다.
+
+    예전에는 비교가 없어서, 아무것도 바뀌지 않은 날 snapshot 을 한 번 더 부르면 같은 zip 이
+    한 벌 더 구워졌다(실측: project_20260915_075622.zip 과 082157.zip 이 sha256 3d361f37…
+    로 **바이트 단위 동일**, 112.9MB × 2). 백업이 둘이 되어도 복구력은 하나치인데 용량만 두 배다.
+
+    같다고 말하려면 세 가지가 모두 맞아야 한다 — 하나라도 어긋나면 새로 굽는다.
+      ① 체크섬 전체가 동일(파일 목록도, 내용도).
+      ② 그 스냅샷의 zip 이 아직 있다.
+      ③ 그 zip 이 **지금 담으려던 파일을 전부** 갖고 있다. ③이 없으면 어제 뜬 가벼운
+        스냅샷(project 만) 때문에 오늘의 --with-images 가 조용히 생략된다 — 그 순간
+        '이미지가 들어 있다고 믿는 백업' 이 하나도 없는 상태가 된다.
+    """
+    m = _latest_manifest()
+    if not m:
+        return None
+    data = _load_json(m)
+    recorded = data.get("files") or {}
+    if len(recorded) != len(sums):
+        return None
+    for rel, meta in recorded.items():
+        cur = sums.get(rel)
+        if not cur or cur["sha256"] != meta.get("sha256"):
+            return None
+    stamp = m.stem.replace("manifest_", "")
+    z = BACKUPS / (data.get("zip") or f"project_{stamp}.zip")
+    if not z.is_file():
+        return None
+    try:
+        with zipfile.ZipFile(z) as zf:
+            packed = {i.filename for i in zf.infolist() if not i.is_dir()}
+    except (OSError, zipfile.BadZipFile):
+        return None
+    want = {p.relative_to(ROOT).as_posix() for p in files}
+    return m if want <= packed else None
+
+
 def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "approved",
-             dest: str | None = None, keep: int | None = None, dry_run: bool = False) -> int:
+             dest: str | None = None, keep: int | None = None, keep_images: int | None = None,
+             dry_run: bool = False, force: bool = False) -> int:
     files = _zip_payload(with_images, images_scope)
     total = sum(p.stat().st_size for p in files)
+    sums = _checksums()
+    same = None if force else _same_as_latest(sums, files)
 
     if dry_run:
         print("[미리보기] 스냅샷 예정")
@@ -271,8 +318,14 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
             print(f"  외부 사본: {dest}")
         if keep:
             print(f"  정리: 최신 {keep}개만 보존")
+        if same is not None:
+            print(f"  ※ 바뀐 파일이 없습니다 — 새 zip 을 굽지 않고 기존 스냅샷"
+                  f"({same.stem.replace('manifest_', '')})을 그대로 씁니다(--force 면 새로 굽습니다).")
         _warn_legacy()
         return 0
+
+    if same is not None:
+        return _report_same(same, dest, keep, keep_images, with_images)
 
     BACKUPS.mkdir(parents=True, exist_ok=True)
     stamp = _stamp(now)
@@ -280,7 +333,6 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
     while (BACKUPS / f"manifest_{stamp}.json").exists():  # 같은 초 재실행 시 이전 스냅 보존
         stamp = f"{_stamp(now)}_{n}"
         n += 1
-    sums = _checksums()
 
     print(f"백업 완료 [{stamp}]")
     zpath = BACKUPS / f"project_{stamp}.zip"
@@ -319,7 +371,39 @@ def snapshot(now: datetime, *, with_images: bool = False, images_scope: str = "a
         if rc:
             return rc
     if keep:
-        prune(keep, dry_run=False, assume_yes=True)
+        prune(keep, keep_images=keep_images, dry_run=False, assume_yes=True)
+    return 0
+
+
+def _report_same(manifest: Path, dest: str | None, keep: int | None,
+                 keep_images: int | None, with_images: bool) -> int:
+    """내용이 같아 새로 굽지 않았을 때 — **이미 있는 그 스냅샷**을 복구 지점으로 안내한다.
+
+    '생략했다' 로 끝내면 사용자는 오늘의 백업이 없다고 믿는다. 있는 것을 이름으로 말하고,
+    --dest 사본과 --keep 정리는 그대로 해 준다(외부 사본은 '오늘 그 폴더에 한 벌 있는가'
+    의 문제라, 새로 구웠는지와 무관하게 사용자가 기대하는 결과다).
+    """
+    stamp = manifest.stem.replace("manifest_", "")
+    data = _load_json(manifest)
+    z = BACKUPS / (data.get("zip") or f"project_{stamp}.zip")
+    print(f"백업 생략 — 마지막 스냅샷 이후 바뀐 파일이 없습니다. [{stamp}]")
+    print(f"  같은 내용: {z.relative_to(ROOT).as_posix()} "
+          f"({_human(z.stat().st_size)}, {data.get('zip_files', 0)}개 파일)"
+          + (" · 이미지 포함" if data.get("images_included") else ""))
+    print(f"  체크섬 매니페스트: {manifest.relative_to(ROOT).as_posix()} "
+          f"({len(data.get('files') or {})}개 파일)")
+    print(f"  되돌리기: python tools/backup_project.py restore --snapshot {stamp} --dry-run"
+          "   → 확인 후 --dry-run 없이 다시")
+    print("  같은 내용을 한 벌 더 굽고 싶다면: snapshot --force")
+    if not with_images:
+        _warn_no_images("  ")
+    _warn_legacy()
+    if dest:
+        rc = _copy_out(Path(dest), [p for p in (manifest, z) if p.exists()])
+        if rc:
+            return rc
+    if keep:
+        prune(keep, keep_images=keep_images, dry_run=False, assume_yes=True)
     return 0
 
 
@@ -598,18 +682,39 @@ def _pre_restore_backup(rels: list[str]) -> tuple[int, str]:
 
 # ---------------------------------------------------------------- prune
 
-def prune(keep: int, *, base: Path | None = None, dry_run: bool = False,
-          assume_yes: bool = False) -> int:
-    if keep < 1:
+def prune(keep: int, *, keep_images: int | None = None, base: Path | None = None,
+          dry_run: bool = False, assume_yes: bool = False) -> int:
+    """오래된 스냅샷 정리 — 이미지 든 스냅샷에는 **더 짧은 상한**을 따로 적용한다.
+
+    상한이 하나뿐이던 시절의 기본값 12 는 '체크섬만 든 23KB zip' 기준이었다. 같은 12를
+    이미지 든 스냅샷(실측 118.4MB)에 적용하면 backups/ 가 1.4GB 까지 자라는데, 그 열두 개가
+    지키는 것은 대개 같은 앨범이다. 그래서 무거운 쪽만 KEEP_IMAGES_DEFAULT 로 센다.
+
+    지우지 않는 두 개는 어떤 상한에서도 남는다 — **가장 최신 스냅샷**과 **이미지가 든 가장
+    최신 스냅샷**. 앞은 restore 가 기본으로 겨냥하는 복구 지점이고, 뒤는 그림을 되돌릴 수
+    있는 유일한 종류의 백업이다(기본 snapshot 은 체크섬만 담는다).
+    """
+    keep_images = KEEP_IMAGES_DEFAULT if keep_images is None else int(keep_images)
+    if keep < 1 or keep_images < 1:
         print("보존 개수는 1 이상이어야 합니다.")
         return 1
     b = _base_dir(base)
     ms = _manifests(base)
-    if len(ms) <= keep:
-        print(f"정리할 스냅샷 없음 — 현재 {len(ms)}개(보존 상한 {keep}).")
+    heavy = [m for m in ms if _load_json(m).get("images_included")]
+
+    survivors = set(ms[max(0, len(ms) - keep):])
+    for m in heavy[:max(0, len(heavy) - keep_images)]:
+        survivors.discard(m)                 # 무거운 쪽은 더 짧게 센다
+    if ms:                                   # 안전장치 — 이 둘은 상한과 무관하게 남는다
+        survivors.add(ms[-1])
+    if heavy:
+        survivors.add(heavy[-1])
+    old = [m for m in ms if m not in survivors]
+    if not old:
+        print(f"정리할 스냅샷 없음 — 현재 {len(ms)}개"
+              f"(보존 상한 {keep} · 이미지 든 스냅샷 {keep_images}, 현재 {len(heavy)}개).")
         return 0
 
-    old = ms[:len(ms) - keep]
     victims: list[Path] = []
     for m in old:
         stamp = m.stem.replace("manifest_", "")
@@ -619,9 +724,15 @@ def prune(keep: int, *, base: Path | None = None, dry_run: bool = False,
             victims.append(z)
     freed = sum(p.stat().st_size for p in victims if p.exists())
 
-    print(f"오래된 스냅샷 {len(old)}개 정리 — 최신 {keep}개 보존, {_human(freed)} 회수")
+    n_heavy = sum(1 for m in old if _load_json(m).get("images_included"))
+    print(f"오래된 스냅샷 {len(old)}개 정리 — 최신 {keep}개"
+          f"(이미지 든 스냅샷은 최신 {keep_images}개) 보존, {_human(freed)} 회수")
     for m in old:
-        print(f"    - {m.stem.replace('manifest_', '')}")
+        img = " · 이미지 포함" if _load_json(m).get("images_included") else ""
+        print(f"    - {m.stem.replace('manifest_', '')}{img}")
+    if n_heavy:
+        print(f"  ※ 그중 {n_heavy}개는 이미지 원본을 담고 있었습니다 — 지우면 그 시점의 "
+              "그림은 이 폴더에서 되돌릴 수 없습니다(최신 이미지 스냅샷은 남습니다).")
     if dry_run:
         print("[미리보기] 삭제하지 않았습니다.")
         return 0
@@ -632,7 +743,8 @@ def prune(keep: int, *, base: Path | None = None, dry_run: bool = False,
             p.unlink()
         except OSError as e:
             print(f"  ✗ 삭제 실패: {p.name} ({e})")
-    print(f"정리 완료 — {len(old)}개 스냅샷 삭제.")
+    print(f"정리 완료 — {len(old)}개 스냅샷 삭제. 남은 {len(ms) - len(old)}개"
+          f"(이미지 포함 {len(heavy) - n_heavy}개).")
     print("  ※ prerestore_*.zip(복원 전 보관본)은 건드리지 않습니다.")
     return 0
 
@@ -740,7 +852,8 @@ def _psq(s: str) -> str:
 
 
 def schedule(*, time_of_day: str = "21:00", freq: str = "DAILY", day: str = "SUN",
-             keep: int = KEEP_DEFAULT, with_images: bool = False, images_scope: str = "approved",
+             keep: int = KEEP_DEFAULT, keep_images: int = KEEP_IMAGES_DEFAULT,
+             with_images: bool = False, images_scope: str = "approved",
              dest: str | None = None, task_name: str = TASK_NAME_DEFAULT,
              dry_run: bool = False, base: Path | None = None) -> int:
     hh, _, mm = time_of_day.partition(":")
@@ -761,7 +874,7 @@ def schedule(*, time_of_day: str = "21:00", freq: str = "DAILY", day: str = "SUN
     reg = b / "register_task.ps1"
     log = b / "auto_snapshot_log.txt"
 
-    snap_args = ["--keep", str(keep)]
+    snap_args = ["--keep", str(keep), "--keep-images", str(keep_images)]
     if with_images:
         snap_args += ["--with-images", "--images-scope", images_scope]
     if dest:
@@ -847,6 +960,10 @@ def main() -> int:
                     help="approved=승인 장면이 쓰는 이미지만(기본), all=images/ 전체")
     sp.add_argument("--dest", help="외장드라이브·클라우드 폴더에 사본 복사")
     sp.add_argument("--keep", type=int, help="스냅 후 최신 N개만 보존")
+    sp.add_argument("--keep-images", type=int, default=None,
+                    help=f"--keep 와 함께: 이미지 든 스냅샷은 최신 N개만 (기본 {KEEP_IMAGES_DEFAULT})")
+    sp.add_argument("--force", action="store_true",
+                    help="바뀐 파일이 없어도 zip 을 새로 굽는다(기본은 기존 스냅샷을 안내하고 생략)")
     sp.add_argument("--dry-run", action="store_true", help="쓰지 않고 계획만 표시")
 
     vp = sub.add_parser("verify", help="스냅과 현재 파일 대조 (이상이 있으면 restore 를 안내)")
@@ -872,6 +989,8 @@ def main() -> int:
 
     pp = sub.add_parser("prune", help="오래된 스냅샷 정리")
     pp.add_argument("--keep", type=int, default=KEEP_DEFAULT, help=f"보존 개수(기본 {KEEP_DEFAULT})")
+    pp.add_argument("--keep-images", type=int, default=KEEP_IMAGES_DEFAULT,
+                    help=f"이미지 든 스냅샷 보존 개수(기본 {KEEP_IMAGES_DEFAULT}) — 한 장이 수백 MB 다")
     pp.add_argument("--from", dest="src", help="백업 폴더(기본: backups/)")
     pp.add_argument("--dry-run", action="store_true")
     pp.add_argument("--yes", action="store_true")
@@ -881,6 +1000,7 @@ def main() -> int:
     cp.add_argument("--freq", default="DAILY", choices=["DAILY", "WEEKLY"])
     cp.add_argument("--day", default="SUN", help="WEEKLY 일 때 요일(SUN~SAT)")
     cp.add_argument("--keep", type=int, default=KEEP_DEFAULT)
+    cp.add_argument("--keep-images", type=int, default=KEEP_IMAGES_DEFAULT)
     cp.add_argument("--with-images", action="store_true")
     cp.add_argument("--images-scope", default="approved", choices=["approved", "all"])
     cp.add_argument("--dest", help="외부 사본 폴더")
@@ -893,7 +1013,8 @@ def main() -> int:
     if args.cmd == "snapshot":
         return snapshot(datetime.now(), with_images=args.with_images,
                         images_scope=args.images_scope, dest=args.dest,
-                        keep=args.keep, dry_run=args.dry_run)
+                        keep=args.keep, keep_images=args.keep_images,
+                        dry_run=args.dry_run, force=args.force)
     if args.cmd == "verify":
         return verify(args.snapshot, src)
     if args.cmd == "list":
@@ -904,8 +1025,10 @@ def main() -> int:
     if args.cmd == "migrate":
         return migrate(dry_run=args.dry_run, assume_yes=args.yes, base=src)
     if args.cmd == "prune":
-        return prune(args.keep, base=src, dry_run=args.dry_run, assume_yes=args.yes)
+        return prune(args.keep, keep_images=args.keep_images, base=src,
+                     dry_run=args.dry_run, assume_yes=args.yes)
     return schedule(time_of_day=args.time, freq=args.freq, day=args.day, keep=args.keep,
+                    keep_images=args.keep_images,
                     with_images=args.with_images, images_scope=args.images_scope,
                     dest=args.dest, task_name=args.name, dry_run=args.dry_run)
 

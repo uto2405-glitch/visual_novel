@@ -4559,7 +4559,9 @@ def b03(b: Box):
 def b04(b: Box):
     with bk_box(b) as (bpm, root), quiet():
         for i in range(5):
-            bpm.snapshot(dt.datetime(2026, 3, 1 + i, 12, 0, 0))
+            # force=True — 트리가 그대로면 2회차부터는 새 zip 을 굽지 않는다(B07).
+            # 여기서 재려는 것은 '보존 개수' 하나이므로 5개를 실제로 만들어 둔다.
+            bpm.snapshot(dt.datetime(2026, 3, 1 + i, 12, 0, 0), force=True)
         keeper = root / "backups" / "prerestore_20260101_000000.zip"
         keeper.write_bytes(b"PK-dummy")
         n_before = len(list((root / "backups").glob("manifest_*.json")))
@@ -4626,6 +4628,97 @@ def b06(b: Box):
     eq(sorted(promised - packed), [], "매니페스트가 약속했는데 zip 에 없는 파일")
     eq(rc_restore, 0, "restore")
     eq(rc_verify, 0, f"복원 직후 verify 가 누락을 보고함 — {log.getvalue()[-400:]}")
+
+
+@test("backup", "B07 바뀐 것이 없으면 같은 zip 을 다시 굽지 않는다(중복 스냅샷)")
+def b07(b: Box):
+    """실측으로 잡힌 자리: project_20260915_075622.zip 과 082157.zip 이 **바이트 단위 동일**
+    (sha256 3d361f37…, 112.9MB × 2)이었다. 백업이 둘이어도 복구력은 하나치인데 용량만 두 배다.
+
+    세 가지를 함께 잠근다 — ① 같으면 생략하고 **있는 스냅샷을 이름으로 안내**한다,
+    ② 생략된 회차에도 --dest 사본과 --force 는 사용자의 기대대로 동작한다,
+    ③ **가벼운 스냅샷 뒤의 --with-images 는 생략되지 않는다**(생략하면 이미지가 든 백업이
+      하나도 없는 상태가 조용히 유지된다).
+    """
+    with bk_box(b) as (bpm, root), quiet() as log:
+        bk = root / "backups"
+        eq(bpm.snapshot(dt.datetime(2026, 6, 1, 1, 0, 0), with_images=True), 0, "1회차")
+        first = sorted(p.name for p in bk.glob("project_*.zip"))
+        eq(bpm.snapshot(dt.datetime(2026, 6, 1, 2, 0, 0), with_images=True), 0, "2회차 rc")
+        after = sorted(p.name for p in bk.glob("project_*.zip"))
+        dest = root / "_dest"
+        eq(bpm.snapshot(dt.datetime(2026, 6, 1, 3, 0, 0), with_images=True, dest=str(dest)),
+           0, "생략 회차의 --dest rc")
+        eq(bpm.snapshot(dt.datetime(2026, 6, 1, 4, 0, 0), with_images=True, force=True),
+           0, "--force rc")
+        forced = sorted(p.name for p in bk.glob("project_*.zip"))
+        (root / "project" / "scenes" / "SCENE-001.json").write_text(
+            '{"scene_id":"SCENE-001","status":"APPROVED"}', encoding="utf-8")
+        eq(bpm.snapshot(dt.datetime(2026, 6, 1, 5, 0, 0), with_images=True), 0, "변경 후 rc")
+        changed = sorted(p.name for p in bk.glob("project_*.zip"))
+        copied = sorted(p.name for p in dest.glob("*")) if dest.exists() else []
+        text = log.getvalue()
+    eq(len(first), 1, f"1회차 zip {first}")
+    eq(after, first, f"바뀐 것이 없는데 zip 이 새로 구워짐 — {after}")
+    has(text, "백업 생략", "생략 사실을 말하지 않음")
+    has(text, first[0].replace(".zip", ""), "생략하면서 기존 스냅샷 이름을 안내하지 않음")
+    ok(first[0] in copied, f"생략된 회차에 외부 사본이 빠짐 — {copied}")
+    eq(len(forced), 2, f"--force 가 새 zip 을 굽지 않음 — {forced}")
+    eq(len(changed), 3, f"내용이 바뀌었는데 새 zip 이 없음 — {changed}")
+
+    # ③ 가벼운 스냅샷(project 만) 다음의 --with-images 는 담는 것이 다르므로 생략 금지
+    with bk_box(b) as (bpm, root), quiet():
+        eq(bpm.snapshot(dt.datetime(2026, 6, 2, 1, 0, 0)), 0, "가벼운 1회차")
+        eq(bpm.snapshot(dt.datetime(2026, 6, 2, 2, 0, 0), with_images=True), 0, "이미지 포함 2회차")
+        zips = sorted(p.name for p in (root / "backups").glob("project_*.zip"))
+        mans = sorted((root / "backups").glob("manifest_*.json"))
+        with_img = json.loads(mans[-1].read_text(encoding="utf-8")).get("images_included")
+    eq(len(zips), 2, f"이미지 든 스냅샷이 가벼운 스냅샷 때문에 생략됨 — {zips}")
+    eq(with_img, True, "두 번째 스냅샷이 이미지를 담지 않았다")
+
+
+@test("backup", "B08 prune — 이미지 든 스냅샷은 따로(짧게) 세고, 최신 이미지 스냅샷은 남긴다")
+def b08(b: Box):
+    """상한이 하나뿐이면 기본값 12 가 '23KB zip 열둘' 과 '118MB zip 열둘'(1.4GB)을 같은 말로
+    다룬다. 무거운 쪽만 따로 세되, **되돌릴 수 있는 유일한 종류의 백업**이 0개가 되는 일은
+    어떤 상한에서도 없어야 한다.
+    """
+    def heavy_of(bk):
+        return [m.name for m in sorted(bk.glob("manifest_*.json"))
+                if json.loads(m.read_text(encoding="utf-8")).get("images_included")]
+
+    with bk_box(b) as (bpm, root), quiet() as log:
+        bk = root / "backups"
+        for i in range(3):
+            bpm.snapshot(dt.datetime(2026, 7, 1 + i, 9, 0, 0), force=True)
+            bpm.snapshot(dt.datetime(2026, 7, 1 + i, 10, 0, 0), with_images=True, force=True)
+        n_all, n_heavy = len(list(bk.glob("manifest_*.json"))), len(heavy_of(bk))
+        rc_noop = bpm.prune(12, assume_yes=True)                 # 기본값은 아무것도 지우지 않는다
+        kept_noop = len(list(bk.glob("manifest_*.json")))
+        rc = bpm.prune(6, keep_images=1, assume_yes=True)         # 전체는 다 남기되 무거운 쪽만 1개
+        left = sorted(m.name for m in bk.glob("manifest_*.json"))
+        heavy_left = heavy_of(bk)
+        zips_left = sorted(p.name for p in bk.glob("project_*.zip"))
+        text = log.getvalue()
+    eq((n_all, n_heavy), (6, 3), "스냅샷 준비")
+    eq(rc_noop, 0, "기본 prune rc")
+    eq(kept_noop, 6, "기본값(--keep 12 · --keep-images 3)이 사용자 백업을 지웠다")
+    eq(rc, 0, "prune rc")
+    eq(len(left), 4, f"무거운 쪽만 줄어야 한다 — {left}")
+    eq(len(heavy_left), 1, f"이미지 스냅샷 상한이 듣지 않음 — {heavy_left}")
+    eq(len(zips_left), 4, f"매니페스트와 zip 이 짝이 맞지 않음 — {zips_left}")
+    has(text, "이미지 포함", "무엇을 지우는지(이미지 포함 여부) 말하지 않음")
+
+    # 안전장치 — 상한이 1이라도 '이미지가 든 최신 스냅샷' 은 남는다
+    with bk_box(b) as (bpm, root), quiet():
+        bk = root / "backups"
+        bpm.snapshot(dt.datetime(2026, 8, 1, 9, 0, 0), with_images=True, force=True)
+        bpm.snapshot(dt.datetime(2026, 8, 2, 9, 0, 0), force=True)
+        eq(bpm.prune(1, keep_images=1, assume_yes=True), 0, "prune rc")
+        left2 = sorted(m.name for m in bk.glob("manifest_*.json"))
+        heavy2 = heavy_of(bk)
+    eq(len(left2), 2, f"최신 스냅샷과 이미지 스냅샷이 함께 남아야 한다 — {left2}")
+    eq(len(heavy2), 1, "이미지가 든 유일한 스냅샷이 지워졌다")
 
 
 # ============================================================ 인화(print)

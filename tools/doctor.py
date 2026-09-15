@@ -579,8 +579,9 @@ def check_derived() -> None:
 
     bn, bmb = _du(ROOT / "backups")
     add("용량", "백업(backups)", OK if bmb < 1000 else WARN, f"{bmb:.1f}MB · {bn}개 파일",
-        "**사람이 정한다** — 오래된 스냅샷 정리: python tools/backup_project.py prune --keep 3 "
-        "(같은 내용의 zip 이 둘이면 그것부터)")
+        "**사람이 정한다** — 오래된 스냅샷 정리: python tools/backup_project.py prune --dry-run "
+        "(기본 --keep 12 · 이미지 든 스냅샷은 --keep-images 3 으로 따로 셉니다. 한 장이 수백 MB 다). "
+        "같은 내용의 스냅샷은 이제 새로 구워지지 않습니다 — snapshot 이 체크섬을 대조해 생략합니다.")
 
 
 def check_backups() -> None:
