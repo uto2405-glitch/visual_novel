@@ -645,10 +645,18 @@ function sceneCard(sc) {
   }
 
   const row = el("div", "row");
-  const gen = el("button", "go", raws.length ? "그림 더 뽑기" : "그림 뽑기");
-  gen.type = "button";
-  gen.addEventListener("click", () => genFor(sc.scene_id, gen));
-  row.appendChild(gen);
+
+  /* 가격표를 버튼에 붙인다 — 누르기 전에 얼마나 걸릴지 알아야 계속할지 정할 수 있다.
+   * 한 장씩 뽑는 쪽을 앞에 둔다: 마음에 드는 것이 먼저 나오면 23초에 끝난다. */
+  const one = el("button", "go", raws.length ? "한 장 더 · 23초" : "그림 뽑기 · 23초");
+  one.type = "button";
+  one.addEventListener("click", () => genFor(sc.scene_id, one, 1));
+  row.appendChild(one);
+
+  const many = el("button", null, "4장 한 번에 · 약 1분 32초");
+  many.type = "button";
+  many.addEventListener("click", () => genFor(sc.scene_id, many, 4));
+  row.appendChild(many);
 
   if (sc.selected_image && sc.status !== "APPROVED") {
     const ap = el("button", null, "승인");
@@ -687,31 +695,62 @@ async function approve(sid, btn) {
     btn.disabled = false;
   } finally { setBusy(false); }
 }
-
-/* 생성은 백그라운드로 돌고 진행은 따로 물어본다 — 폰 브라우저가 긴 POST 를 끊기 때문이다. */
-async function genFor(sid, btn) {
+/* 그림 뽑기 — 후보가 나오는 대로 보여 주고, 원할 때 멈춘다.
+ *
+ * 예전에는 요청한 장수가 다 구워질 때까지 화면이 한 줄짜리 문구였다. 실측으로 한 장에
+ * 23초이므로 4장을 시키면 92초 동안 아무것도 못 한다. 이제 한 장이 나올 때마다 서버가
+ * 등록하고, 화면은 그때마다 장면을 다시 그린다 — 마음에 드는 것이 먼저 나오면 23초에
+ * 끝낼 수 있다. 총 시간이 줄어드는 게 아니라, 계속할지 내가 정하게 되는 것이다.
+ *
+ * 고르는 것은 여전히 사람이다. 자동 선택은 하지 않는다. */
+async function genFor(sid, btn, want) {
   if (S.busy) return;
+  const n = Math.max(1, Math.min(parseInt(want, 10) || 1, 4));
   setBusy(true);
   if (btn) btn.disabled = true;
-  const note = addNote(sid + " 그림 요청 중…");
+
+  const note = addNote(sid + " · " + n + "장 요청 — 한 장에 약 23초");
+  const row = el("div", "offer");
+  const stop = el("button", null, "그만 뽑기");
+  stop.type = "button";
+  stop.addEventListener("click", async () => {
+    stop.disabled = true;
+    stop.textContent = "이번 장까지만…";
+    try { await api("/api/gen-cancel", { scene_id: sid }); } catch (e) { /* 폴링이 본다 */ }
+  });
+  row.appendChild(stop);
+  stream().appendChild(row);
+  scrollEnd();
+
+  let seen = 0;
   try {
-    await api("/api/gen-image", { scene_id: sid, n: 1 });
+    await api("/api/gen-image", { scene_id: sid, n: n });
     for (;;) {
-      await new Promise((r) => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, 2200));
       const st = await api("/api/gen-status", { scene_id: sid });
       if (st && st.message) note.textContent = sid + " · " + st.message;
+
+      /* 한 장이 등록될 때마다 장면 목록이 늘어난다 — 그때마다 다시 그려서 바로 보이게 한다.
+       * 숫자는 문구가 아니라 done 칸에서 읽는다: 문구는 엔진 폴링이 1.5초마다 갈아치운다. */
+      if (st && Number(st.done || 0) > seen) {
+        seen = Number(st.done);
+        await refresh();
+        if (S.view === "scenes" || S.view === "gallery") showView(S.view);
+      }
       if (!st || !st.running) {
         if (st && st.error) throw new Error(st.error);
         break;
       }
     }
-    note.textContent = sid + " 그림이 나왔습니다. 후보 중에서 고르세요.";
+    row.remove();
+    note.textContent = sid + " · 후보가 나왔습니다. 마음에 드는 것을 고르세요.";
     await refresh();
-    renderScenes();
     showView("scenes");
   } catch (e) {
+    row.remove();
     note.textContent = String(e.message || e);
     note.className = "bubble sys err";
+    await refresh();
   } finally {
     if (btn) btn.disabled = false;
     setBusy(false);

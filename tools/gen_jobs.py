@@ -97,6 +97,10 @@ _HOST = socket.gethostname()
 _LOCK = threading.Lock()
 _JOBS: dict[str, dict] = {}     # scene_id → {running, message, ts}
 _OWNED: dict[str, str] = {}     # scene_id → 이 프로세스가 잠금 파일에 적은 토큰
+# 사람이 "그만" 을 누른 장면. 굽는 루프가 장마다 이 표를 보고 스스로 멈춘다.
+# 죽이지 않고 물어보는 방식인 이유: 이미 구워진 장은 살려야 하고, 반쯤 쓰인 파일이
+# 남으면 안 되며, 등록은 멈춘 지점까지만 일어나야 하기 때문이다.
+_CANCEL: dict[str, float] = {}  # scene_id → 취소를 누른 시각
 
 # webapp 이 setup_logging 에서 같은 회전 로그 파일에 물린다. 라이브러리로 쓰일 때는 조용히.
 log = logging.getLogger("vn.gen")
@@ -315,13 +319,22 @@ def claim(sid: str, label: str = "생성") -> None:
             _OWNED[sid] = token
 
 
-def note(sid: str, message: str, running: bool = True) -> None:
+def note(sid: str, message: str, running: bool = True, done=None, want=None) -> None:
     """진행 문구 갱신. running=False 면 그 작업은 끝난 것으로 표시된다.
 
     잠금 파일은 여기서 지우지 않는다(그건 release 의 일) — 대신 만료 시계만 밀어 준다.
+
+    done/want 는 **문구와 따로** 보관한다. 예전에는 "2/4장 나왔습니다" 를 문구에 적었는데,
+    엔진 폴링(on_progress)이 1.5초마다 문구를 통째로 갈아치워서 화면이 그 숫자를 볼 수
+    없었다 — 그래서 '한 장 나올 때마다 보여 주기'도 '중간에 그만두기'도 동작하지 않았다.
+    숫자는 칸에 두고 문구는 문구대로 흐르게 한다.
     """
     with _LOCK:
-        _JOBS[sid] = {"running": bool(running), "message": str(message), "ts": time.time()}
+        prev = _JOBS.get(sid) or {}
+        rec = {"running": bool(running), "message": str(message), "ts": time.time()}
+        rec["done"] = prev.get("done", 0) if done is None else int(done)
+        rec["want"] = prev.get("want", 0) if want is None else int(want)
+        _JOBS[sid] = rec
         owned = sid in _OWNED
     if owned and running:
         _touch_lock(sid)
@@ -395,6 +408,38 @@ def claimed(sid: str, label: str = "생성"):
         release(sid, f"{label} 완료")
 
 
+def request_cancel(sid: str) -> dict:
+    """이 장면의 생성을 그만두라고 표시한다 → {cancelled, scene_id}.
+
+    굽는 쪽을 죽이지 않는다. 장을 하나 끝낼 때마다 :func:`cancelled` 을 보고 스스로
+    멈추게 한다 — 그래야 이미 구워진 장이 살고, 반쯤 쓰인 파일이 남지 않고, 등록이
+    멈춘 지점까지만 일어난다. (진행 중인 렌더 자체는 엔진 쪽에서 별도로 끊는다.)
+    """
+    sid = _require_sid(sid)
+    with _LOCK:
+        _CANCEL[sid] = time.time()
+        job = _JOBS.get(sid)
+        if job:
+            job["message"] = "이번 장이 끝나면 멈춥니다…"
+    return {"cancelled": True, "scene_id": sid}
+
+
+def cancelled(sid: str) -> bool:
+    """이 장면에 '그만' 표시가 있는가 — 굽는 루프가 장마다 물어본다."""
+    if not sid:
+        return False
+    with _LOCK:
+        return sid in _CANCEL
+
+
+def clear_cancel(sid: str) -> None:
+    """표시를 지운다(작업이 끝났거나 새로 시작할 때)."""
+    if not sid:
+        return
+    with _LOCK:
+        _CANCEL.pop(sid, None)
+
+
 def status(sid: str) -> dict:
     """생성 진행 조회 — {running, message, scene_id, error?}.
 
@@ -421,7 +466,10 @@ def status(sid: str) -> dict:
             if not mine and not _is_dead_owner(info):
                 return {"running": True, "scene_id": sid,
                         "message": f"다른 곳에서 생성 중입니다({_owner(info)})."}
-    out = {"running": running_now, "message": str(job.get("message", "")), "scene_id": sid}
+    out = {"running": running_now, "message": str(job.get("message", "")), "scene_id": sid,
+           # 몇 장 나왔는지는 문구와 따로 나간다 — 문구는 1.5초마다 갈아치워지기 때문이다.
+           "done": int(job.get("done") or 0), "want": int(job.get("want") or 0),
+           "cancelled": sid in _CANCEL}
     err = str(job.get("error", "") or "")
     if err and not running_now:
         out["error"] = err                 # 실패는 문구가 아니라 이 키로 말한다(화면이 보는 자리)

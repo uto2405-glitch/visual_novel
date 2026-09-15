@@ -5441,6 +5441,44 @@ def l10(b: Box):
     eq(bad, [], "사적 대화 파일이 이미 git 에 추적되고 있다")
 
 
+@test("unit", "U34 생성 중단 — 장 사이에서만 멈추고, 이미 구운 장은 남고, 진행 숫자는 문구에 안 산다")
+def u34(b: Box):
+    """세 가지를 잠근다.
+
+    (1) 멈춤은 **장 사이에서만** 일어난다. 굽는 도중에 끊으면 반쯤 쓰인 파일이 남는다.
+    (2) 진행 숫자(done/want)는 문구와 따로 보관된다. 예전에는 문구에 "2/4장" 을 적었는데
+        엔진 폴링이 1.5초마다 문구를 통째로 갈아치워 화면이 그 숫자를 볼 수 없었다 —
+        그래서 '한 장씩 보여 주기'도 '중간에 그만두기'도 조용히 죽어 있었다.
+    (3) 취소 표시는 새 작업을 시작할 때 지워진다. 안 그러면 지난 '그만' 이 다음 생성을
+        첫 장에서 멈춰 세운다.
+    """
+    gj = b.mod("gen_jobs")
+    sid = "SCENE-001"
+
+    gj.clear_cancel(sid)
+    ok(not gj.cancelled(sid), "표시를 지웠는데 아직 취소 상태다")
+    gj.request_cancel(sid)
+    ok(gj.cancelled(sid), "그만 표시가 안 걸렸다")
+    gj.clear_cancel(sid)
+    ok(not gj.cancelled(sid), "새 작업을 시작해도 지난 표시가 남아 있다 — 첫 장에서 멈춘다")
+
+    # 숫자는 문구가 갈아치워져도 살아남아야 한다
+    gj.note(sid, "2/4장 나왔습니다", done=2, want=4)
+    gj.note(sid, "ComfyUI 생성 중… 7초 경과 · 렌더 중")      # 폴링이 문구만 갈아치운다
+    st = gj.status(sid)
+    eq(st.get("done"), 2, "문구가 갈아치워지며 진행 숫자가 사라졌다")
+    eq(st.get("want"), 4, "요청 장수가 사라졌다")
+    gj.release(sid)
+
+    # 렌더 루프는 should_stop 을 장마다 본다 — 한 장도 굽기 전에 멈추면 명확히 말한다
+    cc = b.mod("comfyui_client")
+    src = b.p("tools/comfyui_client.py").read_text(encoding="utf-8")
+    has(src, "should_stop", "렌더 루프에 중단 확인이 없다")
+    has(src, "on_each", "장마다 알리는 콜백이 없다")
+    ok(src.index("if should_stop") < src.index("sd = (base + i)"),
+       "중단 확인이 굽기 시작한 뒤에 있다 — 장 중간에 끊긴다")
+
+
 @test("unit", "U33 조립 스트림 — 장면이 완성되는 즉시 알아채고, 대사 속 괄호에 속지 않는다")
 def u33(b: Box):
     """_SceneStream 은 흐르는 글자에서 장면 경계를 잡는다. 이게 틀리면 두 가지로 망가진다:

@@ -712,15 +712,43 @@ def r_gen_image(b):
     sc = scene_ops.assert_mutable(sid, "이미지를 다시 생성하려면")
     n = max(1, min(int(b.get("n", 1) or 1), 4))
 
+    gen_jobs.clear_cancel(sid)          # 지난 '그만' 표시가 새 작업을 즉시 멈추지 않게
+
     def work():
         gen_jobs.note(sid, f"{label} 에 생성 요청 중…")
-        return image_gen.generate_for_scene(sid, n=n, engine=engine,
-                                            on_progress=_progress(sid, "생성", engine))
+
+        def _each(done, want, files):
+            """한 장이 나올 때마다 등록하고 알린다 — 다 구워질 때까지 기다리지 않는다.
+
+            등록을 장마다 하는 이유: 화면이 후보를 바로 보여 주려면 assets 에 들어 있어야
+            한다. register_images 는 IMAGE 에서 멈추므로(선택은 사람이) 불변식은 그대로다.
+            """
+            try:
+                scene_ops.register_images(sid)
+            except Exception:
+                pass                     # 등록 실패가 남은 장을 굽지 못하게 두지 않는다
+            gen_jobs.note(sid, f"{done}/{want}장 나왔습니다 — 고르거나 더 뽑을 수 있습니다.",
+                          done=done, want=want)
+
+        return image_gen.generate_for_scene(
+            sid, n=n, engine=engine,
+            on_progress=_progress(sid, "생성", engine),
+            on_each=_each,
+            should_stop=lambda: gen_jobs.cancelled(sid))
 
     return gen_jobs.start(
         sid, work, "생성", sync=bool(b.get("sync")), count=_candidates(sc),
         message=f"{label} 생성 중… (ComfyUI: 보통 20~90초 / MakeFun: 1~3분) "
                 "진행 상황은 자동으로 갱신됩니다.")
+
+
+def r_gen_cancel(b):
+    """생성을 그만두라고 표시한다 → {cancelled, scene_id}.
+
+    이미 구워진 장은 남는다. 장 사이에서만 멈추므로 반쯤 쓰인 파일이 생기지 않는다.
+    """
+    sid = _require_scene(b.get("scene_id")) and b.get("scene_id")
+    return gen_jobs.request_cancel(sid)
 
 
 def r_refetch(b):
@@ -1021,7 +1049,8 @@ POST_ROUTES = {
     "/api/talk-history": r_talk_history,
     "/api/gen-prompt": r_gen_prompt, "/api/gen-image": r_gen_image,
     "/api/image-engine": r_image_engine,
-    "/api/gen-status": r_gen_status, "/api/refetch": r_refetch,
+    "/api/gen-status": r_gen_status, "/api/gen-cancel": r_gen_cancel,
+    "/api/refetch": r_refetch,
     "/api/upscale": r_upscale, "/api/credits": r_credits,
     "/api/favorite": r_favorite,
     "/api/talk-to-scene": r_talk_to_scene,

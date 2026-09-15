@@ -672,7 +672,7 @@ def _seed(seed) -> int:
 def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
                     long_edge: int | None = None, negative: bool = True,
                     scene_id: str = "", on_progress=None, quiet: bool = False,
-                    input_images=None, seed=None) -> GenResult:
+                    input_images=None, seed=None, on_each=None, should_stop=None) -> GenResult:
     """n 장을 **순차** 렌더(시드 seed, seed+1, …)해 out_dir 에 cf_<id6>_<i>.png 로 저장.
 
     한 장이 실패해도 나머지는 살리고 경고로 알린다. 장마다 _gen_meta.json 항목과
@@ -699,7 +699,13 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
          f" · seed {base}{'+' if n > 1 else ''}", quiet)
     saved: list[Path] = []
     ids: list[str] = []
+    stopped = False
     for i in range(n):
+        # 장 사이에서만 멈춘다 — 굽는 도중에 끊으면 반쯤 쓰인 파일이 남는다.
+        if should_stop and should_stop():
+            stopped = True
+            warns.append(f"{i + 1}번째부터는 멈췄습니다(사람이 그만두었습니다).")
+            break
         sd = (base + i) % (SEED_MAX + 1)      # 상한을 넘으면 되돌아온다(값은 여전히 결정적이다)
         started = _now()
         pid, err = "", ""
@@ -731,7 +737,16 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
             "status": "ok" if files and not err else ("partial" if files else "failed"),
             "error": err, "billable": False})
         saved += files
+        # 한 장이 끝날 때마다 알린다 — 다 구워질 때까지 기다리지 않고 화면이 바로 보여 준다.
+        # 실측: 4장이면 92초인데, 한 장에 만족한 날은 23초에 끝낼 수 있다.
+        if on_each and files:
+            try:
+                on_each(i + 1, n, [str(f) for f in files])
+            except Exception:
+                pass      # 화면 갱신 실패가 남은 장을 굽지 못하게 두지 않는다
     if not saved:
+        if stopped:
+            raise VNError("한 장도 굽기 전에 멈췄습니다.")
         raise VNError("생성된 이미지가 없습니다." + (" " + " / ".join(warns) if warns else ""))
     return GenResult(saved, warns, ids)
 
@@ -791,7 +806,8 @@ def _record_generator(scene_id: str, ckpt: str) -> str:
 
 def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
                        negative: bool = True, on_progress=None, quiet: bool = False,
-                       reference: bool = True, seed=None) -> GenResult:
+                       reference: bool = True, seed=None, on_each=None,
+                       should_stop=None) -> GenResult:
     """장면의 이미지 프롬프트(prompt.grok_output)로 렌더해 images/raw/<scene>/ 에 저장.
 
     성공하면 scene_ops.record_external_generator 로 "ComfyUI · <체크포인트>" 를 남긴다(실패는 경고).
@@ -805,7 +821,8 @@ def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
     refs = _scene_refs(sc) if reference else []
     res = generate_to_dir(prompt, RAW_DIR / scene_id, n=n, name=scene_id, long_edge=long_edge,
                           negative=negative, scene_id=scene_id, on_progress=on_progress,
-                          quiet=quiet, input_images=refs, seed=seed)
+                          quiet=quiet, input_images=refs, seed=seed,
+                          on_each=on_each, should_stop=should_stop)
     warn = _record_generator(scene_id, checkpoint())
     if warn:
         res.warnings.append(warn)
