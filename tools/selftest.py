@@ -118,9 +118,12 @@ LAYER = {
     "make_grok_input": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
     "gen_common": 1,
     # 2 조립·전이 계층
-    "advance_scene": 2, "prompt_build": 2, "gen_jobs": 2, "scene_lint": 2, "export_pwa": 2,
+    "advance_scene": 2, "prompt_build": 2, "gen_jobs": 2, "export_pwa": 2,
     # 3 외부 연동·오케스트레이션 — 두 이미지 클라이언트는 서로를 모른다(고르는 것은 image_gen).
-    "makefun_client": 3, "comfyui_client": 3, "vn_compose": 3, "grok_api": 3,
+    #   scene_lint 가 여기 있는 이유는 **조립부 위**여야 하기 때문이다: 저장된 프롬프트를
+    #   지금 조립부가 내는 것과 비교하려면(prompt-drift) prompt_build 를 부른다. 그래서
+    #   어휘·정규화 같은 공유 규칙은 vn_core 로 내려가 있다(양방향 import 가 되지 않게).
+    "makefun_client": 3, "comfyui_client": 3, "vn_compose": 3, "grok_api": 3, "scene_lint": 3,
     # 4 엔진 선택기 — 두 클라이언트 위에 서고, webapp·doctor 만 부른다.
     "image_gen": 4,
     # 5 최상위 진입점 — 아무도 이들을 import 하지 않는다.
@@ -6615,6 +6618,56 @@ def u24(b: Box):
     for word in ("테이블을 사이에 둔", "식은 잔", "focus", "depth of field"):
         hasnt(base, word, f"framing/focus 가 프롬프트에 실렸다({word!r}) — 실측에서 안 통했거나 해로웠다")
     eq(pb.camera_segment(sc), "", "카메라 조각이 각도 말고 다른 것을 내고 있다")
+
+
+@test("unit", "U25 scene_lint.prompt-drift — 저장된 프롬프트가 조립부와 갈라진 컷을 말해 준다(자문)")
+def u25(b: Box):
+    """조립 규칙은 실측마다 바뀌는데 프롬프트는 **장면 파일에 저장**된다 — 그 차이를 아무도
+    말해 주지 않던 자리의 잠금장치.
+
+    '노을' 이 두 낱말이 된 뒤에도 옛 컷의 프롬프트는 `sunset` 한 낱말로 남아 있었고,
+    거리 비트에서 `couple` 을 뺀 뒤에도 옛 프롬프트에는 그대로 있었다. 그 자체는 고장이
+    아니다 — **그 그림은 그 조리법으로 구워졌다**. 그래서 여기서 잠그는 것은 셋이다.
+    ① 갈라진 컷과 **어느 조각**이 갈라졌는지를 말한다,
+    ② 동작 문장은 비교하지 않는다(사람이 쓰는 한 문장이라 재현할 수 없다),
+    ③ 이것은 자문이다 — level 은 info 이고 종료 코드는 0 이다(검사기 불침범).
+    """
+    pb, sl = b.mod("prompt_build"), b.mod("scene_lint")
+    mf = read_json(b.p("project/manifest.json"))
+    base = read_json(b.root / "examples" / "scenes" / "SCENE-001.json")
+    sc = dict(base, time="노을")
+    text = pb.compose_image_prompt(sc, action="walking along the river")
+
+    def drifts(stored: str, scene: dict | None = None) -> list:
+        got = []
+        sl._check_prompt_drift([dict(scene or sc, prompt={"grok_output": stored})], mf,
+                               lambda lv, rule, msg, sid="-": got.append((lv, rule, msg)))
+        return [g for g in got if g[1] == "prompt-drift"]
+
+    # ① 지금 조립부가 낸 그대로면 조용하다
+    eq(drifts(text), [], "방금 조립한 프롬프트를 갈라졌다고 한다(거짓 경보)")
+
+    # ② 꼬리 — '노을' 이 옛 한 낱말로 남은 컷(실제로 이 저장소에 있던 상태)
+    got = drifts(text.replace("sunset, golden hour", "sunset"))
+    eq(len(got), 1, f"옛 시간대 낱말을 못 찾거나 여러 줄로 말한다: {got}")
+    has(got[0][2], "'time'", "어느 조각이 갈라졌는지 말하지 않는다")
+    eq(got[0][0], "info", "자문이어야 할 것이 경고로 떴다(검사기 불침범)")
+
+    # ③ 머리 — 앞쪽 조각이 갈라져도 찾는다
+    got = drifts(text.replace("portrait 2:3", "portrait 3:4"))
+    eq(len(got), 1, "프롬프트 앞쪽 조각의 차이를 못 찾는다")
+    has(got[0][2], "'style'", "갈라진 조각의 이름이 틀렸다")
+
+    # ④ 동작 문장은 비교하지 않는다 — 사람이 손으로 쓴 문장이 매번 경고가 되면 안 된다
+    eq(drifts(pb.compose_image_prompt(sc, action="she stops and looks back at him")), [],
+       "동작 문장이 다르다고 갈라졌다고 한다 — 그 문장은 재현 대상이 아니다")
+    eq(drifts(""), [], "프롬프트가 없는 장면에 대해 말한다")
+
+    # ⑤ 살아 있는 저장소에서도 이것은 자문이다(종료 코드 0 · level info)
+    out = sl.lint_scenes()
+    for f in out["findings"]:
+        if f["rule"] == "prompt-drift":
+            eq(f["level"], "info", f"prompt-drift 가 경고로 떴다: {f}")
 
 
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")

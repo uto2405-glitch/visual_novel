@@ -35,7 +35,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import local_llm  # noqa: E402
 import prompt_build  # noqa: E402  (이미지 프롬프트 조립 — 대화→장면 경로가 바로 이어 쓴다)
-import scene_lint  # noqa: E402  (연출 규칙·카메라 표준 어휘의 단일 출처)
 import scene_ops  # noqa: E402   (장면 상태 전이의 유일한 구현)
 import vn_core  # noqa: E402
 import xai_client  # noqa: E402
@@ -179,8 +178,8 @@ def build_compose_instruction(count: int, branching: bool = False) -> str:
     char_block = "\n".join(f"- {c.get('character_id')} {c.get('name','')}: anchor=\"{c.get('prompt_anchor','')}\"" for c in chars)
     loc_block = "\n".join(f"- {l.get('location_id')} {l.get('name','')}: anchor=\"{l.get('prompt_anchor','')}\"" for l in locs)
     style = vn_core.visual_style(mf)
-    shot_vocab = " / ".join(scene_lint.STD_SHOTS)
-    angle_vocab = " / ".join(scene_lint.STD_ANGLES)
+    shot_vocab = " / ".join(vn_core.STD_SHOTS)      # 어휘 정본은 vn_core(린터도 같은 목록을 본다)
+    angle_vocab = " / ".join(vn_core.STD_ANGLES)
     aff = _dating_scale(mf)
     # 분기는 요청할 때만 — 기본 지시문은 선형 작품이 깨끗하게 나오도록 분기 필드를 금지한다.
     branch_block = f"""

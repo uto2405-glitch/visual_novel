@@ -10,6 +10,8 @@
   3) 프롬프트 상태: 되돌림(revise) 뒤에 남은 프롬프트와 그 때문에 지금 A6 가 FAIL 을 내는
      장면 — '고장'과 '아직 다시 만들지 않은 중간 상태'를 구분해 준다.
      stale-prompt / anchor-missing.
+     조립 규칙이 바뀌어 **저장된 프롬프트가 지금 조립부와 갈라진** 컷도 알려 준다(prompt-drift).
+     '틀렸다' 가 아니다 — 그 그림은 그 조리법으로 구워졌다.
      여기에 A6 의 사각지대 하나가 더 있다 — 앵커는 둘인데 인원수 단서가 없어 실제로는
      한 명만 그려지는 컷. composition-cue / two-shot-single.
 
@@ -365,6 +367,66 @@ def _check_prompt_state(scenes, add) -> None:
                 + tail + " (스튜디오의 '앵커 자동 보정'이 원문 그대로 채워 준다)", sid)
 
 
+def _first_drift(stored: str, seg: dict, names, pb, from_end: bool = False):
+    """조각 목록 중 저장된 프롬프트와 **처음 갈라지는 조각**의 이름 — 같으면 None.
+
+    빈 조각은 `assemble` 이 조용히 버리므로 절대 걸리지 않는다(= 조각이 없는 것과 같다).
+    """
+    text = stored.strip()
+    for k in range(1, len(names) + 1):
+        part = names[-k:] if from_end else names[:k]
+        piece = pb.assemble(seg, tuple(part))
+        if not piece:
+            continue
+        if not (text.endswith(piece) if from_end else text.startswith(piece)):
+            return (names[-k] if from_end else names[k - 1])
+    return None
+
+
+def _check_prompt_drift(scenes, mf, add) -> None:
+    """저장된 프롬프트 ↔ **지금 조립부가 내는 것**의 차이 — 자문(고장이 아니다).
+
+    조립 규칙은 실측이 나올 때마다 바뀐다(노을 두 낱말 · 거리 비트의 `couple` 제거 · 인물
+    태그 …). 그런데 프롬프트는 **장면 파일에 저장**되므로, 규칙이 바뀌어도 옛 컷의 프롬프트는
+    그대로 남는다. 그게 잘못은 아니다 — 그 그림은 **그 조리법으로 구워졌고**, 저장된 문자열은
+    그림의 조리법 원본이다. 문제는 **아무도 그 차이를 말해 주지 않는다**는 것이었다.
+
+    그래서 여기서는 '틀렸다' 가 아니라 '갈라졌다' 를 말하고, 고르라고 한다:
+      · 다시 구울 거면 프롬프트도 함께 새로 만든다(그림과 조리법이 같이 움직인다).
+      · 다시 굽지 않을 거면 **둘 다 그대로 둔다** — 프롬프트만 새로 만들면 저장된 조리법이
+        화면의 그림과 달라진다(앨범이 조용히 거짓말을 하게 된다).
+
+    동작 문장은 비교하지 않는다(사람이 손으로 쓰거나 LLM 이 만든 한 문장이라 재현할 수 없다) —
+    그 앞뒤의 **결정적인 조각들만** 본다.
+    """
+    try:
+        import prompt_build as pb       # 지연 import — 조립 규칙의 단일 출처(위층)
+    except ImportError:                 # 조립부 없이도 린터는 계속 돈다
+        return
+    order = tuple(pb.SEGMENT_ORDER)
+    ai = order.index("action")
+    head, tail = order[:ai], order[ai + 1:]
+    for sc in scenes:
+        stored = _prompt_of(sc)
+        if not stored:
+            continue
+        sid = _s(sc.get("scene_id", "?"))
+        try:
+            seg = pb.prompt_segments(sc, "", mf if isinstance(mf, dict) else None)
+        except (KeyError, TypeError, ValueError):    # 기준정보가 깨진 장면은 건너뛴다
+            continue
+        for names, end in ((head, False), (tail, True)):
+            name = _first_drift(stored, seg, names, pb, end)
+            if not name:
+                continue
+            now = _s(seg.get(name, "")).strip()
+            add("info", "prompt-drift",
+                f"저장된 프롬프트가 지금 조립부와 갈라졌다 — '{name}' 조각은 지금이라면 "
+                f"\"{now[:70]}{'…' if len(now) > 70 else ''}\" 다"
+                " (고장이 아니다 — 그 그림은 그때 조리법으로 구워졌다 · 아래 참고)", sid)
+            break                        # 한 장면에 한 줄이면 충분하다
+
+
 def _check_camera_vocab(scenes, add) -> None:
     """카메라 shot/angle 표기 표준화 — 'eye level' 과 'eye-level' 이 섞이면 컷 반복 감지가 무력화된다."""
     for field, std, hint in (("shot", STD_SHOTS, SHOT_HINT), ("angle", STD_ANGLES, ANGLE_HINT)):
@@ -656,6 +718,7 @@ def lint_scenes() -> dict:
     _check_intimacy(scenes, add)
     _check_time(scenes, add)
     _check_prompt_state(scenes, add)
+    _check_prompt_drift(scenes, mf, add)
     _check_camera_vocab(scenes, add)
     _check_branching(scenes, mf, add)
 
@@ -687,6 +750,10 @@ def main() -> int:
         print("카메라 표준 어휘")
         print("  shot : " + " / ".join(STD_SHOTS))
         print("  angle: " + " / ".join(STD_ANGLES))
+        print("-" * 56)
+    if any(f["rule"] == "prompt-drift" for f in r["findings"]):
+        print("참고: 저장된 프롬프트는 **그 그림의 조리법 원본**이다(조립 규칙은 실측마다 바뀐다).")
+        print("  다시 구울 때 프롬프트도 함께 새로 만들거나, 굽지 않을 거면 둘 다 그대로 둔다.")
         print("-" * 56)
     if any(f["rule"] in ("stale-prompt", "anchor-missing") for f in r["findings"]):
         print("참고: 검사기 A6 는 status 와 무관하게 prompt.grok_output 이 있으면 검사한다.")
