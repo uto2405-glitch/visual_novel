@@ -6251,6 +6251,69 @@ def j12(b: Box):
             hasnt(down[k], bad, f"은퇴한 공급자 이름이 {k} 에 남아 있다")
 
 
+_J13_HARNESS = """
+const box={children:[]};
+let curTab="story",scStale=false,galStale=false,vwStale=false,S={};
+let chatLoaded=false,stateResolve=null;   // studio.js 의 모듈 수준 상태(함수만 떼어 오므로 여기 둔다)
+const localStorage={setItem:function(){},getItem:function(){return ""}};
+const stub={value:"",open:false,src:"",style:{},textContent:"",
+ classList:{add:function(){},remove:function(){},toggle:function(){}}};
+function $(id){return id==="chatlog"?boxEl:stub}
+const boxEl={replaceChildren:function(){box.children=[]},
+ appendChild:function(m){box.children.push(m)},scrollTop:0,scrollHeight:0};
+const document={querySelectorAll:function(){return []}};
+function el(_t,_c,text){return text}
+function renderChips(){}
+function syncFav(){}
+function syncResume(){}
+function renderLan(){}
+function renderScene(){return false}
+function renderScenes(){}
+function renderGallery(){}
+function renderAlbum(){}
+// /api/state 는 우리가 언제 답할지 정한다 — 경주(둘이 동시에 나가는 첫 화면)를 만들기 위해.
+function api(path){
+ if(path==="/api/state")return new Promise(function(r){stateResolve=function(){r({storyline:""})}});
+ if(path==="/api/chat-history")return Promise.resolve({messages:[{role:"user",content:"지난 질문"},
+  {role:"assistant",content:"지난 답변"}]});
+ return Promise.resolve({})}
+__FUNCS__
+(async function(){
+ const out={};
+ const spin=refresh();                 // 첫 화면: refresh 와 loadChatHistory 가 같이 나간다
+ await loadChatHistory();              // 챗 이력이 먼저 돌아온다(실측 5/5 이 순서였다)
+ out.afterHistory=box.children.length;
+ stateResolve();                       // 그 다음에 /api/state 가 돌아온다
+ await spin;
+ out.afterState=box.children.length;
+ out.kept=(S.chat||[]).length;
+ console.log(JSON.stringify(out));
+})();
+"""
+
+
+@test("js", "J13 지난 스토리 대화 — 첫 화면의 두 요청이 겹쳐도 챗로그가 비지 않는다")
+def j13(b: Box):
+    """서버에는 대화가 6줄 남아 있는데 새로고침하면 스토리 탭이 **매번 빈 화면**이었다.
+
+    첫 화면에서 ``loadChatHistory()`` 와 ``refresh()`` 가 동시에 나간다. refresh 는 S 를
+    통째로 갈아 끼우므로 챗로그를 되살려야 하는데, 되살릴 값을 ``await`` **앞에서** 떠
+    놨다(그때는 빈 배열이다). 챗 이력이 먼저 돌아오면 그 사이 채워진 대화가 빈 배열로
+    덮인다 — 그리고 ``chatLoaded`` 는 이미 true 라 다시 받아오지도 않는다. 실측에서
+    /api/chat-history 가 /api/state 보다 항상 먼저 돌아와 5/5 재현됐다.
+    """
+    src = b.p("tools/studio.js")
+    if not src.exists():
+        raise Gap("tools/studio.js 아직 없음")
+    funcs = _js_funcs(src.read_text(encoding="utf-8"),
+                      "refresh", "renderChat", "loadChatHistory")
+    r = _node_json(b, _J13_HARNESS.replace("__FUNCS__", funcs), "studio_chatrace")
+    eq(r["afterHistory"], 2, "지난 대화를 받아도 화면에 그리지 않는다")
+    eq(r["afterState"], 2,
+       "/api/state 응답이 방금 불러온 지난 대화를 지웠다 — 새로고침마다 스토리 챗이 빈 화면이 된다")
+    eq(r["kept"], 2, "S.chat 이 빈 배열로 덮였다(다음 전송이 맥락 없이 나간다)")
+
+
 @test("js", "J09 폰 데이터 — 보이지 않는 탭은 그리지 않고, 이미지는 보이는 크기만큼만 받는다")
 def j09(b: Box):
     """폰 실측에서 **행동 한 번에 82.5MB** 가 흘렀다. 원인은 둘이었고 둘 다 화면에 보이지 않았다:

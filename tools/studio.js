@@ -150,11 +150,15 @@ function imageChip(){const c=$("chipModel"),im=S.image;
 // 전면 재렌더는 다른 카드에 붙여넣던 프롬프트·펼친 <details> 를 통째로 날려 버렸다(감사 지적).
 async function refresh(opts){
  const o=opts||{};
- const prevChat=(S&&S.chat)||[];
- S=await api("/api/state");
+ const st=await api("/api/state");
  // 서버는 챗로그를 /api/state 에 싣지 않는다(폰 전송량) — S 를 통째로 교체하므로
  // 여기서 되살리지 않으면 S.chat 이 undefined 가 되어 화면 전체가 죽는다.
- if(!Array.isArray(S.chat))S.chat=prevChat;
+ // 되살릴 값은 **응답이 돌아온 지금**의 S.chat 이어야 한다. 예전에는 await 앞에서
+ // 미리 떠 놨고, 그 사이에 loadChatHistory 가 채워 넣은 지난 대화가 빈 배열로
+ // 덮였다 — 첫 화면에서 두 요청이 같이 나가므로 **새로고침할 때마다** 스토리 챗이
+ // 통째로 비어 보였다(서버에는 멀쩡히 있었다. 실측 5/5 재현).
+ if(!Array.isArray(st.chat))st.chat=(S&&S.chat)||[];
+ S=st;
  renderChips();
  if(!$("storyline").value)$("storyline").value=S.storyline||"";
  syncFav();syncResume();
