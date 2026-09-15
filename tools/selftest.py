@@ -6670,6 +6670,74 @@ def u25(b: Box):
             eq(f["level"], "info", f"prompt-drift 가 경고로 떴다: {f}")
 
 
+@test("unit", "U26 파생물 보관 규칙 — 도구는 다시 만들 수 있는 것만 지운다(후보·백업은 손대지 않는다)")
+def u26(b: Box):
+    """output/ 이 저장소에서 가장 큰 무제한 폴더이던 자리의 잠금장치(실측 239.1MB · 47개 파일).
+
+    폴더마다 **누가 지워도 되는가**가 다르다. 인화 마스터·감상본 캐시·썸네일은 승인된 컷에서
+    언제든 다시 만들어지므로 도구가 정리한다. 후보 이미지(다른 컷을 다시 고를 때 쓰는 대체
+    테이크)와 백업(유일본)은 **사람이 정한다** — 그래서 도구의 정리 경로가 그 둘을 건드리지
+    않는다는 것까지 여기서 잠근다.
+    """
+    pe, ev, wa = b.mod("print_export"), b.mod("export_viewer"), b.mod("webapp")
+
+    # 지우면 안 되는 쪽 — 정리 전에 증거를 심어 둔다
+    keepers = [b.root / "images" / "raw" / "SCENE-001" / "candidate.png",
+               b.root / "backups" / "project_old.zip"]
+    for f in keepers:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x" * 2048)
+
+    # ① 인화 마스터 — 최근 N종만 남고, 방금 구운 규격과 남의 폴더는 살아남는다
+    out = b.root / "output" / "print"
+    for i, name in enumerate(("4x6", "5x7", "8x10", "photocard")):
+        d = out / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "001_SCENE-001.jpg").write_bytes(b"x" * 4096)
+        sheet = d / "spec_sheet.json"
+        sheet.write_text("{}", encoding="utf-8")
+        os.utime(sheet, (1_700_000_000 + i * 60, 1_700_000_000 + i * 60))   # 뒤일수록 최신
+    foreign = out / "직접만든폴더"          # spec_sheet 가 없다 = 이 도구가 만들지 않았다
+    foreign.mkdir(parents=True, exist_ok=True)
+    (foreign / "note.txt").write_text("사람이 둔 파일", encoding="utf-8")
+
+    gone = pe.prune_size_dirs(keep=2, protect=out / "4x6")
+    left = sorted(d.name for d in out.iterdir() if d.is_dir())
+    eq(sorted(gone), ["5x7"], f"지운 규격이 기대와 다르다(지움: {gone} · 남음: {left})")
+    ok((out / "4x6").is_dir(), "방금 구운 규격을 지웠다 — 사용자가 지금 쓰는 파일이다")
+    ok(foreign.is_dir(), "spec_sheet 가 없는 폴더(사람이 만든 것)를 지웠다")
+    for name in ("8x10", "photocard"):
+        ok((out / name).is_dir(), f"최근 규격 {name} 이 사라졌다")
+
+    # ② 감상본 캐시 — 상한은 개수가 아니라 **바이트**다(항목 하나가 컷 한 장을 담는다)
+    ev.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    for f in ev.CACHE_DIR.glob("*.txt"):       # 앞선 테스트가 남긴 항목과 섞이지 않게
+        f.unlink()
+    for i in range(5):
+        f = ev.CACHE_DIR / f"k{i}.txt"
+        f.write_text("y" * 10_000, encoding="utf-8")
+        os.utime(f, (1_700_000_000 + i * 60, 1_700_000_000 + i * 60))
+    eq(ev.prune_cache(keep=999, keep_bytes=25_000), 3, "바이트 예산을 넘겼는데 개수 상한만 봤다")
+    rest = sorted(f.name for f in ev.CACHE_DIR.glob("*.txt"))
+    eq(rest, ["k3.txt", "k4.txt"], f"오래된 것부터 지우지 않았다: {rest}")
+
+    # ③ 썸네일 — 예전에는 지우는 코드가 아예 없었다(요청 한 번에 한 장씩 영원히 쌓였다)
+    wa.THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    for f in wa.THUMB_DIR.glob("*.jpg"):
+        f.unlink()
+    for i in range(4):
+        f = wa.THUMB_DIR / f"t{i}.jpg"
+        f.write_bytes(b"z" * 10_000)
+        os.utime(f, (1_700_000_000 + i * 60, 1_700_000_000 + i * 60))
+    eq(wa.prune_thumbs(keep_bytes=25_000), 2, "썸네일 예산이 지켜지지 않았다")
+    eq(sorted(f.name for f in wa.THUMB_DIR.glob("*.jpg")), ["t2.jpg", "t3.jpg"],
+       "썸네일도 오래된 것부터 지워야 한다")
+
+    # ④ 사람이 정하는 쪽은 그대로다
+    for f in keepers:
+        ok(f.is_file(), f"도구의 정리 경로가 {f.name} 을 지웠다 — 이쪽은 사람이 정한다")
+
+
 @test("unit", "U08 gen_jobs — 같은 장면 동시 claim 거부 · CLI 경로도 같은 관문(중복 과금 방지)")
 def u08(b: Box):
     gj = need_mod(b, "gen_jobs")

@@ -527,6 +527,66 @@ def check_lint() -> None:
         "자세한 내용과 대상 장면: python tools/scene_lint.py" if warns else "")
 
 
+def _du(path) -> tuple[int, float]:
+    """폴더의 (파일 수, MB) — 없으면 (0, 0.0)."""
+    try:
+        files = [f for f in path.rglob("*") if f.is_file()]
+    except OSError:
+        return 0, 0.0
+    return len(files), sum(f.stat().st_size for f in files) / 1048576
+
+
+def check_derived() -> None:
+    """디스크를 먹는 폴더의 **크기와 그 폴더의 규칙**을 한자리에 보여 준다(읽기 전용).
+
+    폴더마다 '누가 지워도 되는가' 가 다르다. 파생물(인화 마스터·캐시·썸네일)은 승인된 컷에서
+    다시 만들어지므로 도구가 알아서 정리한다. 후보 이미지와 백업은 **다시 만들 수 없거나
+    사람이 고를 문제**라 도구가 지우지 않는다 — 그래서 여기서는 명령만 알려 준다.
+    """
+    print_dir = ROOT / "output" / "print"
+    pn, pmb = _du(print_dir)
+    sizes = [d.name for d in sorted(print_dir.glob("*")) if d.is_dir()] if print_dir.exists() else []
+    keep = 3
+    try:
+        import print_export
+        keep = print_export.KEEP_SIZE_DIRS
+    except Exception:
+        pass
+    add("용량", "인화 마스터(output/print)", OK if pmb < 500 else WARN,
+        f"{pmb:.1f}MB · {pn}개 파일 · 규격 {len(sizes)}종" + (f" ({', '.join(sizes)})" if sizes else ""),
+        f"자동 정리됨 — 다시 구울 때 최근 {keep}종만 남는다(마스터는 승인 컷에서 재생성된다). "
+        "지금 비우려면 폴더를 지워도 안전합니다.")
+
+    cn, cmb = _du(ROOT / "output" / ".cache")
+    tn, tmb = _du(ROOT / "output" / ".thumbs")
+    add("용량", "파생 캐시(output/.cache · .thumbs)", OK if cmb + tmb < 200 else WARN,
+        f"감상본 캐시 {cmb:.1f}MB/{cn}개 · 썸네일 {tmb:.1f}MB/{tn}개",
+        "자동 정리됨 — 감상본 내보내기와 스튜디오 기동 때 예산(64MB · 32MB) 안으로 줄인다.")
+
+    raw = ROOT / "images" / "raw"
+    rn, rmb = _du(raw)
+    used = set()
+    try:
+        for sc in vn_core.all_scenes():
+            sel = str((sc.get("assets") or {}).get("selected_image") or "").strip()
+            if sel:
+                used.add((ROOT / sel).resolve())
+    except Exception:
+        used = set()
+    spare = [f for f in raw.rglob("*") if f.is_file() and f.suffix.lower() in vn_core.IMAGE_EXTS
+             and f.resolve() not in used] if raw.exists() else []
+    smb = sum(f.stat().st_size for f in spare) / 1048576
+    add("용량", "후보 이미지(images/raw)", OK,
+        f"{rmb:.1f}MB · {rn}개 — 그중 안 고른 후보 {len(spare)}장 {smb:.1f}MB",
+        "**사람이 정한다 · 도구는 지우지 않는다** — 다른 컷을 다시 고를 때 쓰는 대체 테이크이고, "
+        "백업의 approved 범위도 일부러 함께 보관한다. 비우려면 장면별로 골라 지우세요.")
+
+    bn, bmb = _du(ROOT / "backups")
+    add("용량", "백업(backups)", OK if bmb < 1000 else WARN, f"{bmb:.1f}MB · {bn}개 파일",
+        "**사람이 정한다** — 오래된 스냅샷 정리: python tools/backup_project.py prune --keep 3 "
+        "(같은 내용의 zip 이 둘이면 그것부터)")
+
+
 def check_backups() -> None:
     b = ROOT / "backups"
     snaps = sorted(b.glob("manifest_*.json")) if b.exists() else []
@@ -609,6 +669,7 @@ def run_all() -> None:
     check_local_llm()
     check_image_engine()
     check_project()
+    check_derived()
     check_backups()
     check_secrets()
 

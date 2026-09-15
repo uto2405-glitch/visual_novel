@@ -52,7 +52,11 @@ RUNTIME_JS = vn_core.TOOLS / "vn_runtime.js"
 
 # 재인코딩 캐시 — 같은 원본·같은 옵션이면 다시 굽지 않는다(output/ 안, 점 폴더라 목록에서 감춰짐).
 CACHE_DIR = vn_core.OUTPUT / ".cache" / "viewer"
-CACHE_MAX = 160          # 오래된 항목부터 정리하는 상한(옵션을 바꿔가며 굽는 경우 대비)
+# 상한은 **바이트**다. 예전에는 개수(160)였는데, 한 항목이 원본 컷 하나를 통째로 담은
+# data URI 라 1MB 안팎이다 — 개수 상한 160 은 실제로 160MB 를 허용하고 있었고,
+# 실측된 캐시는 61개 60.2MB 였다. 디스크를 지키는 것이 목적이니 단위도 디스크여야 한다.
+CACHE_MAX_BYTES = 64 * 1024 * 1024
+CACHE_MAX = 160          # 개수 상한(하위호환 · 바이트 예산과 함께 적용된다)
 
 NAME_COLORS = ["#5FB39A", "#D9A441", "#C77DBB", "#6FA8DC", "#E07A5F", "#84C18B", "#B58BE0", "#E0A458"]
 
@@ -183,14 +187,28 @@ def _cache_write(key: str, uri: str) -> None:
         pass          # 캐시는 있으면 좋은 것 — 못 써도 내보내기는 계속된다
 
 
-def prune_cache(keep: int = CACHE_MAX) -> int:
-    """캐시가 무한히 자라지 않게 오래된 항목부터 지운다. → 지운 개수."""
+def prune_cache(keep: int = CACHE_MAX, keep_bytes: int = CACHE_MAX_BYTES) -> int:
+    """캐시가 무한히 자라지 않게 **오래된 항목부터** 지운다. → 지운 개수.
+
+    개수와 **바이트 예산**을 함께 본다. 항목 하나가 컷 한 장을 담은 data URI 라 크기가
+    들쭉날쭉해서(작은 썸네일부터 1MB 넘는 원본까지) 개수만으로는 디스크가 안 지켜진다.
+    캐시는 언제든 다시 구워지는 파생물이므로 지우는 데 사람의 허락이 필요 없다.
+    """
     try:
         files = sorted(CACHE_DIR.glob("*.txt"), key=lambda f: f.stat().st_mtime)
+        sizes = {f: f.stat().st_size for f in files}
     except OSError:
         return 0
+    drop = list(files[:max(0, len(files) - max(0, keep))])
+    total = sum(sizes.values())
+    for f in files:                         # 오래된 것부터 예산 안으로 들어올 때까지
+        if total <= keep_bytes:
+            break
+        if f not in drop:
+            drop.append(f)
+        total -= sizes.get(f, 0)
     dropped = 0
-    for f in files[:max(0, len(files) - keep)]:
+    for f in drop:
         try:
             f.unlink()
             dropped += 1

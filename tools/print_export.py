@@ -72,6 +72,13 @@ def _require_pil():
 ROOT = _HERE.parent
 MANIFEST = ROOT / "project" / "manifest.json"
 OUT = ROOT / "output" / "print"          # 함수는 이 전역을 호출 시점에 읽는다(테스트가 갈아끼운다)
+# 규격 폴더 보관 수 — 가장 최근 것부터 이만큼만 남기고 오래된 규격 폴더는 지운다.
+# 마스터는 **승인된 컷에서 언제든 다시 구워진다**(같은 명령 한 줄). 그래서 여기 쌓인 용량은
+# 순수한 비용이다 — 실측 239.1MB / 47개 파일로 저장소에서 가장 큰 무제한 폴더였고,
+# 그중 121MB 는 이 원본 해상도(832×1248)로는 인화소에 보내면 안 되는 8x10 마스터였다.
+# 지우는 것은 이 도구가 만든 폴더(spec_sheet.json 이 있는 폴더)뿐이고, 방금 구운 규격은
+# 절대 지우지 않는다.
+KEEP_SIZE_DIRS = 3
 # 장면 폴더 상수는 두지 않는다 — 훑기는 vn_core.iter_scenes 하나뿐이다.
 
 MM_PER_IN = 25.4
@@ -497,6 +504,33 @@ def contact_sheet(scenes, cols=3):
     return out
 
 
+def prune_size_dirs(keep: int = KEEP_SIZE_DIRS, protect: Path | None = None,
+                    emit=lambda *a: None) -> list[str]:
+    """오래된 규격 폴더를 지운다(최근 ``keep``개만 남긴다). → 지운 폴더 이름들.
+
+    **이 도구가 만든 폴더만** 건드린다(spec_sheet.json 이 있는 폴더). 방금 구운 규격
+    (``protect``)은 세지만 지우지 않는다. 마스터는 승인된 컷에서 다시 구워지는 파생물이라
+    사람의 허락 없이 정리해도 되는 쪽이다 — 대신 무엇을 지웠고 어떻게 되살리는지 말한다.
+    """
+    try:
+        dirs = [d for d in OUT.iterdir() if d.is_dir() and (d / "spec_sheet.json").is_file()]
+    except OSError:
+        return []
+    dirs.sort(key=lambda d: (d / "spec_sheet.json").stat().st_mtime, reverse=True)
+    drop = [d for d in dirs[max(0, keep):] if protect is None or d != protect]
+    gone = []
+    for d in drop:
+        try:
+            freed = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            shutil.rmtree(d)
+            gone.append(d.name)
+            emit(f"오래된 규격 폴더 정리: {d.name} ({freed / 1048576:.1f}MB) — "
+                 f"다시 필요하면 python tools/print_export.py --size {d.name}")
+        except OSError as exc:
+            emit(f"규격 폴더 정리 실패 {d.name}: {exc}")
+    return gone
+
+
 def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
                  scene_filter=None, skip_upscale=False, emit=lambda *a: None,
                  *, only_ids=None, mode="cover", bg="#ffffff", marks=False,
@@ -568,7 +602,8 @@ def export_batch(short_in, long_in, dpi, bleed, anchor, include_all=False,
             "icc": "sRGB" if srgb_icc_bytes() else None,
             "only_ids": sorted(wanted) if wanted is not None else None,
             "count": len(specs), "scenes": specs})
-    return {"count": len(specs), "dir": _rel(dest) if specs else None,
+    pruned = prune_size_dirs(protect=dest if specs else None, emit=emit)
+    return {"count": len(specs), "dir": _rel(dest) if specs else None, "pruned": pruned,
             "upscaled": sum(1 for s in specs if s["upscaled"]), "skipped": skipped,
             "missing": missing, "specs": specs, "stale": stale,
             "crop_max": max((float(s["crop_pct"] or 0) for s in specs), default=0.0),

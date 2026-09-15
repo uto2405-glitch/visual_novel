@@ -109,6 +109,7 @@ STORY_DIR = vn_core.STORY
 STUDIO_HTML = vn_core.TOOLS / "studio.html"
 OUTPUT_DIR = vn_core.OUTPUT
 THUMB_DIR = OUTPUT_DIR / ".thumbs"      # 파생물 — output/ 는 이미 git 제외 대상
+THUMB_MAX_BYTES = 32 * 1024 * 1024      # 썸네일 캐시 예산(초과분은 오래된 것부터 정리)
 FAVORITES = vn_core.PROJECT / "favorites.json"
 LOG_DIR = vn_core.LOGS
 IMAGE_EXTS = vn_core.IMAGE_EXTS
@@ -1057,6 +1058,34 @@ def make_thumb(src: Path, w: int):
         return None
 
 
+def prune_thumbs(keep_bytes: int = THUMB_MAX_BYTES) -> int:
+    """썸네일 캐시를 예산 안으로 — 오래된 것부터 지운다. → 지운 개수.
+
+    후보를 한 장 볼 때마다 한 장씩 쌓이기만 하던 폴더다(지우는 코드가 아예 없었다).
+    원본에서 언제든 다시 만들어지는 파생물이라 사람의 허락이 필요 없다 — 그래서 서버가
+    뜰 때 한 번 쓸고 시작한다(요청 경로에서 하면 응답이 그만큼 느려진다).
+    """
+    try:
+        files = sorted((f for f in THUMB_DIR.glob("*.jpg") if f.is_file()),
+                       key=lambda f: f.stat().st_mtime)
+        total = sum(f.stat().st_size for f in files)
+    except OSError:
+        return 0
+    dropped = 0
+    for f in files:
+        if total <= keep_bytes:
+            break
+        try:
+            total -= f.stat().st_size
+            f.unlink()
+            dropped += 1
+        except OSError:
+            pass
+    if dropped:
+        log.info("썸네일 캐시 정리 %d개 (예산 %.0fMB)", dropped, keep_bytes / 1048576)
+    return dropped
+
+
 def list_downloads() -> list[dict]:
     """output/ 의 감상본·PWA·인화 마스터 색인 — 폰에서 받아가기 위한 목록."""
     out = []
@@ -1496,6 +1525,7 @@ def main() -> int:
     args = ap.parse_args()
 
     setup_logging(args.verbose)
+    prune_thumbs()          # 파생 캐시는 서버가 뜰 때 한 번만 쓸고 시작한다(요청 경로는 안 건드린다)
     AUTH["pin"], pin_generated = _resolve_pin(args)
     bind = "0.0.0.0" if args.lan else "127.0.0.1"
     srv = ThreadingHTTPServer((bind, args.port), Handler)
