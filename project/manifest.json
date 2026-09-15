@@ -3,13 +3,14 @@
   "title": "두근두근 연애 시뮬레이터",
   "language": "ko-KR",
   "orchestrator": {
-    "provider": "로컬 LLM (llama.cpp · Qwen)",
+    "provider": "로컬 LLM (llama.cpp · Qwen3.6-35B-A3B · 노트북)",
     "mode": "local",
     "api": {
-      "base_url": "http://127.0.0.1:8080/v1",
-      "model": "local-qwen",
+      "base_url": "http://192.168.219.182:8080/v1",
+      "model": "C:\\Users\\USER\\claude\\local_llm\\models\\Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+      "api_key": "local",
       "key_env": "",
-      "note": "내 PC 로컬 LLM(무료·프라이버시·키 불필요). 유일한 오케스트레이터다. 꺼져 있을 때의 경로는 직접 입력(붙여넣기)"
+      "note": "LLM 은 이 PC 가 아니라 같은 공유기의 노트북에서 돈다(무료·프라이버시). base_url 은 여기와 talk.base_url 두 줄뿐이고, 환경변수 LOCAL_LLM_URL 이 둘보다 우선한다 — 노트북 IP(DHCP)가 바뀌면 그 두 줄만 고친다. model 은 표시 전용이다(요청 본문에 실리지 않는다). 꺼져 있을 때의 경로는 직접 입력(붙여넣기)"
     }
   },
   "image_generator": {
@@ -66,7 +67,7 @@
   "talk": {
     "character_id": "CHAR-001",
     "relationship": "다정한 여자친구",
-    "base_url": "http://127.0.0.1:8080/v1"
+    "base_url": "http://192.168.219.182:8080/v1"
   },
   "workflow": {
     "human_gates": ["story", "visual_reference", "scene_plan", "image", "delivery"],

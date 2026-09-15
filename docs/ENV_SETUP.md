@@ -15,13 +15,22 @@
 |---|---|---|---|
 | `MAKEFUN_API_TOKEN` | `tools/makefun_client.py` — MakeFun 이미지 생성 · 인화용 업스케일 · 파일 업로드 · 크레딧 조회 | 그 네 가지만 막힘(안내 메시지). 기본 엔진 ComfyUI·감상·검사·대화는 정상 | MakeFun 으로 만들거나 키울 때만 |
 | `LOCAL_LLM_URL` | `tools/local_llm.py` — 로컬 LLM 주소 | 매니페스트 `talk.base_url` → `orchestrator.api.base_url` → 없으면 `http://127.0.0.1:8080/v1` | 아니오(주소를 바꿀 때만) |
+| `LOCAL_LLM_KEY` | `tools/local_llm.py` — 서버가 `--api-key` 로 떠 있을 때의 키 | 매니페스트 `orchestrator.api.key_env` 가 가리키는 변수 → `talk.api_key` → `orchestrator.api.api_key` → 없으면 키 없이 보냄 | 아니오(서버가 키를 요구할 때만) |
 | `COMFYUI_URL` | `tools/comfyui_client.py` — 로컬 ComfyUI 주소 | 매니페스트 `image_generator.comfyui.api.base_url` → 없으면 `http://127.0.0.1:8188` | 아니오(주소를 바꿀 때만) |
 | `COMFYUI_HOME` | `start_studio.ps1` — ComfyUI **설치 폴더**(`main.py` 가 있는 곳) | 저장소 옆 `..\ComfyUI` 만 찾는다. 다른 곳에 설치했으면 자동 기동을 건너뛴다(직접 켜면 그대로 쓴다) | 아니오(저장소 옆에 없을 때만) |
 | `LOCAL_LLM_HOME` | `start_studio.ps1` — 로컬 LLM(llama.cpp) **설치 폴더**(`runtime\serve.ps1` 이 있는 곳) | `%USERPROFILE%\claude\local_llm` 을 찾는다. 없으면 LLM 기동만 건너뛰고 스튜디오는 그대로 뜬다 | 아니오(그 경로가 아닐 때만) |
 
 `LOCAL_LLM_URL` · `COMFYUI_URL` 은 비밀이 아니라 그냥 주소다. **비밀값은 `MAKEFUN_API_TOKEN` 하나뿐이다** —
-오케스트레이터가 내 PC 의 로컬 LLM 이라 키 자체가 없고, 그것이 꺼져 있을 때의 경로(직접 입력·붙여넣기)도
-계정을 요구하지 않는다.
+오케스트레이터는 내 집 안의 로컬 LLM 이고, 그 `--api-key` 는 남에게 발급받은 토큰이 아니라
+내가 내 서버에 붙인 문자열이다(그래서 매니페스트에 그대로 적어도 된다. 굳이 숨기고 싶으면
+`key_env` 에 **변수 이름**을 적고 값은 `LOCAL_LLM_KEY` 로 넣는다). LLM 이 꺼져 있을 때의
+경로(직접 입력·붙여넣기)도 계정을 요구하지 않는다.
+
+> **LLM 이 다른 기기에 있을 때 바꾸는 줄은 하나다.**
+> `setx LOCAL_LLM_URL "http://새IP:8080/v1"` — 이 한 줄이 매니페스트의 `talk.base_url` 과
+> `orchestrator.api.base_url` 을 **둘 다** 덮는다. 새 PowerShell 창부터 적용되고, 스튜디오도
+> 다시 띄워야 한다. 환경변수를 쓰지 않을 거면 그 두 줄을 직접 고친다(그쪽이 정본이다).
+> 지금 어디를 보고 있는지는 `python tools/doctor.py` 의 `[로컬 LLM] 해석된 주소` 한 줄로 확인한다.
 
 발급처
 - MakeFun: makefun.ai → Account → API Token (보조 이미지 엔진을 쓸 때만 필요)
@@ -35,6 +44,7 @@ PowerShell 이나 cmd 어느 쪽에서 해도 된다. **관리자 권한 불필�
 ```powershell
 setx MAKEFUN_API_TOKEN "여기에_발급받은_토큰"
 setx LOCAL_LLM_URL "http://127.0.0.1:8080/v1"
+setx LOCAL_LLM_KEY "서버를_띄운_--api-key_값"
 ```
 
 **중요 — 등록 직후 지금 창에서는 아직 안 보인다.** `setx` 는 새 프로세스부터 적용된다.

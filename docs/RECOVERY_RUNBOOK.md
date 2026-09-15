@@ -110,11 +110,18 @@ python tools/doctor.py          # [환경변수] 항목 확인
 ```
 python tools/local_llm.py       # ON/OFF 와 주소를 알려준다
 ```
-- OFF → `powershell -ExecutionPolicy Bypass -File start_studio.ps1` (LLM 까지 같이 켠다)
-- 직접 켜기 → `powershell -File c:\Users\USER\claude\local_llm\runtime\serve.ps1`
-- 모델 적재에 수십 초가 걸린다. 바로 안 뜬다고 여러 번 켜지 마라 —
-  `serve.ps1` 은 기존 프로세스를 죽이고 다시 띄우므로 처음부터 다시 로딩한다.
-- 주소가 이상하면 `LOCAL_LLM_URL` 환경변수 또는 매니페스트 `talk.base_url` 을 확인한다.
+`python tools/doctor.py` 의 `[로컬 LLM]` 두 줄이 고장을 갈라 준다 — **해석된 주소**(지금 어디를
+보는가 · 이 PC 인가 다른 기기인가 · 그 주소가 어디서 왔는가)와 **서버 응답**.
+
+- **주소가 이 PC(`127.0.0.1`)인데 응답 없음** → `powershell -ExecutionPolicy Bypass -File start_studio.ps1`
+  (LLM 까지 같이 켠다). 직접 켜기: `powershell -File %USERPROFILE%\claude\local_llm\runtime\serve.ps1`.
+  모델 적재에 수십 초가 걸린다. 바로 안 뜬다고 여러 번 켜지 마라 — `serve.ps1` 은 기존 프로세스를
+  죽이고 다시 띄우므로 처음부터 다시 로딩한다.
+- **주소가 다른 기기인데 응답 없음** → 여기서 켤 수 있는 것은 없다. 그 기기에서 llama-server 가
+  떠 있는지 보고, **IP 가 바뀌었는지** 확인한다(DHCP 는 조용히 옮겨 간다). 고치는 곳은 매니페스트
+  `talk.base_url` · `orchestrator.api.base_url` 두 줄, 또는 그 둘을 덮는 `setx LOCAL_LLM_URL "http://새IP:8080/v1"`.
+- **"API 키가 거부됐습니다"(HTTP 401)** → 주소는 맞다. 서버를 띄운 `--api-key` 값과 매니페스트
+  `orchestrator.api.api_key`(또는 `LOCAL_LLM_KEY`)가 다른 것뿐이다. **서버를 껐다 켜도 낫지 않는다.**
 
 ### C. 장면 파일 하나가 깨졌다 (검사기 A1 FAIL, 뷰어에서 그 장면만 사라짐)
 

@@ -7,12 +7,13 @@
 
 | 역할 | 무엇 | 비용 | 어디 |
 |---|---|---|---|
-| **스토리 · 장면 구성 · 이미지 프롬프트 · 인물 대화** | **로컬 LLM** (llama.cpp, OpenAI 호환 `http://127.0.0.1:8080/v1`) | **0원** | 내 PC (`c:\Users\USER\claude\local_llm`) |
+| **스토리 · 장면 구성 · 이미지 프롬프트 · 인물 대화** | **로컬 LLM** (llama.cpp, OpenAI 호환) | **0원** | 내 **집 안**의 PC 한 대. 지금은 같은 공유기의 노트북(`http://192.168.219.182:8080/v1`) — 이 PC 여도 되고 다른 기기여도 된다 |
 | **이미지 생성 (기본)** | **ComfyUI** — 내 PC 의 로컬 서버 (`tools/comfyui_client.py`) | **0원** | `http://127.0.0.1:8188` (`COMFYUI_URL` 로 변경) |
 | 이미지 생성 (보조) · 업스케일 · 크레딧 | **MakeFun AI** (`tools/makefun_client.py`) | **유료 종량제** | `MAKEFUN_API_TOKEN` 환경변수 |
 | 로컬 LLM 이 꺼져 있을 때 | **직접 입력(붙여넣기)** — 브리프를 복사해 직접 쓰거나 다른 AI 에 물어보고, 받은 결과를 붙여넣는다 | **0원** | 키·계정 불필요 |
 
-창작 텍스트와 인물 대화는 **내 PC 를 벗어나지 않는다.** 외부로 나가는 것은 이미지 생성 프롬프트와,
+창작 텍스트와 인물 대화는 **내 집 밖으로 나가지 않는다** — LLM 은 내가 켠 기기(이 PC 또는 같은
+공유기의 노트북)에서만 돌고, 주소 검증이 루프백·사설망 외의 주소를 거부한다. 외부로 나가는 것은 이미지 생성 프롬프트와,
 **이미지 쪽 기능을 쓸 때의 이미지 파일**이다 — 캐릭터 레퍼런스(로컬 파일일 때)와 업스케일할
 원본 컷은 공급자 스토리지에 업로드된다(→ [docs/PRIVACY_HOSTING.md](docs/PRIVACY_HOSTING.md) §1).
 엔진 교체는 `project/manifest.json` 의 `orchestrator` / `image_generator` 만 바꾸면 된다
@@ -41,6 +42,13 @@ powershell -ExecutionPolicy Bypass -File start_studio.ps1 -Lan
 >
 > 로컬 LLM(llama.cpp)을 저장소 밖 다른 경로에 설치했다면 `setx LOCAL_LLM_HOME "D:\llm\local_llm"`
 > 또는 `start_studio.ps1 -LlmRoot D:\llm\local_llm`. 아직 없으면 `-NoLlm` 으로 스튜디오만 켜도 된다.
+>
+> **LLM 이 이 PC 가 아니라 다른 기기(노트북 등)에 있다면** 켜 줄 것이 없다 — 주소만 알려 주면 된다.
+> `project/manifest.json` 의 `talk.base_url` 과 `orchestrator.api.base_url` **두 줄**이 그 자리이고,
+> `start_studio.ps1` 은 그 주소가 루프백이 아니면 **여기서 서버를 띄우려 하지 않고 응답만 확인한다**.
+> 그 기기의 IP 가 DHCP 로 바뀌었을 때 고치는 곳도 같은 두 줄이다(한 줄로 끝내려면
+> `setx LOCAL_LLM_URL "http://새IP:8080/v1"` — 환경변수가 매니페스트보다 우선한다).
+> 서버를 `--api-key` 로 띄웠다면 그 값을 `orchestrator.api.api_key` 에 적는다(없으면 대화만 401 로 죽는다).
 
 `-Lan` 은 `0.0.0.0` 에 바인딩하므로 같은 와이파이의 다른 기기도 보인다. 그래서 외부 기기
 접속에는 **6자리 PIN 이 기본으로 요구된다**(이 PC 의 `127.0.0.1` 접속은 면제). PIN 은 기동할

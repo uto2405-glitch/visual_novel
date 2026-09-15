@@ -1,10 +1,13 @@
 # AI Webtoon Production Protocol (v5.x)
 
 ## 목적
-로컬 LLM 오케스트레이터로 스토리를 씬/행동 비트/장면으로 분해하고, 이미지 생성기용 프롬프트를 만든 뒤 최종 이미지를 비주얼 노벨형 디지털 감상물과 실제 사진 출력물로 구성한다. 스토리 → 이미지 → 감상이 한 대의 PC 안에서 닫히는 것이 기본 구성이다.
+로컬 LLM 오케스트레이터로 스토리를 씬/행동 비트/장면으로 분해하고, 이미지 생성기용 프롬프트를 만든 뒤 최종 이미지를 비주얼 노벨형 디지털 감상물과 실제 사진 출력물로 구성한다. 스토리 → 이미지 → 감상이 **내 집 안에서** 닫히는 것이 기본 구성이다(한 대여도 되고, LLM 만 같은 공유기의 다른 기기여도 된다).
 
 ## 현행 엔진 (2026-09 기준)
-- **오케스트레이터 = 로컬 LLM** — llama.cpp 서버(설치 폴더는 `LOCAL_LLM_HOME`, 기본 `%USERPROFILE%\claude\local_llm`)의 llama.cpp 서버(OpenAI 호환, 기본 `http://127.0.0.1:8080/v1`). 스토리·장면 구성·이미지 프롬프트·인물 대화를 담당한다. 로컬이므로 키 불필요·비용 0·사적 대화가 외부로 나가지 않는다.
+- **오케스트레이터 = 로컬 LLM** — llama.cpp 서버(OpenAI 호환, 기본 `http://127.0.0.1:8080/v1`). 스토리·장면 구성·이미지 프롬프트·인물 대화를 담당한다. 비용 0·사적 대화가 집 밖으로 나가지 않는다(`local_llm._validate` 가 루프백·사설망 외 주소를 거부한다).
+  - **이 PC 일 필요는 없다.** 지금 이 저장소는 같은 공유기의 노트북(`http://192.168.219.182:8080/v1`)을 본다. 주소가 적히는 곳은 `project/manifest.json` 의 `talk.base_url` · `orchestrator.api.base_url` **두 줄**뿐이고, 환경변수 `LOCAL_LLM_URL` 이 그 둘을 덮는다(IP 가 DHCP 로 바뀔 때 고치는 자리도 여기다).
+  - 서버가 `--api-key` 로 떠 있으면 키가 필요하다 — `orchestrator.api.api_key`(또는 `key_env` 가 가리키는 환경변수, 또는 `LOCAL_LLM_KEY`). **`/v1/models` 는 키 없이 열려 있어서** 키가 틀리면 상태는 "연결됨" 인데 네 기능만 401 로 죽는다. 그래서 `local_llm.status()` 가 키까지 따로 확인하고 `reason: unreachable|auth|ok` 로 갈라 준다.
+  - `LOCAL_LLM_HOME` 은 **이 PC 에 서버를 띄울 때만** 쓰는 설치 폴더(`runtime\serve.ps1`)다. 원격 주소면 `start_studio.ps1` 은 아무것도 띄우지 않고 응답만 확인한다.
 - **이미지 생성 = ComfyUI(로컬, 기본)** — `tools/comfyui_client.py`. 매니페스트 `image_generator.engine: "comfyui"`, 주소는 `comfyui.api.base_url`(환경변수 `COMFYUI_URL` 이 우선, 기본 `http://127.0.0.1:8188`). 무료·토큰 없음. 엔진 위의 공통 진입점은 `tools/image_gen.py`(웹·doctor 는 이것만 부른다).
 - **MakeFun AI 는 보조(유료 종량제)** — `tools/makefun_client.py`, 토큰은 `MAKEFUN_API_TOKEN` 환경변수. `engine: "makefun"` 이거나 스튜디오의 [MakeFun 생성(유료)] 보조 버튼을 눌렀을 때만 쓰이고, 업스케일·크레딧 조회는 MakeFun 전용이다.
 - **로컬 LLM 이 꺼져 있을 때의 경로 = 직접 입력(붙여넣기)** — `tools/scene_brief.py`(장면 브리프) 또는 스튜디오의 [✍ 직접 입력]. 브리프 조립에는 모델이 필요 없으므로 **LLM 이 죽어 있어도 이 경로는 산다**. 어디서(직접 작성·다른 AI·폰) 받아 왔든 붙여넣으면 앵커 자동 보정까지 같은 관문(`scene_ops.set_prompt`)을 지난다. 원격 오케스트레이터 API 경로는 없다.
