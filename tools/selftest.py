@@ -5011,6 +5011,38 @@ def _node_json(b: Box, code: str, label: str) -> dict:
     return json.loads(body[-1])
 
 
+@test("js", "J11 대사창·툴바의 폭 기준은 창이 아니라 그림이다(레터박스 밖으로 넘치지 않는다)")
+def j06(b: Box):
+    """1280×900 창에서 그림은 600px 인데 대사창이 880px 로 뻗어 양옆 140px 씩 넘치고,
+    툴바 오른끝은 그림보다 326px 바깥에 있었다 — 글과 버튼이 그림에서 떨어져 나왔다.
+
+    브라우저 없이 잠글 수 있는 것은 **계약**이다: ① 두 요소의 폭·위치가 그림 폭
+    (`--vnr-picw`·`--vnr-gut`)을 보고, ② 그 값을 재는 곳이 있고, ③ 창 크기가 바뀌면 다시
+    재고, ④ 그 리스너를 destroy 가 **되돌린다**(스튜디오는 뷰어를 열고 닫기를 반복한다),
+    ⑤ 폰의 한 줄 툴바 규칙은 건드리지 않는다. 실제 픽셀은 실행해 확인했다(1280×900 ·
+    1600×1000 · 400×860 전/후 스크린샷).
+    """
+    src = b.p("tools/vn_runtime.js").read_text(encoding="utf-8")
+    # ① 폭의 기준
+    has(src, "width:min(880px,92%,calc(var(--vnr-picw,100%) - 16px))",
+        "대사창이 아직 창 폭(880px/92%)만 본다")
+    has(src, "right:calc(14px + var(--vnr-gut,0px)", "툴바가 창 오른끝에 붙어 있다")
+    has(src, "calc(var(--vnr-picw,100%) - 24px)", "툴바 최대폭이 그림 폭을 안 본다")
+    # ② 재는 곳 · ③ 다시 재는 계기
+    has(src, 'setProperty("--vnr-picw"', "그림 폭을 재서 넣는 곳이 없다")
+    has(src, 'setProperty("--vnr-gut"', "레터박스 여백을 재서 넣는 곳이 없다")
+    for ev in ("resize", "orientationchange", "fullscreenchange"):
+        has(src, 'addEventListener("' + ev + '"', f"{ev} 때 다시 재지 않는다")
+    # ④ 누수 없음 — 연 만큼 닫는다
+    for ev in ("resize", "orientationchange", "fullscreenchange"):
+        has(src, 'removeEventListener("' + ev + '"', f"destroy 가 {ev} 리스너를 안 거둔다")
+    # ⑤ 폰 규칙은 그대로 · 좁아지면 버튼을 [⋯] 로 옮긴다(새로 만들지 않는다)
+    has(src, "@media(pointer:coarse){", "폰 한 줄 툴바 규칙이 사라졌다")
+    has(src, "function setBarCompact", "좁은 무대에서 툴바를 접는 장치가 없다 — 폭만 줄이면 두세 줄로 접힌다")
+    has(src, "BAR_MAIN = [E.chip, E.aff, E.bAuto, E.bScenes, E.bMore, E.bExit]",
+        "접은 툴바가 같은 버튼 노드를 쓰지 않는다(동작·단축키가 갈린다)")
+
+
 @test("js", "J05 MakeFun 보조 버튼 — 토큰이 없으면 눌리지 않는다(유료 확인창 뒤의 확정 실패 차단)")
 def j05(b: Box):
     """매니페스트에 makefun 블록만 있으면 보조 버튼은 생긴다. 그런데 MAKEFUN_API_TOKEN 이 서버에

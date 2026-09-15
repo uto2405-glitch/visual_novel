@@ -81,9 +81,14 @@
     ".vnr-progbar i{display:block;height:100%;width:0;background:var(--vnr-accent,#5FB39A)}",
     ".vnr.vnr-uihidden .vnr-progbar{opacity:0}",
     /* 툴바 */
+    /* 툴바·대사창의 폭 기준은 창이 아니라 **그림**이다(--vnr-picw · --vnr-gut 는 JS 가 잰다).
+       그림이 2:3 인데 창이 가로로 넓으면 무대 양옆은 레터박스(빈 배경)다. 예전에는 대사창이
+       그 빈 배경까지 880px 로 뻗고(1280×900 에서 그림 600px · 대사 880px = 양옆 140px 씩
+       넘침) 툴바 오른끝이 그림보다 326px 바깥에 놓여, 글과 버튼이 그림에서 떨어져 나왔다. */
     ".vnr-bar{position:absolute;z-index:3;display:flex;gap:6px;align-items:center;flex-wrap:wrap;",
     "justify-content:flex-end;top:calc(12px + env(safe-area-inset-top));",
-    "right:calc(14px + env(safe-area-inset-right));max-width:calc(100% - 24px)}",
+    "right:calc(14px + var(--vnr-gut,0px) + env(safe-area-inset-right));",
+    "max-width:min(calc(100% - 24px),calc(var(--vnr-picw,100%) - 24px))}",
     ".vnr-btn,.vnr-chip{background:rgba(30,24,18,.72);color:var(--vnr-ink,#EDE4D3);",
     "border:1px solid var(--vnr-line,#453828);border-radius:8px;padding:6px 11px;",
     "font-size:12px;font-weight:600}",
@@ -103,7 +108,8 @@
     "border-color:var(--vnr-accent,#5FB39A)}",
     /* 대사창 */
     ".vnr-dlg{position:absolute;left:50%;transform:translateX(-50%);",
-    "bottom:calc(26px + env(safe-area-inset-bottom));width:min(880px,92%);",
+    "bottom:calc(26px + env(safe-area-inset-bottom));",
+    "width:min(880px,92%,calc(var(--vnr-picw,100%) - 16px));",
     "background:var(--vnr-paper,#F2EAD9);color:var(--vnr-paper-ink,#2A2118);border-radius:14px;",
     "padding:14px 22px 16px;box-shadow:0 8px 30px rgba(0,0,0,.5);cursor:pointer;z-index:2}",
     ".vnr-dlg.vnr-top{bottom:auto;top:calc(70px + env(safe-area-inset-top))}",
@@ -119,7 +125,8 @@
     /* 선택지 — 무대(.vnr)는 position:fixed 라 스크롤 컨테이너가 아니다. 선택지가 화면보다
        길어지면 첫/마지막 항목을 누를 수 없으므로 이 상자 자신이 스크롤해야 한다. */
     ".vnr-choices{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;",
-    "display:flex;flex-direction:column;gap:12px;width:min(560px,88%);",
+    "display:flex;flex-direction:column;gap:12px;",
+    "width:min(560px,88%,calc(var(--vnr-picw,100%) - 32px));",
     "max-height:calc(100% - 140px);overflow-y:auto;-webkit-overflow-scrolling:touch;",
     "overscroll-behavior:contain;",
     "padding:4px 4px calc(4px + env(safe-area-inset-bottom))}",
@@ -701,6 +708,7 @@
     /* 폰(coarse)에서는 버튼 10~11개가 360px 안에서 두세 줄로 접혀 그림 위를 상시 덮었다.
        한 줄에 남는 것은 진행률·호감도·[자동]·[장면]·[⋯]·[닫기] 뿐이고, 나머지는 같은 버튼
        노드를 [⋯] 메뉴로 옮겨 담는다(버튼을 새로 만들지 않으므로 동작·단축키가 갈리지 않는다). */
+    var BAR_FULL = [], BAR_MAIN = [], BAR_EXTRA = [];   // 데스크톱 툴바의 두 배치(§ setBarCompact)
     E.more = el("div", "vnr-more");
     E.more.hidden = true;
     E.more.setAttribute("role", "group");
@@ -720,9 +728,14 @@
       // 메뉴에서 무엇을 고르든 메뉴는 닫는다(버튼 자신의 동작이 먼저 실행된 뒤 버블로 도달).
       E.more.addEventListener("click", function () { closeMore(); });
     } else {
-      [E.chip, E.aff, E.bAuto, E.bSkip, E.bScenes, E.bLog, E.bSet, E.bHide, E.bFull]
-        .concat(extraKids).concat([E.bExit])
-        .forEach(function (n) { E.bar.appendChild(n); });
+      BAR_FULL = [E.chip, E.aff, E.bAuto, E.bSkip, E.bScenes, E.bLog, E.bSet, E.bHide, E.bFull]
+        .concat(extraKids).concat([E.bExit]);
+      // 좁은 무대(세로 컷 + 넓은 창)에서는 같은 장치를 데스크톱에서도 쓴다 — § setBarCompact
+      BAR_MAIN = [E.chip, E.aff, E.bAuto, E.bScenes, E.bMore, E.bExit];
+      BAR_EXTRA = [E.bSkip, E.bLog, E.bSet, E.bHide, E.bFull].concat(extraKids);
+      BAR_FULL.forEach(function (n) { E.bar.appendChild(n); });
+      E.bar.appendChild(E.more);
+      E.more.addEventListener("click", function () { closeMore(); });
     }
 
     E.dlg = el("div", "vnr-dlg");
@@ -828,9 +841,69 @@
     host.appendChild(E.stage);
 
     var say = function (t) { E.sr.textContent = t; };
+    var barCompact = false, barFullW = 0, fitPending = false;
 
     /* ------------------------------------------------------------ 표시 갱신 */
     function applyFs() { E.stage.style.setProperty("--vnr-fs", SET.fs + "px"); }
+
+    /* 무대에 **실제로 그려진 그림의 폭** — 대사창·툴바가 창이 아니라 그림에 맞도록.
+     * 컷은 2:3 세로인데 창은 대개 가로로 넓다. 그림은 contain 으로 가운데 맞춰지므로 양옆은
+     * 레터박스(빈 배경)인데, 예전에는 대사창이 그 빈 배경까지 880px 로 뻗고(1280×900 창 ·
+     * 그림 600px → 양옆 140px 씩 넘침) 툴바 오른끝이 그림보다 326px 바깥에 놓였다.
+     * 그림이 없는 화면(이미지 없음·엔딩)에서는 무대 전체를 쓴다 — 그때는 예전 그대로다.
+     */
+    function fitStage() {
+      fitPending = false;
+      var stageW = E.stage.clientWidth || 0, stageH = E.stage.clientHeight || 0;
+      var im = E.img.querySelector("img.vnr-show") || curImg;
+      var w = 0;
+      if (im) {
+        var r = im.getBoundingClientRect();
+        w = Math.round(r.width);
+        if (!w && im.naturalWidth && im.naturalHeight && stageH) {
+          w = Math.min(stageW, Math.round(stageH * im.naturalWidth / im.naturalHeight));
+        }
+      }
+      if (!w || w > stageW) w = stageW;
+      if (!w) return;                      // 아직 레이아웃 전 — 다음 기회에 잰다
+      E.stage.style.setProperty("--vnr-picw", w + "px");
+      E.stage.style.setProperty("--vnr-gut", Math.max(0, Math.round((stageW - w) / 2)) + "px");
+      fitBar(w);
+    }
+    function queueFit() {
+      if (fitPending || !isOpen) return;
+      fitPending = true;
+      global.requestAnimationFrame(fitStage);
+    }
+    /* 툴바가 그림 폭 안에 한 줄로 안 들어가면 보조 버튼을 [⋯] 로 옮긴다 — 폰에서 쓰던 그
+     * 장치 그대로다(버튼 노드를 옮길 뿐 새로 만들지 않으므로 동작·단축키가 갈리지 않는다).
+     * 이것이 없으면 폭을 그림에 맞추는 순간 툴바가 두세 줄로 접혀 그림 위를 덮는다. */
+    function barNeedW() {
+      var n = E.bar.children, sum = 0, cnt = 0;
+      for (var i = 0; i < n.length; i++) {
+        if (n[i] === E.more || n[i].hidden) continue;
+        sum += n[i].offsetWidth;
+        cnt++;
+      }
+      return cnt ? sum + (cnt - 1) * 6 : 0;
+    }
+    function fitBar(picw) {
+      if (COARSE || !BAR_FULL.length) return;      // 폰은 이미 한 줄 고정(§ 위 @media)
+      if (!barCompact) barFullW = Math.max(barFullW, barNeedW());
+      if (!barFullW) return;
+      var avail = Math.max(0, picw - 24);
+      setBarCompact(barCompact ? avail < barFullW + 20 : avail < barFullW);
+    }
+    function setBarCompact(on) {
+      if (COARSE || on === barCompact) return;
+      barCompact = on;
+      closeMore();
+      (on ? BAR_MAIN : BAR_FULL).forEach(function (n) { E.bar.appendChild(n); });
+      (on ? BAR_EXTRA : []).forEach(function (n) { E.more.appendChild(n); });
+      if (!on && E.bMore.parentNode === E.bar) E.bar.removeChild(E.bMore);
+      E.bar.appendChild(E.more);                   // [⋯] 메뉴는 늘 툴바의 마지막 자식이다
+      syncBarInert();
+    }
     function applyCinema() { E.fx.hidden = !SET.cinema; }
     function uiHidden() { return E.stage.classList.contains("vnr-uihidden"); }
     function barIdle() { return E.stage.classList.contains("vnr-baridle"); }
@@ -951,6 +1024,7 @@
       if (!E.img.querySelector(".vnr-empty")) {
         E.img.appendChild(el("div", "vnr-empty", why + " " + ((sc && (sc.purpose || sc.id)) || "")));
       }
+      queueFit();                     // 그림이 없는 화면에서는 무대 전체 폭으로 돌아간다
     }
     /* 지금 무대에 올라 있어야 할 컷. **이 한 변수가 늦게 도착한 일들의 유일한 심판이다.**
      *
@@ -976,6 +1050,7 @@
       var show = function () {
         if (im !== curImg) { im.remove(); return; }   // 이미 다음 컷으로 넘어갔다 — 무대에 올리지 않는다
         im.classList.add("vnr-show");
+        queueFit();                   // 컷마다 비율이 다를 수 있다 — 그림이 올라온 뒤 다시 잰다
         setTimeout(function () { if (im === curImg) clearImgs(im); }, REDUCE ? 0 : 540);
       };
       im.onerror = function () {
@@ -1470,6 +1545,7 @@
       preloaded = new Set();
       renderImg();
       showLine();
+      queueFit();
       return true;
     }
     function exit() {
@@ -1638,6 +1714,14 @@
     D.addEventListener("keydown", onKeyDown);
     D.addEventListener("keyup", onKeyUp);
     D.addEventListener("visibilitychange", onVisible);
+    // 창 크기·방향·전체화면이 바뀌면 그림 폭이 바뀐다 — 대사창·툴바도 따라가야 한다.
+    // (자가진단의 DOM 없는 실행 환경처럼 window 에 리스너가 없을 수도 있다 — 없으면 건너뛴다)
+    var onResize = function () { queueFit(); };
+    if (global.addEventListener) {
+      global.addEventListener("resize", onResize);
+      global.addEventListener("orientationchange", onResize);
+    }
+    if (D.addEventListener) D.addEventListener("fullscreenchange", onResize);
 
     loadSet();
     applyFs();
@@ -1677,6 +1761,11 @@
         D.removeEventListener("keydown", onKeyDown);
         D.removeEventListener("keyup", onKeyUp);
         D.removeEventListener("visibilitychange", onVisible);
+        if (global.removeEventListener) {
+          global.removeEventListener("resize", onResize);
+          global.removeEventListener("orientationchange", onResize);
+        }
+        if (D.removeEventListener) D.removeEventListener("fullscreenchange", onResize);
         E.stage.remove();
       }
     };
