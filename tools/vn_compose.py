@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
+import time
 import re
 import shutil
 import sys
@@ -593,8 +595,65 @@ def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
     return _create_scenes_from_items(items, force, expected=count)
 
 
+class _SceneStream:
+    """흐르는 글자에서 **장면 하나가 끝나는 순간**을 잡아낸다.
+
+    왜 필요한가: 배치가 다 올 때까지 기다리면 첫 보상이 100초 뒤다. 실측에서 3장면 배치가
+    95~118초인데 그 사이 화면에는 아무것도 없었다. 장면 1개는 약 30초이므로, 경계를 잡으면
+    첫 보상이 30초로 당겨진다 — 기다림이 불안에서 기대로 바뀌는 지점이 거기다.
+
+    방법은 단순하다. 중괄호 깊이를 세다가 최상위 객체가 닫히면 그 조각만 파싱해 본다.
+    문자열 안의 괄호와 이스케이프를 건너뛰므로 대사에 '{' 가 들어 있어도 어긋나지 않는다.
+    실패하면 그냥 넘긴다 — 최종 파싱은 _extract_json_array 가 전문을 놓고 다시 한다.
+    """
+
+    def __init__(self, on_scene):
+        self.on_scene = on_scene
+        self.buf: list[str] = []
+        self.depth = 0
+        self.start = -1
+        self.in_str = False
+        self.esc = False
+
+    def feed(self, piece: str) -> None:
+        for ch in str(piece or ""):
+            self.buf.append(ch)
+            i = len(self.buf) - 1
+            if self.in_str:
+                if self.esc:
+                    self.esc = False
+                elif ch == "\\":
+                    self.esc = True
+                elif ch == '"':
+                    self.in_str = False
+                continue
+            if ch == '"':
+                self.in_str = True
+            elif ch == "{":
+                if self.depth == 0:
+                    self.start = i
+                self.depth += 1
+            elif ch == "}":
+                if self.depth > 0:
+                    self.depth -= 1
+                    if self.depth == 0 and self.start >= 0:
+                        self._try("".join(self.buf[self.start:i + 1]))
+                        self.start = -1
+
+    def _try(self, chunk: str) -> None:
+        try:
+            obj = json.loads(chunk)
+        except ValueError:
+            return
+        if _looks_like_scene(obj):
+            try:
+                self.on_scene(obj)
+            except Exception:
+                pass      # 화면 갱신 실패가 조립을 멈추게 두지 않는다
+
+
 def compose_batch(total: int, branching: bool, start: int, end: int,
-                  made: list | None = None) -> str:
+                  made: list | None = None, on_scene=None) -> str:
     """장면 구성을 **구간으로 나눠** 한 번 부른다 → 모델의 원문 응답 그대로.
 
     왜 나누는가: 장면 1개에 약 30초다(실측 12~14 tok/s). 10개를 한 번에 시키면 254초가
@@ -630,7 +689,159 @@ def compose_batch(total: int, branching: bool, start: int, end: int,
             order = m.get("order")
             purpose = str(m.get("purpose") or "").strip().replace("\n", " ")[:80]
             lines.append(f"  {order if order is not None else '?'}. {purpose}")
-    return orch_chat([{"role": "user", "content": "\n".join(lines)}], temperature=0.6)
+    stream = _SceneStream(on_scene) if on_scene else None
+    return orch_chat([{"role": "user", "content": "\n".join(lines)}], temperature=0.6,
+                     on_token=(stream.feed if stream else None))
+
+
+# ---------------------------------------------------------------- 서버가 들고 도는 조립
+# 조립이 브라우저 안에서 돌면 탭을 닫거나 폰을 잠그는 순간 7분짜리 작업이 죽는다.
+# 이 프로젝트에서 "맡겨 두고 자리를 뜬다"를 물리적으로 가능하게 하는 유일한 변경이라
+# 작업을 서버로 내린다. 모델이 --parallel 1 이라 동시에 돌 수 있는 조립은 하나뿐이고,
+# 그래서 슬롯도 하나면 충분하다(장면별로 나뉘는 gen_jobs 와 다른 점).
+_JOB_LOCK = threading.Lock()
+_JOB: dict = {"running": False}
+
+
+def _job_snapshot() -> dict:
+    with _JOB_LOCK:
+        return dict(_JOB)
+
+
+def compose_job_status() -> dict:
+    """조립 진행 → {running, total, batch, done, scenes, message, error, raw, finished_at}.
+
+    scenes 는 지금까지 받아 둔 장면의 요약이다(order·purpose). 화면은 이걸 폴링해서
+    **장면이 도착하는 대로** 한 줄씩 보여 준다 — 배치가 다 모일 때까지 기다리지 않는다.
+    """
+    job = _job_snapshot()
+    items = job.get("items") or []
+    return {
+        "running": bool(job.get("running")),
+        "total": int(job.get("total") or 0),
+        "batch": int(job.get("batch") or 0),
+        "done": len(items),
+        "scenes": [{"order": it.get("order"), "purpose": str(it.get("purpose") or "")[:80]}
+                   for it in items],
+        "message": str(job.get("message") or ""),
+        "error": str(job.get("error") or ""),
+        "raw": str(job.get("raw") or ""),
+        "failed_from": job.get("failed_from"),
+        "failed_to": job.get("failed_to"),
+        "finished_at": job.get("finished_at"),
+        "cancelled": bool(job.get("cancelled")),
+    }
+
+
+def compose_job_items() -> list:
+    """지금까지 받아 둔 장면 원본(저장에 쓴다)."""
+    return list(_job_snapshot().get("items") or [])
+
+
+def compose_job_cancel() -> dict:
+    """지금 배치가 끝나면 멈춘다. 받아 둔 장면은 그대로 둔다(버리지 않는다)."""
+    with _JOB_LOCK:
+        if _JOB.get("running"):
+            _JOB["cancel"] = True
+            _JOB["message"] = "이번 구간이 끝나면 멈춥니다…"
+    return compose_job_status()
+
+
+def compose_job_clear() -> dict:
+    """끝난 작업의 흔적을 지운다(저장을 마친 뒤 부른다)."""
+    with _JOB_LOCK:
+        if _JOB.get("running"):
+            raise VNError("조립이 아직 돌고 있습니다.")
+        _JOB.clear()
+        _JOB["running"] = False
+    return compose_job_status()
+
+
+def _compose_worker(total: int, batch: int, branching: bool) -> None:
+    """배치를 돌며 장면을 모은다. 실패해도 **이미 받은 것은 버리지 않는다.**"""
+    try:
+        start = 1
+        while start <= total:
+            with _JOB_LOCK:
+                if _JOB.get("cancel"):
+                    _JOB["message"] = "멈췄습니다. 받아 둔 장면은 그대로 있습니다."
+                    _JOB["cancelled"] = True
+                    break
+                made = list(_JOB.get("items") or [])
+            end = min(start + batch - 1, total)
+            with _JOB_LOCK:
+                _JOB["message"] = f"장면 {start}~{end} 현상 중…"
+            seen: list = []
+
+            def _arrived(obj, _seen=seen):
+                """장면 하나가 완성되는 즉시 화면이 볼 수 있게 올린다.
+
+                최종 목록은 배치가 끝난 뒤 _extract_json_array 가 다시 만든다 — 여기서
+                올리는 것은 '도착했다'는 신호이고, 아래에서 정본으로 교체된다.
+                """
+                _seen.append(obj)
+                with _JOB_LOCK:
+                    got = list(_JOB.get("items") or [])
+                    _JOB["items"] = got + [obj]
+                    _JOB["message"] = f"{len(got) + 1}컷째 나오는 중…"
+
+            try:
+                raw = compose_batch(total, branching, start, end,
+                                    [{"order": m.get("order"), "purpose": m.get("purpose")}
+                                     for m in made],
+                                    on_scene=_arrived)
+            except Exception as exc:          # 모델·네트워크 실패 — 받은 것은 지키고 멈춘다
+                with _JOB_LOCK:
+                    _JOB["error"] = str(exc)
+                    _JOB["failed_from"], _JOB["failed_to"] = start, end
+                    _JOB["message"] = ""
+                break
+            try:
+                items = _extract_json_array(raw)
+            except (ValueError, json.JSONDecodeError):
+                items = None
+            if not items:
+                with _JOB_LOCK:
+                    _JOB["error"] = (f"장면 {start}~{end} 는 형식을 못 맞췄습니다. "
+                                     "모델 쪽 문제이고, 같은 지시문으로 7번 중 4번은 이렇게 됩니다.")
+                    _JOB["raw"] = raw
+                    _JOB["failed_from"], _JOB["failed_to"] = start, end
+                    _JOB["message"] = ""
+                break
+            with _JOB_LOCK:
+                # 스트림으로 미리 올린 것을 걷어내고 정본(파싱 결과)으로 갈아 끼운다.
+                # 미리 올리는 목적은 도착을 빨리 보여 주는 것이지 저장이 아니다.
+                got = list(_JOB.get("items") or [])
+                if seen:
+                    got = got[:max(0, len(got) - len(seen))]
+                got.extend(it for it in items if isinstance(it, dict))
+                _JOB["items"] = got
+                _JOB["message"] = f"장면 {start}~{end} 나왔습니다 — 지금까지 {len(got)}개"
+            start = end + 1
+        else:
+            with _JOB_LOCK:
+                _JOB["message"] = f"{len(_JOB.get('items') or [])}개를 다 받았습니다."
+    finally:
+        with _JOB_LOCK:
+            _JOB["running"] = False
+            _JOB["finished_at"] = int(time.time())
+
+
+def compose_job_start(total: int, batch: int = 3, branching: bool = False) -> dict:
+    """조립을 서버에서 시작한다. 화면을 닫아도 계속 돈다."""
+    total = max(1, min(int(total or 1), MAX_SCENES))
+    batch = max(1, min(int(batch or 3), 6))
+    if vn_core.scene_files():
+        raise VNError(_EXISTS_MSG)
+    with _JOB_LOCK:
+        if _JOB.get("running"):
+            raise VNError("이미 조립이 돌고 있습니다 — 진행 상황을 확인하세요.")
+        _JOB.clear()
+        _JOB.update({"running": True, "total": total, "batch": batch, "items": [],
+                     "message": "조립을 시작합니다…", "started_at": int(time.time())})
+    threading.Thread(target=_compose_worker, args=(total, batch, branching),
+                     daemon=True).start()
+    return compose_job_status()
 
 
 def compose_from_json(text: str, force: bool, expected: int | None = None) -> dict:

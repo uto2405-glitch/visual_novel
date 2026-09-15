@@ -487,6 +487,44 @@ def r_compose_batch(b):
         made if isinstance(made, list) else [])}
 
 
+def r_compose_job_start(b):
+    """조립을 서버에서 시작한다 → 진행 상태. 화면을 닫아도 계속 돈다.
+
+    브라우저가 작업의 주인이면 탭을 닫거나 폰을 잠그는 순간 7분짜리 작업이 죽는다.
+    서버가 들고 있으면 사람이 자리를 뜰 수 있고, 다시 열면 그 사이 진행된 것이 보인다.
+    """
+    return vn_compose.compose_job_start(int(b.get("total", 6) or 6),
+                                        int(b.get("batch", 3) or 3),
+                                        bool(b.get("branching")))
+
+
+def r_compose_job_status(b):
+    """조립 진행 조회 — 받은 장면이 도착하는 대로 목록에 쌓인다."""
+    return vn_compose.compose_job_status()
+
+
+def r_compose_job_cancel(b):
+    """이번 구간이 끝나면 멈춘다. 받아 둔 장면은 그대로 둔다."""
+    return vn_compose.compose_job_cancel()
+
+
+def r_compose_job_save(b):
+    """서버가 모아 둔 장면을 저장한다 → compose_from_json 과 같은 결과.
+
+    저장까지 서버가 들고 있으므로, 조립 도중 화면을 닫았다가 나중에 열어도 마무리할 수 있다.
+    """
+    items = vn_compose.compose_job_items()
+    if not items:
+        raise VNError("저장할 장면이 없습니다.")
+    for i, it in enumerate(items):
+        if isinstance(it, dict):
+            it["order"] = i + 1          # 배치마다 1부터 다시 세는 일이 흔하다
+    res = vn_compose.compose_from_json(json.dumps(items, ensure_ascii=False),
+                                       bool(b.get("force")), expected=len(items))
+    vn_compose.compose_job_clear()
+    return res
+
+
 def r_compose_manual(b):
     exp = int(b["count"]) if str(b.get("count", "")).strip() else None
     return vn_compose.compose_from_json(b.get("text", ""), bool(b.get("force")), expected=exp)
@@ -968,6 +1006,10 @@ POST_ROUTES = {
     "/api/storyline": r_storyline,
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,
     "/api/compose-batch": r_compose_batch,
+    "/api/compose-job": r_compose_job_start,
+    "/api/compose-job-status": r_compose_job_status,
+    "/api/compose-job-cancel": r_compose_job_cancel,
+    "/api/compose-job-save": r_compose_job_save,
     "/api/compose-manual": r_compose_manual, "/api/scene-brief": r_scene_brief,
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/set-crop": r_set_crop, "/api/set-scene": r_set_scene,

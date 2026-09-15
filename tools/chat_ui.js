@@ -69,7 +69,8 @@ const S = {
   chats: [],         // 갈래 목록
   useContext: true,  // 이 갈래가 작품(인물·장소·스토리라인)을 아는 채로 답하는가
   abort: null,       // 답을 기다리는 중이면 AbortController
-  collected: [],     // 조립 중 받아 모은 장면 — 실패해도 살아남아야 한다
+  job: null,         // 서버가 들고 도는 조립 작업의 마지막 상태
+  shown: 0,          // 화면에 이미 줄을 올린 장면 수
   busy: false,
 };
 
@@ -410,145 +411,179 @@ async function runCompose() {
 
   const already = (S.state && S.state.scenes) || [];
   if (already.length) {
-    addNote("\uc774\ubbf8 \uc7a5\uba74 " + already.length + "\uac1c\uac00 \uc788\uc2b5\ub2c8\ub2e4. \ub36e\uc5b4\uc4f0\ub824\uba74 \uc2a4\ud29c\ub514\uc624 \ud0ed\uc5d0\uc11c "
-            + "\ub2e4\uc2dc \uad6c\uc131\ud558\uc138\uc694 \u2014 \uc5ec\uae30\uc11c\ub294 \uae30\uc874 \uc791\ud488\uc744 \uc9c0\uc6b0\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.", true);
+    addNote("이미 장면 " + already.length + "개가 있습니다. 덮어쓰려면 스튜디오 화면에서 "
+            + "다시 구성하세요 — 여기서는 기존 작품을 지우지 않습니다.", true);
     closeDrawer();
     return;
   }
-
   closeDrawer();
-  S.collected = [];
-  await composeRange(1, total, batch, total);
-}
 
-/* \uad6c\uac04\uc744 \ubc1b\uc544 \ubaa8\uc740\ub2e4. \uc2e4\ud328\ud574\ub3c4 \uc774\ubbf8 \ubc1b\uc740 \uac83\uc740 \uc808\ub300 \ubc84\ub9ac\uc9c0 \uc54a\ub294\ub2e4.
- *
- * \uc608\uc804\uc5d0\ub294 \uc5ec\uae30\uc11c throw \ub97c \ub358\uc84c\uace0, \uadf8 throw \uac00 for \ub97c \ube60\uc838\ub098\uac00\uba74\uc11c collected \uac00 \ud1b5\uc9f8\ub85c
- * \uc0ac\ub77c\uc84c\ub2e4. \ud615\uc2dd \uc900\uc218\uc728\uc774 7\ubc88 \uc911 3\ubc88\uc774\ub2c8, 4\ubc30\uce58\uc9dc\ub9ac \uc55c\ubc94\uc740 \ub300\ubd80\ubd84 \ub9c8\uc9c0\ub9c9 \ubc30\uce58\uc5d0\uc11c
- * 5~6\ubd84\uc5b4\uce58\ub97c \uc783\uc5c8\ub2e4. \uc774\uc81c \uc783\ub294 \uac83\uc740 \uadf8 \ubc30\uce58 \ud558\ub098\ubfd0\uc774\ub2e4. */
-async function composeRange(from, to, batch, total) {
-  setBusy(true);
-  setBar(S.collected.length, total);
-  addNote("\uc7a5\uba74 " + from + "~" + to + " \ub97c \ubc1b\uc2b5\ub2c8\ub2e4. \ud55c \uc7a5\uba74\uc5d0 \uc57d 30\ucd08 \u2014 "
-          + "\uc57d " + fmtSecs((to - from + 1) * 32) + " \uac78\ub9bd\ub2c8\ub2e4.");
-
-  for (let s = from; s <= to; s += batch) {
-    const e = Math.min(s + batch - 1, to);
-    const note = addNote("\uc7a5\uba74 " + s + "~" + e + " \ud604\uc0c1 \uc911\u2026");
-    let reply = "";
-    try {
-      const d = await api("/api/compose-batch", {
-        total: total, branching: false, start: s, end: e,
-        made: madeSummary(S.collected),
-      });
-      reply = (d && d.reply) || "";
-    } catch (err) {
-      note.remove();
-      failedBatch(s, e, batch, total, "", String(err.message || err));
-      return;
-    }
-    const items = pullScenes(reply);
-    note.remove();
-
-    if (!items || !items.length) {
-      failedBatch(s, e, batch, total, reply, "");
-      return;
-    }
-    items.forEach((it) => { if (it && typeof it === "object") S.collected.push(it); });
-    addNote("\uc7a5\uba74 " + s + "~" + e + " \ub098\uc654\uc2b5\ub2c8\ub2e4 \u2014 \uc9c0\uae08\uae4c\uc9c0 " + S.collected.length + "\uac1c");
-    setBar(S.collected.length, total);
+  try {
+    await api("/api/compose-job", { total: total, batch: batch, branching: false });
+  } catch (e) {
+    addNote(String(e.message || e), true);
+    return;
   }
-  setBusy(false);
-  await saveCollected(total);
+  addNote("현상을 시작했습니다 — " + total + "장면, 약 " + fmtSecs(total * 32) + ". "
+          + "화면을 닫거나 폰을 잠그셔도 계속 돕니다.");
+  startPolling();
 }
 
 function fmtSecs(n) {
   const s = Math.round(n);
-  if (s < 90) return s + "\ucd08";
+  if (s < 90) return s + "초";
   const m = Math.floor(s / 60);
   const r = s % 60;
-  return r ? (m + "\ubd84 " + r + "\ucd08") : (m + "\ubd84");
+  return r ? (m + "분 " + r + "초") : (m + "분");
 }
 
-/* \ubc30\uce58 \ud558\ub098\uac00 \uc2e4\ud328\ud588\uc744 \ub54c \u2014 \ube48\uc190\uc73c\ub85c \ub3cc\ub824\ubcf4\ub0b4\uc9c0 \uc54a\ub294\ub2e4.
- * \uc5c6\ub294 \uac83\uc744 \ub9d0\ud558\uace0, \uc788\ub294 \uac83\uc744 \ubcf4\uc5ec \uc8fc\uace0, \ud560 \uc218 \uc788\ub294 \uac83\uc744 \ubc84\ud2bc\uc73c\ub85c \ub460\ub2e4. */
-function failedBatch(s, e, batch, total, reply, errText) {
-  setBusy(false);
-  const got = S.collected.length;
+/* 진행은 서버에 물어본다. 이 폴링은 화면을 다시 열었을 때도 시작되므로,
+ * 자리를 떴다 돌아와도 그 사이에 진행된 것이 보인다. 조립을 서버로 내린 유일한 이유다. */
+let pollTimer = null;
 
-  const head = errText
-    ? errText
-    : ("\uc7a5\uba74 " + s + "~" + e + " \ub294 \ud615\uc2dd\uc744 \ubabb \ub9de\ucdc4\uc2b5\ub2c8\ub2e4. \uc81c \ucabd \ubaa8\ub378 \ubb38\uc81c\uc774\uace0, "
-       + "\uac19\uc740 \uc9c0\uc2dc\ubb38\uc73c\ub85c 7\ubc88 \uc911 4\ubc88\uc740 \uc774\ub807\uac8c \ub429\ub2c8\ub2e4.");
-  addNote(head, true);
+function startPolling() {
+  if (pollTimer) return;
+  S.shown = 0;
+  setBusy(true);
+  pollCompose();
+  pollTimer = setInterval(pollCompose, 2500);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  setBusy(false);
+}
+
+async function pollCompose() {
+  let st;
+  try {
+    st = await api("/api/compose-job-status", {});
+  } catch (e) {
+    return;                     // 일시적 실패로 폴링을 죽이지 않는다
+  }
+  S.job = st;
+
+  /* 도착한 장면만큼 줄을 쌓는다 — 배치가 다 모일 때까지 기다리지 않는다.
+   * 첫 보상이 118초에서 30초로 당겨지는 지점이 정확히 여기다. */
+  const scenes = st.scenes || [];
+  while (S.shown < scenes.length) {
+    const sc = scenes[S.shown];
+    S.shown += 1;
+    addNote("▸ " + (sc.order != null ? sc.order : S.shown) + "컷 나왔습니다 — " + (sc.purpose || ""));
+    setBar(S.shown, st.total || 1);
+  }
+
+  if (st.running) { showCancel(true); return; }
+
+  stopPolling();
+  showCancel(false);
+
+  if (st.error) { composeFailed(st); return; }
+  if (st.cancelled) {
+    addNote("멈췄습니다. 받아 둔 " + scenes.length + "개는 그대로 있습니다.");
+    if (scenes.length) offerSave(scenes.length);
+    return;
+  }
+  if (scenes.length) await saveJob();
+}
+
+function showCancel(on) {
+  let b = document.getElementById("cancelCompose");
+  if (!on) { if (b && b.parentNode) b.parentNode.remove(); return; }
+  if (b) return;
+  b = el("button", null, "현상 멈추기");
+  b.id = "cancelCompose";
+  b.type = "button";
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    b.textContent = "멈추는 중…";
+    try { await api("/api/compose-job-cancel", {}); } catch (e) { /* 폴링이 결과를 본다 */ }
+  });
+  const row = el("div", "offer");
+  row.appendChild(b);
+  stream().appendChild(row);
+  scrollEnd();
+}
+
+/* 실패했을 때 — 빈손으로 돌려보내지 않는다. 없는 것을 말하고, 있는 것을 보이고,
+ * 할 수 있는 것을 버튼으로 둔다. 모델이 보낸 원문도 버리지 않는다. */
+function composeFailed(st) {
+  const got = (st.scenes || []).length;
+  addNote(st.error, true);
   addNote(got
-    ? ("\uc55e\uc11c \ubc1b\uc740 " + got + "\uac1c\ub294 \uadf8\ub300\ub85c \uc788\uc2b5\ub2c8\ub2e4 \u2014 \ubc84\ub9ac\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.")
-    : "\uc544\uc9c1 \ubc1b\uc740 \uc7a5\uba74\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.");
+    ? ("앞서 받은 " + got + "개는 그대로 있습니다 — 버리지 않았습니다.")
+    : "아직 받은 장면이 없습니다.");
 
   const row = el("div", "offer");
+  const from = st.failed_from || (got + 1);
+  const to = st.failed_to || from;
 
-  const again = el("button", null, "\uc774 \uad6c\uac04\ub9cc \ub2e4\uc2dc \u00b7 \uc57d " + fmtSecs((e - s + 1) * 32));
+  const again = el("button", null, "이어서 다시 · 약 " + fmtSecs(((st.total || to) - got) * 32));
   again.type = "button";
-  again.addEventListener("click", () => { row.remove(); composeRange(s, total, batch, total); });
+  again.addEventListener("click", async () => {
+    row.remove();
+    try {
+      await api("/api/compose-job", { total: st.total, batch: st.batch || 3, branching: false });
+      startPolling();
+    } catch (e) { addNote(String(e.message || e), true); }
+  });
   row.appendChild(again);
 
   if (got) {
-    const save = el("button", null, "\ubc1b\uc740 " + got + "\uac1c\ub85c \ub9c8\ubb34\ub9ac");
+    const save = el("button", null, "받은 " + got + "개로 마무리");
     save.type = "button";
-    save.addEventListener("click", () => { row.remove(); saveCollected(got); });
+    save.addEventListener("click", () => { row.remove(); saveJob(); });
     row.appendChild(save);
   }
-
-  if (reply && reply.trim()) {
-    const show = el("button", null, "\ubc1b\uc740 \uae00\uc790 \ubcf4\uae30");
+  if (st.raw && st.raw.trim()) {
+    const show = el("button", null, "받은 글자 보기");
     show.type = "button";
     show.addEventListener("click", () => {
       show.disabled = true;
       const wrap = el("div", "turn");
       const bub = el("div", "bubble sys");
-      bub.textContent = reply;
+      bub.textContent = st.raw;
       wrap.appendChild(bub);
-      const hint = el("p", "line",
-        "\uc774 \uae00\uc790\ub294 \ubc84\ub9ac\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4. \uc2a4\ud29c\ub514\uc624 \ud0ed\uc758 [\u270d \uc9c1\uc811 \uc785\ub825]\uc5d0 \uadf8\ub300\ub85c \ubd99\uc5ec\ub123\uc73c\uba74 "
-        + "\ubaa8\ub378\uc744 \ub2e4\uc2dc \ubd80\ub974\uc9c0 \uc54a\uace0\ub3c4 \uc7a5\uba74\uc774 \ub429\ub2c8\ub2e4.");
-      wrap.appendChild(hint);
+      wrap.appendChild(el("p", "line",
+        "이 글자는 버리지 않았습니다. 스튜디오의 [✍ 직접 입력]에 붙여넣으면 "
+        + "모델을 다시 부르지 않고도 장면이 됩니다."));
       stream().appendChild(wrap);
       scrollEnd();
     });
     row.appendChild(show);
   }
-
   stream().appendChild(row);
   scrollEnd();
   setBar(0, 1);
 }
 
-/* \ubaa8\uc740 \uc7a5\uba74\uc744 \ud55c \ubc88\uc5d0 \uc800\uc7a5\ud55c\ub2e4. \uc800\uc7a5\uc740 LLM \uc744 \uc548 \uc4f0\ubbc0\ub85c \ube60\ub974\uace0,
- * \uac1c\uc218\uac00 \uc5b4\uae78\ub9ac\uba74 \uc11c\ubc84\uac00 \ub514\uc2a4\ud06c\ub97c \uac74\ub4dc\ub9ac\uae30 \uc804\uc5d0 \uba48\ucd98\ub2e4. */
-async function saveCollected(expected) {
-  const items = S.collected || [];
-  if (!items.length) { addNote("\uc800\uc7a5\ud560 \uc7a5\uba74\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.", true); return; }
+function offerSave(n) {
+  const row = el("div", "offer");
+  const save = el("button", null, "받은 " + n + "개로 마무리");
+  save.type = "button";
+  save.addEventListener("click", () => { row.remove(); saveJob(); });
+  row.appendChild(save);
+  stream().appendChild(row);
+  scrollEnd();
+}
 
-  /* order \ub97c \uc804\uccb4 \uae30\uc900\uc73c\ub85c \ub2e4\uc2dc \ub9e4\uae34\ub2e4 \u2014 \ubc30\uce58\ub9c8\ub2e4 1\ubd80\ud130 \ub2e4\uc2dc \uc138\ub294 \uc77c\uc774 \ud754\ud558\ub2e4. */
-  items.forEach((it, i) => { it.order = i + 1; });
-
+/* 저장도 서버가 들고 있던 것을 쓴다 — 조립 도중 화면을 닫았다가 나중에 열어도 마무리된다. */
+async function saveJob() {
   setBusy(true);
   try {
-    const res = await api("/api/compose-manual", {
-      text: JSON.stringify(items), count: items.length, force: false,
-    });
+    const res = await api("/api/compose-job-save", {});
     const created = (res && res.created) || [];
-    const made = created.length || items.length;
+    const made = created.length;
     const fixed = (res && res.fixed_anchors) || [];
-    addNote("\uc7a5\uba74 " + made + "\uac1c\ub97c \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4."
-            + (fixed.length ? " \uc575\ucee4\ub97c " + fixed.length + "\uac1c \uc7a5\uba74\uc5d0\uc11c \uc790\ub3d9 \ubcf4\uc815\ud588\uc2b5\ub2c8\ub2e4." : "")
+    addNote("장면 " + made + "개를 저장했습니다."
+            + (fixed.length ? " 앵커를 " + fixed.length + "개 장면에서 자동 보정했습니다." : "")
             + ((res && res.checker_pass === false)
-               ? " \uc790\ub3d9 \uac80\uc0ac\uc5d0\uc11c \uc9c0\uc801\uc774 \uc788\uc2b5\ub2c8\ub2e4 \u2014 \uc2a4\ud29c\ub514\uc624 \ud0ed\uc758 \uac80\uc0ac\uc5d0\uc11c \ud655\uc778\ud558\uc138\uc694." : ""));
-    S.collected = [];
+               ? " 자동 검사에서 지적이 있습니다 — 스튜디오의 검사에서 확인하세요." : ""));
+    S.job = null;
+    S.shown = 0;
     await refresh();
-
     const go = el("div", "offer");
-    const btn = el("button", null, "\uc7a5\uba74 " + made + "\uac1c \ubcf4\ub7ec \uac00\uae30");
+    const btn = el("button", null, "장면 " + made + "개 보러 가기");
     btn.type = "button";
     btn.addEventListener("click", () => showView("scenes"));
     go.appendChild(btn);
@@ -556,20 +591,12 @@ async function saveCollected(expected) {
     scrollEnd();
   } catch (e) {
     addNote(String(e.message || e), true);
-    addNote("\ubc1b\uc740 " + items.length + "\uac1c\ub294 \uadf8\ub300\ub85c \ub4e4\uace0 \uc788\uc2b5\ub2c8\ub2e4 \u2014 \ub2e4\uc2dc \ub9c8\ubb34\ub9ac\ub97c \ub20c\ub7ec \ubcf4\uc138\uc694.", true);
-    const row = el("div", "offer");
-    const retry = el("button", null, "\ub2e4\uc2dc \ub9c8\ubb34\ub9ac");
-    retry.type = "button";
-    retry.addEventListener("click", () => { row.remove(); saveCollected(expected); });
-    row.appendChild(retry);
-    stream().appendChild(row);
-    scrollEnd();
+    offerSave((S.job && (S.job.scenes || []).length) || 0);
   } finally {
     setBar(0, 1);
     setBusy(false);
   }
 }
-
 /* ---------------------------------------------------------------- 장면 */
 const STATE_LABEL = {
   SCENE_PLAN: "구성됨", PROMPT: "프롬프트 있음", IMAGE: "그림 뽑음",
@@ -1154,6 +1181,19 @@ async function boot() {
   await loadChats();
 
   showView("talk");
+
+  /* 자리를 떴다 돌아왔을 때 그 사이의 진행이 보여야 한다 — 조립을 서버로 내린 이유가
+   * 그것이므로, 화면을 열 때마다 돌고 있는 작업이 있는지 먼저 묻는다. */
+  try {
+    const st = await api("/api/compose-job-status", {});
+    if (st && (st.running || (st.scenes || []).length)) {
+      addNote(st.running
+        ? "현상이 아직 돌고 있습니다 — 이어서 보여 드립니다."
+        : "지난 현상에서 받아 둔 장면이 있습니다.");
+      startPolling();
+    }
+  } catch (e) { /* 조립 이력이 없으면 그만이다 */ }
+
   probe();
   setInterval(probe, 30000);
 }

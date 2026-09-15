@@ -5441,6 +5441,42 @@ def l10(b: Box):
     eq(bad, [], "사적 대화 파일이 이미 git 에 추적되고 있다")
 
 
+@test("unit", "U33 조립 스트림 — 장면이 완성되는 즉시 알아채고, 대사 속 괄호에 속지 않는다")
+def u33(b: Box):
+    """_SceneStream 은 흐르는 글자에서 장면 경계를 잡는다. 이게 틀리면 두 가지로 망가진다:
+    못 잡으면 예전처럼 100초 동안 화면이 비고, 잘못 잡으면 대사 조각이 장면으로 올라온다.
+
+    실측 근거: 3장면 배치가 95~118초인데 장면 1개는 약 30초다. 경계를 잡으면 첫 보상이
+    100초에서 30초로 당겨진다 — 기다림이 불안에서 기대로 바뀌는 유일한 지점이다.
+    """
+    vc = b.mod("vn_compose")
+    got = []
+    st = vc._SceneStream(got.append)
+
+    scene = ('{"order":1,"purpose":"\\ucef7","dialogue":[{"speaker_id":"CHAR-001",'
+             '"text":"\\uc911\\uad04\\ud638 { \\uc640 } \\uac00 \\ub4e4\\uc5b4\\uc788\\ub2e4"}],'
+             '"image_prompt":"p"}')
+    # 한 글자씩 흘려보낸다 — 실제 SSE 조각 크기와 무관하게 동작해야 한다
+    for ch in "[" + scene:
+        st.feed(ch)
+    eq(len(got), 1, "장면 하나가 끝났는데 못 알아챘다")
+    eq(got[0]["order"], 1, "장면 내용이 어긋남")
+
+    # 대사 안의 중괄호가 경계로 오인되지 않았는지 — 위에서 1개만 나왔으면 통과다
+    st2 = vc._SceneStream(got.append)
+    st2.feed('{"speaker_id":"CHAR-001","text":"x"}')     # 대사 원소는 장면이 아니다
+    eq(len(got), 1, "대사 원소를 장면으로 올렸다 — _looks_like_scene 관문이 뚫렸다")
+
+    # 깨진 JSON 은 조용히 넘어가야 한다(최종 파싱이 다시 본다)
+    st3 = vc._SceneStream(got.append)
+    st3.feed('{"order":2,"purpose":')
+    eq(len(got), 1, "미완성 조각을 장면으로 올렸다")
+
+    # 콜백이 터져도 조립이 멈추면 안 된다
+    boom = vc._SceneStream(lambda _o: (_ for _ in ()).throw(RuntimeError("화면 갱신 실패")))
+    boom.feed(scene)          # 예외가 밖으로 새면 이 줄에서 테스트가 죽는다
+
+
 @test("unit", "U32 대화 갈래 — 설정 파일이 대화로 둔갑하지 않고, 자르기는 잘린 말을 보관한다")
 def u32(b: Box):
     """두 가지를 잠근다.
