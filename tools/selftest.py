@@ -84,6 +84,7 @@ BANNED_DOM = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
 #  meta T01 이 이 목록을 두 방향으로 감시한다: 파일 존재·적재 + optional 되돌림 금지.)
 REQUIRED_MODULES = (
     "vn_core", "advance_scene", "scene_ops", "talk_store", "prompt_build", "local_llm",
+    "works",
     "webapp", "vn_compose", "export_viewer", "makefun_client", "scene_lint",
     "secret_scan", "backup_project", "print_preflight", "gen_jobs",
     # 여기 없으면 '구문 검사만 받고 아무도 부르지 않는' 상태가 조용히 유지된다.
@@ -114,7 +115,7 @@ LAYER = {
     "vn_core": 0, "check_protocol": 0,
     # 1 저장소·전송 계층 — vn_core 만 본다. gen_common 은 두 이미지 클라이언트가 함께 쓰는
     #   결과형·메타·대장 조각이라 클라이언트보다 아래에 있어야 한다.
-    "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1,
+    "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1, "works": 1,
     "scene_brief": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
     "gen_common": 1,
     # 2 조립·전이 계층
@@ -6513,6 +6514,102 @@ def u46(b: Box):
         eq(len(ts.load_log(ts.story_chat_path_for("u46ok"))), 4, "답이 저장되지 않았다")
     finally:
         vc.orch_chat = real
+
+
+@test("unit", "U47 작품 전환 — 대화마다 자기 장면·그림, 그리고 어떤 경우에도 잃지 않는다")
+def u47(b: Box):
+    """통합 화면의 '목록' 은 대화를 갈라 주는데 **입력만 갈라지고 출력은 하나였다.**
+    장면은 ``project/scenes/`` 한 폴더에 살고 ``/api/state`` 는 chat_id 를 받지도 않아서,
+    어느 대화를 열든 같은 장면이 보였다. 대화 2에서 조립하면 "이미 장면이 있습니다" 로
+    막히고, 덮어쓰면 대화 1의 작품이 사라졌다.
+
+    하위 폴더로 나눌 수가 없다 — 판정자 ``check_protocol.py`` 가 수정 금지인데
+    ``project/scenes/*.json`` 을 하드코딩으로 훑는다. 그래서 자리는 하나로 두고
+    **올라와 있는 작품을 갈아 끼운다**(폴더 이름 바꾸기라 150MB 라도 즉시 끝난다).
+
+    이 검사가 지키는 것은 하나다: **장면과 그림을 잃지 않는다.** 되돌릴 수 없는 자산이라
+    전환 한 번의 버그가 몇 시간짜리 작업을 지운다. 그래서 왕복·중단·충돌을 다 본다.
+    """
+    wk = b.mod("works")
+    root = b.root / "wtest"
+    wk.WORKS = root / "project" / "works"
+    wk.STATE = root / "project" / "works_state.json"
+    wk.SCENES = root / "project" / "scenes"
+    wk.IMAGES_RAW = root / "images" / "raw"
+    wk._PAIRS = (("scenes", lambda: wk.SCENES), ("images_raw", lambda: wk.IMAGES_RAW))
+
+    def make(n, tag):
+        wk.SCENES.mkdir(parents=True, exist_ok=True)
+        wk.IMAGES_RAW.mkdir(parents=True, exist_ok=True)
+        for i in range(1, n + 1):
+            sid = "SCENE-%03d" % i
+            (wk.SCENES / (sid + ".json")).write_text(
+                json.dumps({"scene_id": sid, "tag": tag}), encoding="utf-8")
+            d = wk.IMAGES_RAW / sid
+            d.mkdir(exist_ok=True)
+            (d / "a.png").write_bytes(b"P" + tag.encode())
+
+    def tag_now():
+        sc = sorted(wk.SCENES.glob("*.json")) if wk.SCENES.exists() else []
+        return json.loads(sc[0].read_text(encoding="utf-8"))["tag"] if sc else "-"
+
+    def totals():
+        return (sum(1 for _ in (root / "project").rglob("SCENE-*.json")),
+                sum(1 for _ in root.rglob("*.png")))
+
+    # (1) 대화마다 자기 작품을 갖는다 — 왕복해도 서로 섞이지 않는다
+    make(4, "A")
+    eq(wk.current(), "", "처음 올라와 있는 작품이 기본 갈래가 아니다")
+    wk.switch("beta")
+    eq(tag_now(), "-", "새 대화를 열었는데 앞 대화의 장면이 그대로 보인다 — 출력이 안 갈라졌다")
+    make(3, "B")
+    wk.switch("")
+    eq(tag_now(), "A", "기본으로 돌아왔는데 A 가 없다")
+    eq(len(list(wk.SCENES.glob("*.json"))), 4, "A 의 장면 수가 변했다")
+    wk.switch("beta")
+    eq(tag_now(), "B", "beta 로 돌아왔는데 B 가 없다")
+    eq(totals(), (7, 7), "왕복하면서 파일이 사라졌다: %s" % (totals(),))
+
+    # (2) 중단 복구 — 기본 갈래로 이동하다 죽은 경우. id 가 빈 문자열이라 여기가 함정이었다:
+    #     목적지 값만으로 판단하면 "기본으로 이동 중" 과 "이동 중 아님" 이 같아진다.
+    wk._write_state({"current": "beta", "moving": True, "to": "", "at": 0})
+    wk._park("beta")
+    ok(not wk.SCENES.exists(), "내려간 상태를 만들지 못했다 — 검사가 성립하지 않는다")
+    r = wk.repair()
+    eq(r.get("action"), "finished", "내린 뒤 죽은 전환을 마저 올리지 않는다: %s" % r)
+    eq(tag_now(), "A", "복구했는데 엉뚱한 작품이 올라왔다")
+    eq(wk.current(), "", "복구 뒤 기록된 주인이 틀렸다")
+
+    # (3) 안전망 — 이동 표시가 없는데 자리만 비어 있어도 되살린다
+    wk._park("")
+    wk._write_state({"current": ""})
+    r = wk.repair()
+    eq(r.get("action"), "remounted", "빈 자리를 되살리지 않는다 — 화면이 빈 채로 남는다: %s" % r)
+    eq(tag_now(), "A", "되살린 작품이 다르다")
+
+    # (4) 보관소가 차 있으면 **덮지 않고 거절한다.** 덮으면 그쪽 작품이 사라진다.
+    stash = wk.WORKS / "_default" / "scenes"
+    stash.mkdir(parents=True, exist_ok=True)
+    (stash / "SCENE-099.json").write_text('{"scene_id":"SCENE-099","tag":"Z"}', encoding="utf-8")
+    try:
+        wk.switch("beta")
+        ok(False, "보관소가 차 있는데 전환했다 — 쉬고 있던 작품을 덮어쓴다")
+    except Exception as exc:
+        # 사람이 읽을 수 있는 거절이어야 한다. OS 오류가 그대로 올라오면 화면에
+        # WinError 역추적이 뜨고, 사람은 무엇을 정리해야 하는지 알 수 없다.
+        ok("보관소" in str(exc),
+           "거절 문구가 날것이다(가드가 아니라 OS 가 막은 것): %r" % str(exc)[:80])
+    ok((stash / "SCENE-099.json").exists(),
+       "거절했다면서 보관소의 장면을 덮었다 — 쉬고 있던 작품이 사라졌다")
+    eq(tag_now(), "A", "거절한 뒤 화면이 비었다 — 실패는 아무것도 바꾸지 않아야 한다")
+    eq(totals()[0] >= 7, True, "거절 과정에서 장면이 사라졌다")
+
+    # (5) 같은 작품으로 전환하는 것은 **아무 일도 하지 않는다**
+    #     (대화를 열 때마다 불리므로, 파일을 안 건드리는 것이 기본 동작이어야 한다)
+    shutil.rmtree(wk.WORKS / "_default" / "scenes", ignore_errors=True)
+    r = wk.switch("")
+    eq(r.get("switched"), False, "같은 작품인데 파일을 옮겼다")
+    eq(tag_now(), "A", "제자리 전환이 작품을 바꿨다")
 
 
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")

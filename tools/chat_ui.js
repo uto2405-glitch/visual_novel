@@ -77,6 +77,8 @@ const S = {
   busy: false,       // 대화 한 턴을 기다리는 중 (보내기 잠김)
   composing: false,  // 조립이 도는 중 ([장면으로 조립]만 잠김)
   gen: false,        // 그림을 굽는 중 (굽기 버튼만 잠김)
+  works: {},         // 대화 id → 그 대화가 가진 장면 수
+  work: "",          // 지금 올라와 있는 작품의 대화 id
 };
 
 /* 기다리는 동안 보내기 버튼을 중지로 바꾼다. 눈앉을 띄지 않고 누를 수 있는 자리가 거기뿐이다. */
@@ -1023,6 +1025,15 @@ async function loadChats() {
   } catch (e) {
     S.chats = [];
   }
+  /* 대화마다 장면이 몇 개인지 같이 받는다 — 목록에서 어느 대화가 작품을 가졌는지
+   * 보이지 않으면, 장면 탭을 열어 봐야 알 수 있다. */
+  try {
+    const w = await api("/api/works", {});
+    const by = {};
+    ((w && w.works) || []).forEach((x) => { by[x.chat_id || ""] = x.scenes; });
+    S.works = by;
+    S.work = (w && w.current) || "";
+  } catch (e) { S.works = S.works || {}; }
 }
 
 async function openChat(id) {
@@ -1049,6 +1060,21 @@ async function openChat(id) {
     addNote(String(e.message || e), true);
   } finally {
     if (box) box.disabled = false;
+  }
+  if (S.chatId !== want) return;
+
+  /* 장면·그림도 같이 갈아 끼운다. 이게 없으면 대화만 바뀜고 장면·갤러리·감상은
+   * 남의 작품을 보여 준다 — 입력만 갈라지고 출력은 공용이던 그 상태다.
+   * 굽는 중·조립 중이면 서버가 거절한다 — 그때는 이유를 적고 대화만 보여 준다. */
+  try {
+    const r = await api("/api/work-switch", { chat_id: want });
+    if (S.chatId !== want) return;
+    if (r && r.switched) {
+      S.work = want;
+      await refresh();
+    }
+  } catch (e) {
+    if (S.chatId === want) addNote(String(e.message || e), true);
   }
   if (S.chatId !== want) return;
   showView("talk");     // 대화를 골랐으면 대화를 보여 준다 — 이 순간의 해시는 #list 라 그걸 따르면 목록으로 되돌아간다
@@ -1196,7 +1222,9 @@ function renderList() {
     open.appendChild(el("span", "nm", chatLabel(c)));
     const when = c.mtime ? new Date(c.mtime * 1000).toLocaleString("ko-KR",
       { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "새 대화";
+    const nsc = (S.works || {})[c.id || ""];
     open.appendChild(el("span", "meta", c.count + "턴 · " + when
+                                        + (nsc ? (" · 장면 " + nsc + "개") : "")
                                         + (c.id === S.chatId ? " · 지금 보는 중" : "")));
     open.addEventListener("click", () => openChat(c.id));
     row.appendChild(open);

@@ -42,6 +42,22 @@ project/story/memory_*.json
 # 재구성 백업 잔재 (backups/ 로 이관 전 과거 흔적)
 project/scenes_backup_*/
 
+# 작품 보관소(works.py) — **장면은 추적하고 그림은 안 한다.**
+#
+# 장면 JSON 은 이 저장소에서 유일한 집 밖 사본이다(그림은 원래 제외된다).
+# 작품을 바꾸면 장면이 project/scenes/ 와 works/<id>/scenes/ 사이를 오가는데,
+# 보관소를 제외해 버리면 쉬고 있는 작품의 장면은 **디스크에만** 남는다.
+# 그래서 장면은 어느 자리에 있든 추적된다 — 전환은 git 이 보기에 파일 이동이다.
+# 반면 그림은 images/ 와 같은 이유로 제외한다(150MB 가 커밋에 실리면 안 된다).
+# 지금 어느 작품이 올라와 있는가 — 기계마다 다른 상태라 저장소에 싣지 않는다.
+# (없으면 기본 대화의 작품이 올라있는 것으로 본다 — 새 기계에서도 바로 맞는다.)
+project/works_state.json
+project/works/*/images_raw/
+# 지운 작품의 보관본도 통째로 제외(그림이 들어 있다).
+project/works/*.deleted/
+project/works/*.deleted-*/
+
+
 # 붙여넣기용 장면 브리프 (scene_brief 가 매번 다시 만든다 — 추적할 이유가 없다)
 project/scene_briefs/
 

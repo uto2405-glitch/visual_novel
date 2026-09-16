@@ -99,6 +99,7 @@ import prompt_build  # noqa: E402
 import scene_brief  # noqa: E402
 import scene_lint  # noqa: E402
 import scene_ops  # noqa: E402
+import works        # noqa: E402  작품 전환(대화별 장면·그림)
 import talk_store  # noqa: E402
 import vn_compose  # noqa: E402
 import vn_core  # noqa: E402
@@ -605,6 +606,30 @@ def r_chat_exports(b):
     return {"files": out[:200]}
 
 
+def r_work_switch(b):
+    """그 대화의 작품을 올린다 — 장면·그림이 대화마다 따로 산다.
+
+    굽는 중·조립 중에는 거절한다. 그 작업들은 장면 id 로 파일을 잡고 있어서,
+    밑에서 폴더를 바꾸면 굽던 그림이 남의 작품으로 들어간다.
+    """
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    try:
+        if vn_compose.compose_job_status().get("running"):
+            raise VNError("조립이 도는 중입니다 — 끝난 뒤에 대화를 옮기세요.")
+    except VNError:
+        raise
+    except Exception:
+        pass
+    busy = gen_jobs.running()
+    if busy:
+        raise VNError(f"그림을 굽는 중입니다({', '.join(busy)}) — 끝난 뒤에 옮기세요.")
+    return works.switch(cid)
+
+
+def r_works(b):
+    return {"current": works.current(), "works": works.list_works()}
+
+
 def r_chat_delete(b):
     """갈래 하나 삭제. 기본 갈래(id 없음)는 지우지 않는다 — 스튜디오가 같은 파일을 쓴다."""
     cid = talk_store.normalize_chat_id(b.get("chat_id"))
@@ -612,6 +637,9 @@ def r_chat_delete(b):
         raise VNError("기본 대화는 지울 수 없습니다 — 새 대화를 만들어 쓰세요.")
     with WRITE_LOCK:
         ok = talk_store.delete_story_chat(cid)
+        # 그 대화의 작품도 같이 치운다. 장면·그림은 다시 만들 수 없으므로
+        # 지우지 않고 .deleted 로 이름만 바꾼다(대화 보관본과 같은 규칙).
+        works.forget(cid)
     return {"deleted": ok, "chat_id": cid}
 
 
@@ -1194,6 +1222,7 @@ def r_logout_all(b):
 POST_ROUTES = {
     "/api/chat": r_chat, "/api/chat-history": r_chat_history,
     "/api/chats": r_chats, "/api/chat-delete": r_chat_delete,
+    "/api/work-switch": r_work_switch, "/api/works": r_works,
     "/api/chat-export": r_chat_export, "/api/chat-import": r_chat_import,
     "/api/chat-exports": r_chat_exports,
     "/api/chat-meta": r_chat_meta, "/api/chat-trim": r_chat_trim,
@@ -1959,6 +1988,15 @@ def main() -> int:
             print(f"경고: --trust {ip!r} 은 IP 주소가 아닙니다 — 무시합니다.")
             continue
         TRUSTED_IPS.add(ip)
+
+    # 지난번 작품 전환이 끝나기 전에 서버가 죽었을 수 있다 — 받기 전에 먼저 맞춘다.
+    try:
+        fix = works.repair()
+        if fix.get("repaired"):
+            print(f"작품 전환을 마무리했습니다({fix.get('action')}) — 지금 작품: {fix.get('current') or '기본 대화'}")
+            log.warning("works.repair: %s", fix)
+    except Exception as exc:
+        log.warning("works.repair 실패: %s", exc)
 
     log.info("서버 기동 bind=%s port=%s pin=%s trust=%s", bind, port,
              "on" if AUTH["pin"] else "off", ",".join(sorted(TRUSTED_IPS)) or "-")
