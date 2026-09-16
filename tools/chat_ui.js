@@ -270,13 +270,26 @@ async function trimAndAsk(idx, newUserText) {
  * 조립을 서버 작업으로 내려 '탭을 닫아도 계속 돈다' 가 된 뒤로 이 상황은 더 흔해졌다.
  * 그러니 기다림 자체를 없앨 수는 없어도, **무엇을 기다리는지와 얼마나 남았는지**는
  * 말할 수 있다. 그 둘이 있으면 기다림은 견딜 만해진다(다른 탭을 보고 오면 된다). */
+/* 남은 시간을 한 마디로.
+ *
+ * 서버가 eta 와 eta_late 를 같이 준다. eta 는 절대 올라가지 않고(올라가는 숫자를
+ * 사람은 '어림이 틀렸다' 가 아니라 '작업이 고장 났다' 로 읽는다), 대신 약속한 시각까지
+ * 못 끝낼 것 같으면 eta_late 가 켜진다. 그때는 어림을 내세우지 않고 **확실히 아는 것**
+ * (몇 장 중 몇 장)을 앞에 둔다. 틀린 숫자보다 정확한 사실이 신뢰를 덜 깎아먹는다. */
+function etaWord(st) {
+  const done = Number((st && st.done) || 0);
+  const total = Number((st && st.total) || 0);
+  const got = total ? (total + "장 중 " + done + "장 받음") : (done + "장 받음");
+  if (st && st.eta_late) return "예상보다 늦어지고 있습니다 · " + got;
+  const left = Number((st && st.eta) || 0);
+  return left ? ("약 " + fmtSecs(left) + " 남았습니다 · " + got) : got;
+}
+
 async function waitLine() {
   let st = null;
   try { st = await api("/api/compose-job-status", {}); } catch (e) { st = null; }
   if (st && st.running) {
-    const left = Number(st.eta || 0);
-    return "조립이 모델을 잡고 있어 답이 그 뒤에 옵니다"
-           + (left ? (" — 약 " + fmtSecs(left) + " 남았습니다") : "")
+    return "조립이 모델을 잡고 있어 답이 그 뒤에 옵니다 — " + etaWord(st)
            + ". 다른 탭을 보고 오셔도 됩니다.";
   }
   return "생각하는 중… (이 모델은 초당 12~14자 정도라 긴 답은 1~2분 걸립니다)";
@@ -594,7 +607,7 @@ async function pollCompose() {
     return;
   }
   if (st.running) {
-    liveShow(st.message || ("현상 중… " + (st.done || 0) + "/" + (st.total || "?")),
+    liveShow((st.message || "현상 중…") + " — " + etaWord(st),
              [{ label: "현상 멈추기", onClick: async (b) => {
                   b.disabled = true; b.textContent = "이번 구간까지만…";
                   try { await api("/api/compose-job-cancel", {}); } catch (e) { /* 폴링이 본다 */ }

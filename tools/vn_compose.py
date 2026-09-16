@@ -712,6 +712,8 @@ def compose_batch(total: int, branching: bool, start: int, end: int,
 # 그래서 슬롯도 하나면 충분하다(장면별로 나뉘는 gen_jobs 와 다른 점).
 _JOB_LOCK = threading.Lock()
 _JOB: dict = {"running": False}
+# 표시한 남은 시간을 기억한다 — 숫자가 올라가지 않게 막는 데만 쓴다(_eta_shown).
+_ETA: dict = {"shown": None, "at": 0.0}
 
 
 def _job_snapshot() -> dict:
@@ -719,25 +721,106 @@ def _job_snapshot() -> dict:
         return dict(_JOB)
 
 
-def _compose_eta(job: dict):
-    """조립이 끝나기까지 남은 초(어림잡음). 알 수 없으면 None.
+# ---------------------------------------------------------------- 남은 시간
+#
+# 왜 이게 어려운가(씽크북 실측, total 6 · batch 3 · 실제 240초):
+#
+#   t=3s    어림 179 / 실제 240      t=73s   어림 354 / 실제 170   ← 2.08배
+#   t=43s   어림 139 / 실제 200      t=83s   어림 161 / 실제 160   ← 배치 경계에서 리셋
+#   t=53s   어림 254 / 실제 190      t=233s  어림 46  / 실제 10
+#
+# 톱니다. **배치 안에서는 올라가고, 배치 경계에서 뚝 떨어진다.** 사람이 보는 것은
+# "3분 남음 → 2분 남음 → 갑자기 6분 남음" 이고, 그때 사람은 '어림이 틀렸다'고 읽지 않는다.
+# '작업이 고장 났다'고 읽는다 — 그리고 새로고침하거나 다시 시작한다.
+#
+# 원인 둘. (1) 장면당 시간을 **작업 시작부터** 나눴다. 배치 하나는 프롬프트를 먼저 읽느라
+# 첫 장면까지 오래 걸리고(실측 40~50초) 그 뒤 장면들은 빠르다 — 시작부터 나누면 그 앞머리
+# 비용이 모든 장면에 골고루 발라진다. (2) 배치가 여러 개면 그 앞머리 비용을 **남은 배치
+# 수만큼 더** 치러야 하는데 그걸 안 셌다.
+#
+# 그래서 둘 다 고친다. 그리고 그래도 틀릴 것이므로, 마지막에 **절대 올라가지 않게** 막는다.
+_ETA_DEFAULT_SCENE = 30.0     # 장면 하나(실측 12~14 tok/s 기준)
+_ETA_DEFAULT_HEAD = 45.0      # 배치 하나의 앞머리(프롬프트 읽기 + 첫 장면)
 
-    지금까지 한 장면당 걸린 시간으로 남은 장면을 곱한다. 정확할 필요는 없고,
-    사람이 "다른 걸 하고 올까, 기다릴까" 를 정할 수 있을 정도면 된다.
+
+def _eta_raw(job: dict):
+    """남은 초 — 배치 구조를 반영한 어림. 알 수 없으면 None.
+
+    두 가지를 따로 센다.
+
+      * **앞머리(head)** — 배치 하나가 프롬프트를 읽고 첫 장면을 내놓기까지(실측 40~50초).
+      * **장면당(per)** — 그 뒤의 장면 하나하나(실측 10~30초).
+
+    장면당을 '작업 시작부터 / 장면 수' 로 구하면 앞머리 비용이 모든 장면에 골고루 발리고,
+    앞머리를 기다리는 동안에는 계속 커진다 — 그게 톱니의 정체다. 그래서 **도착한 장면들
+    사이의 간격**으로만 잰다(now 를 쓰지 않는다. 기다리는 시간은 per 를 늘리지 않는다).
+
+    남은 배치가 아직 시작 전이면 그 앞머리를 한 번 더 치른다. 지금 배치가 진행 중이면
+    그 앞머리는 이미 치렀으므로 세지 않는다 — 이걸 빼먹으면 배치 경계에서 숫자가 뚝 떨어진다.
     """
     if not job.get("running"):
         return None
-    started = float(job.get("started_at") or 0)
     total = int(job.get("total") or 0)
+    batch = max(1, int(job.get("batch") or 1))
+    started = float(job.get("started_at") or 0)
     done = len(job.get("items") or [])
-    if not started or total <= 0:
+    if total <= 0 or not started:
         return None
-    elapsed = max(0.0, time.time() - started)
-    if done <= 0:
-        # 아직 한 장면도 안 나왔다 — 실측치(장면당 약 30초)로 잡는다.
-        return int(max(0, total * 30 - elapsed))
-    per = elapsed / done
-    return int(max(0, per * (total - done)))
+    left = total - done
+    if left <= 0:
+        return 0
+
+    first_at = float(job.get("first_at") or 0)
+    last_at = float(job.get("last_at") or 0)
+    head = (first_at - started) if first_at else 0.0
+    if not (5.0 <= head <= 300.0):
+        head = _ETA_DEFAULT_HEAD
+    if done >= 2 and first_at and last_at > first_at:
+        per = max(1.0, (last_at - first_at) / (done - 1))
+    else:
+        per = _ETA_DEFAULT_SCENE
+
+    in_batch = done % batch
+    if in_batch:                      # 지금 배치가 도는 중 — 앞머리는 이미 치렀다
+        here, head_cost = min(left, batch - in_batch), 0.0
+    else:                             # 다음 배치는 아직 시작 전 — 앞머리를 치른다
+        here, head_cost = min(left, batch), head
+    later = left - here
+    later_batches = (later + batch - 1) // batch
+    return int(max(0, head_cost + here * per + later_batches * (head + batch * per)))
+
+
+def _eta_shown(job: dict):
+    """화면에 내보낼 남은 초 — **절대 올라가지 않는다.** → (표시값, 늦어지는 중인가)
+
+    어림이 늘어나면 숫자를 올리는 대신 **그 자리에 멈춘다.** 사람은 올라가는 숫자를
+    '어림이 틀렸다'로 읽지 않고 '작업이 고장 났다'로 읽는다 — 그리고 새로고침한다.
+    멈춘 숫자는 그렇게까지 읽히지 않고, 두 번째 값(늦어지는 중)이 True 가 되면 화면이
+    숫자 대신 확실히 아는 사실("6장 중 3장 받았습니다")을 앞세운다.
+
+    시계만큼 억지로 깎지는 않는다. 그렇게 하면 앞머리를 기다리는 80초 동안 숫자가
+    0 까지 내려가 앉아 있게 되는데, 그건 멈춘 숫자보다 더 나쁜 거짓말이다.
+    """
+    raw = _eta_raw(job)
+    if raw is None:
+        _ETA.update(shown=None, at=0.0)
+        return None, False
+    now = time.time()
+    prev = _ETA.get("shown")
+    if prev is None:
+        _ETA.update(shown=float(raw), at=now)
+        return int(raw), False
+    # 늦음 — 두 가지 뜻이 있다.
+    #  (1) 어림이 지금 보여 주는 것보다 커졌다 — 숫자를 올리는 대신 이걸로 말한다.
+    #  (2) **아무것도 안 온 지 오래됐다.** 이게 없으면 진짜로 멈춰 버린 작업에서
+    #      평평한 숫자 하나가 영원히 떠 있는다 — 멈춘 숫자는 정직하지만, 정말 멈춰
+    #      있을 때까지 정직한 것은 아니다.
+    quiet = now - (float(job.get("last_at") or 0) or float(job.get("started_at") or now))
+    expect = _ETA_DEFAULT_HEAD + _ETA_DEFAULT_SCENE
+    late = float(raw) > float(prev) or quiet > expect * 1.5
+    shown = min(float(prev), float(raw))
+    _ETA.update(shown=shown, at=now)
+    return int(shown), bool(late)
 
 
 def compose_job_status() -> dict:
@@ -748,6 +831,7 @@ def compose_job_status() -> dict:
     """
     job = _job_snapshot()
     items = job.get("items") or []
+    _eta_pair = _eta_shown(job)
     return {
         "running": bool(job.get("running")),
         "total": int(job.get("total") or 0),
@@ -764,7 +848,9 @@ def compose_job_status() -> dict:
         "cancelled": bool(job.get("cancelled")),
         # 남은 시간 어림잡음 — 이 서버가 LLM 을 잡고 있는 동안 대화는 줄을 선다.
         # 그 사실을 화면이 말하려면 숫자가 필요하다("잠시만" 은 5분을 설명하지 못한다).
-        "eta": _compose_eta(job),
+        "eta": _eta_pair[0],
+        # 약속한 시각까지 못 끝낸다 — 화면은 숫자 대신 확실히 아는 사실로 말을 바꿔야 한다.
+        "eta_late": _eta_pair[1],
     }
 
 
@@ -806,6 +892,7 @@ def compose_job_save(force: bool = False) -> dict:
         raise
     with _JOB_LOCK:
         _JOB.clear()
+        _ETA.update(shown=None, at=0.0)   # 지난 작업의 카운트다운을 물려받지 않는다
         _JOB["running"] = False
     return res
 
@@ -861,6 +948,11 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
                 _seen.append(obj)
                 with _JOB_LOCK:
                     got = list(_JOB.get("items") or [])
+                    _JOB["last_at"] = time.time()   # 장면 간격을 재려면 마지막 도착 시각이 필요하다
+                    if not got and not _JOB.get("first_at"):
+                        # 첫 장면이 도착한 시각 — 이것이 있어야 '배치 앞머리 비용'과
+                        # '장면당 시간'을 갈라 낼 수 있다(섮으면 톱니바퀴가 된다).
+                        _JOB["first_at"] = time.time()
                     _JOB["items"] = got + [obj]
                     _JOB["message"] = f"{len(got) + 1}컷째 나오는 중…"
 

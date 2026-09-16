@@ -5888,15 +5888,6 @@ def u39(b: Box):
         body = body[:body.index("\ndef ", 10)]
         ok("_chat_timeout(" in body, "%s 경로가 큐 상한을 쓰지 않는다 — 조립 중에 120초로 죽는다" % what)
 
-    # 남은 시간 어림 — 화면이 "약 N분" 이라고 말할 수 있어야 기다림이 견딜 만해진다
-    vc = b.mod("vn_compose")
-    eq(vc._compose_eta({"running": False}), None, "안 도는 작업에 남은 시간이 나온다")
-    eq(vc._compose_eta({"running": True, "total": 0}), None, "총 개수를 모르는데 숫자를 지어낸다")
-    now = __import__("time").time()
-    got = vc._compose_eta({"running": True, "total": 10, "started_at": now - 100,
-                           "items": [{}, {}, {}, {}, {}]})   # 5개에 100초 → 남은 5개에 100초
-    ok(got is not None and 80 <= got <= 120, "남은 시간 어림이 이상하다: %r (기대 ~100)" % got)
-
 
 @test("js", "J17 통합 화면 — 부르는 함수가 전부 정의돼 있다(문법 통과와 '돌아간다'는 다르다)")
 def j17(b: Box):
@@ -6045,6 +6036,92 @@ def j18(b: Box):
     # 스크립트가 죽으면 이 표시들은 초기값 그대로 남는다(boot 이 끝까지 못 갔다는 뜻)
     ok("연결" in talk or "끊김" in talk or "거부" in talk,
        "상태 칩이 갱신되지 않았다 — boot 이 끝까지 가지 못했다")
+
+
+@test("unit", "U40 남은 시간 — 절대 올라가지 않고, 배치 경계를 넘고, 멈춘 작업을 숨기지 않는다")
+def u40(b: Box):
+    """씽크북 실측이 톱니를 찾아냈다(total 6 · batch 3 · 실제 240.2초):
+
+        t=3s  어림 179/실제 240   t=53s 254/190   t=73s **354**/170   t=83s 161/160
+
+    배치 안에서 올라가고 배치 경계에서 뚝 떨어진다. 사람이 보는 것은 "3분 남음 →
+    2분 남음 → **갑자기 6분 남음**" 이고, 그때 사람은 '어림이 틀렸다'로 읽지 않는다.
+    '작업이 고장 났다'로 읽고 새로고침한다 — 5분짜리 작업을 사람 손으로 끊게 만든다.
+
+    원인 둘: 장면당 시간을 작업 시작부터 나눠서(앞머리 비용이 모든 장면에 발린다)
+    기다리는 동안 계속 커졌고, 남은 배치가 치를 앞머리를 세지 않았다.
+
+    잠그는 것은 셋이다.
+      (1) **절대 올라가지 않는다** — 어림이 커지면 숫자를 올리는 대신 그 자리에 멈춘다.
+      (2) **배치 경계를 넘는다** — 아직 시작 안 한 배치의 앞머리를 센다.
+      (3) **멈춘 작업을 숨기지 않는다** — 오래 아무것도 안 오면 '늦음'을 켠다.
+          이게 없으면 진짜로 죽은 작업 위에 평평한 숫자 하나가 영원히 떠 있는다.
+    """
+    vc = b.mod("vn_compose")
+    T0 = 1_000_000.0
+    real_time = vc.time.time
+
+    def replay(arrivals, until, total=6, batch=3):
+        """도착 시각표를 재생하고 [(t, eta, late)] 를 돌려준다."""
+        clock = {"t": T0}
+        vc.time.time = lambda: clock["t"]
+        vc._ETA.update(shown=None, at=0.0)
+        out = []
+        for t in range(3, int(until) + 1, 10):
+            clock["t"] = T0 + t
+            done = sum(1 for a in arrivals if a <= t)
+            job = {"running": True, "total": total, "batch": batch, "started_at": T0,
+                   "items": [{}] * done,
+                   "first_at": (T0 + arrivals[0]) if done else 0,
+                   "last_at": (T0 + arrivals[done - 1]) if done else 0}
+            eta, late = vc._eta_shown(job)
+            out.append((t, eta, late))
+        return out
+
+    try:
+        # (1)(2) 실측 시각표 — 한 번도 올라가지 않고, '늦음'도 뜨지 않는다(정상 실행이므로)
+        rows = replay([50, 80, 90, 175, 200, 240], 240)
+        ups = [r for i, r in enumerate(rows) if i and r[1] > rows[i - 1][1]]
+        ok(not ups, "남은 시간이 올라갔다 — 사람은 이걸 고장으로 읽는다: %s" % ups[:3])
+        ok(not any(r[2] for r in rows), "정상 실행인데 '늦음'이 떴다 — 늘 뜨면 아무 뜻이 없다")
+
+        # 배치 경계(장면 3개째, t=93)에서 다음 배치의 앞머리를 세는가 —
+        # 안 세면 여기서 숫자가 절반 아래로 뚝 떨어진다
+        at83 = [r for r in rows if r[0] == 83][0][1]
+        at93 = [r for r in rows if r[0] == 93][0][1]
+        ok(at93 >= at83 * 0.5,
+           "배치 경계에서 남은 시간이 절반 아래로 무너졌다(%d초 → %d초) — 다음 배치의 "
+           "앞머리를 안 세고 있다" % (at83, at93))
+
+        # 어림이 실제와 크게 어긋나지 않는가 (예전: -61초 ~ +184초)
+        worst = 0
+        for t, eta, _late in rows:
+            worst = max(worst, abs(eta - (240 - t)))
+        ok(worst <= 90, "어림이 실제와 %d초나 어긋난다 — 예전(184초)보다 낫지 않다" % worst)
+
+        # (1b) **느려지는 실행** — 장면 간격이 10초에서 70초로 벌어지면
+        #      어림 자체는 반드시 커진다. 그때도 화면 숫자는 올라가면 안 된다 —
+        #      막아 주는 것이 단조 감소 잠금이고, 이 경우가 그 잠금이 유일하게 일하는 자리다.
+        slowing = replay([40, 50, 120, 200, 290, 390], 400, total=6, batch=6)
+        ups2 = [r for i, r in enumerate(slowing) if i and r[1] > slowing[i - 1][1]]
+        ok(not ups2, "점점 느려지는 실행에서 남은 시간이 올라갔다: %s" % ups2[:3])
+        ok(any(r[2] for r in slowing),
+           "어림이 커졌는데 '늦음'을 한 번도 안 알렸다 — 숫자만 막고 입을 닫은 꼴이다")
+
+        # (3) 3장 받고 멈춘 작업 — 언젠가는 '늦음'이 떠야 한다
+        stalled = replay([50, 80, 90], 400)
+        ok(any(r[2] for r in stalled),
+           "작업이 멈췄는데 '늦음'이 한 번도 안 떴다 — 평평한 숫자가 영원히 떠 있는다")
+        first_late = [r[0] for r in stalled if r[2]][0]
+        ok(first_late > 90, "마지막 장면이 오자마자 '늦음'이 떴다(t=%d) — 너무 성급하다" % first_late)
+
+        # 안 도는 작업에는 숫자가 없다
+        eta, late = vc._eta_shown({"running": False})
+        eq(eta, None, "안 도는 작업에 남은 시간이 나온다")
+        eq(late, False, "안 도는 작업이 늦다고 나온다")
+    finally:
+        vc.time.time = real_time
+        vc._ETA.update(shown=None, at=0.0)
 
 
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
