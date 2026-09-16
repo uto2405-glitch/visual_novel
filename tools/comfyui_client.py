@@ -488,6 +488,125 @@ def negative_text(s: dict, enabled: bool = True) -> str:
     return _with_prefix(s.get("negative_prompt", ""), s.get("negative_prefix", "")) if enabled else ""
 
 
+# ---------------------------------------------------------------- 그림체 사전 설정
+#
+# 그림체를 바꾸는 진짜 레버는 **체크포인트**다. 같은 모델에 "photorealistic" 을 적어 봐야
+# 애니 모델은 반실사 그림체까지만 가고, 실사 모델에 "anime" 를 적으면 어색한 중간이 된다.
+# 그래서 프리셋은 체크포인트와 문구를 **한 쌍**으로 묶는다.
+#
+# 체크포인트는 파일 이름을 직접 박지 않고 **조각으로 찾는다.** 사람이 모델을 새 판으로
+# 바꾸면(v170 → v180) 이름이 달라지는데, 그때마다 코드를 고쳐야 하면 프리셋이 조용히
+# 죽는다. 못 찾으면 매니페스트가 지정한 것으로 떨어지고 **화면에 그렇게 말한다** —
+# 조용히 다른 그림체로 굽는 것이 제일 나쁘다.
+#
+# 전환 비용: 체크포인트가 바뀌면 그 첫 장은 모델을 새로 올린다(SDXL 약 6.5GB).
+# 이어지는 장은 다시 빠르다. 그 사실을 화면이 미리 말해 준다.
+STYLE_PRESETS: dict = {
+    "webtoon": {
+        "label": "웹툰풍",
+        "hint": "waiillustrious",
+        "positive": "korean webtoon style, clean line art, cel shading, "
+                    "soft warm palette, expressive eyes",
+        "negative": "photorealistic, 3d render, western cartoon",
+    },
+    "anime": {
+        "label": "일본만화풍",
+        "hint": "waiillustrious",
+        "positive": "japanese anime style, manga illustration, crisp linework, "
+                    "vibrant cel shading, detailed eyes",
+        "negative": "photorealistic, 3d render, western cartoon, sketch",
+    },
+    "real": {
+        "label": "실사풍",
+        "hint": "juggernautxl",
+        "positive": "photorealistic, natural skin texture, realistic lighting, "
+                    "shot on 85mm lens, shallow depth of field, film grain",
+        "negative": "anime, cartoon, illustration, cel shading, line art, 2d",
+    },
+}
+STYLE_KEEP = ""          # "" = 사전 설정 안 씀(매니페스트에 적힌 그대로)
+
+
+def style_keys() -> list:
+    return list(STYLE_PRESETS)
+
+
+def _drop_style_words(text: str) -> str:
+    """프롬프트에 박혀 있는 매니페스트 visual_style 문구를 걱어낸다(없으면 그대로)."""
+    try:
+        style = str(vn_core.visual_style(vn_core.load_json_safe(MANIFEST, {})) or "").strip()
+    except Exception:
+        style = ""
+    out = str(text or "")
+    if not style:
+        return out.strip()
+    low, sl = out.lower(), style.lower()
+    i = low.find(sl)
+    if i < 0:
+        # 통째로는 없고 조각으로 있을 수 있다 — 쉼표로 끊어 같은 조각만 본다.
+        parts = [x.strip() for x in style.split(",") if len(x.strip()) > 6]
+        for chunk in parts:
+            j = out.lower().find(chunk.lower())
+            if j >= 0:
+                out = out[:j] + out[j + len(chunk):]
+        return re.sub(r"\s*,\s*,", ",", out).strip().strip(",").strip()
+    out = out[:i] + out[i + len(style):]
+    return re.sub(r"\s*,\s*,", ",", out).strip().strip(",").strip()
+
+
+def resolve_style(key: str = "") -> dict:
+    """프리셋 키 → {key, label, ckpt, positive, negative, found, note}.
+
+    ``found`` 가 False 면 그 그림체의 체크포인트를 못 찾아 매니페스트 것으로 떨어졌다는
+    뜻이다. 화면이 그것을 반드시 말해야 한다 — 고른 그림체와 다른 그림이 나오기 때문이다.
+    """
+    k = str(key or "").strip().lower()
+    if not k or k not in STYLE_PRESETS:
+        return {"key": "", "label": "지금 설정", "ckpt": checkpoint(),
+                "positive": "", "negative": "", "found": True, "note": ""}
+    p = STYLE_PRESETS[k]
+    want = str(p["hint"]).lower()
+    try:
+        names = checkpoints()
+    except VNError:
+        names = []
+    hit = next((n for n in names if want in n.lower().replace("_", "").replace("-", "")), "")
+    if hit:
+        return {"key": k, "label": p["label"], "ckpt": hit, "positive": p["positive"],
+                "negative": p["negative"], "found": True, "note": ""}
+    fallback = checkpoint()
+    return {"key": k, "label": p["label"], "ckpt": fallback, "positive": p["positive"],
+            "negative": p["negative"], "found": False,
+            "note": f"{p['label']} 에 맞는 체크포인트를 찾지 못해 {fallback} 로 굽습니다 "
+                    f"— 그림체가 고른 것과 다를 수 있습니다."}
+
+
+def configured_style() -> str:
+    """매니페스트에 저장된 그림체 키("" = 사전 설정 안 씀)."""
+    k = str(_cfg().get("style", "") or "").strip().lower()
+    return k if k in STYLE_PRESETS else STYLE_KEEP
+
+
+def set_style(key: str) -> str:
+    """그림체를 저장한다. 매니페스트의 다른 칸은 건드리지 않는다."""
+    k = str(key or "").strip().lower()
+    if k and k not in STYLE_PRESETS:
+        raise VNError(f"모르는 그림체입니다: {k[:24]!r} (가능: {', '.join(STYLE_PRESETS)})")
+    mf = vn_core.load_json_safe(MANIFEST, {})
+    ig = mf.get("image_generator")
+    if not isinstance(ig, dict):
+        ig = {}
+        mf["image_generator"] = ig
+    cf = ig.get("comfyui")
+    if not isinstance(cf, dict):
+        cf = {}
+        ig["comfyui"] = cf
+    cf["style"] = k
+    vn_core.atomic_write_json(MANIFEST, mf)
+    _cfg.cache_clear() if hasattr(_cfg, "cache_clear") else None
+    return k
+
+
 def build_graph(prompt: str, negative: str, *, ckpt: str, seed: int, s: dict, plan: dict,
                 name: str = "") -> dict:
     """ComfyUI API 그래프(노드 id → {class_type, inputs}).
@@ -672,7 +791,8 @@ def _seed(seed) -> int:
 def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
                     long_edge: int | None = None, negative: bool = True,
                     scene_id: str = "", on_progress=None, quiet: bool = False,
-                    input_images=None, seed=None, on_each=None, should_stop=None) -> GenResult:
+                    input_images=None, seed=None, on_each=None, should_stop=None,
+                    style: str | None = None) -> GenResult:
     """n 장을 **순차** 렌더(시드 seed, seed+1, …)해 out_dir 에 cf_<id6>_<i>.png 로 저장.
 
     한 장이 실패해도 나머지는 살리고 경고로 알린다. 장마다 _gen_meta.json 항목과
@@ -683,18 +803,34 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
         raise VNError("이미지 프롬프트가 비어 있습니다.")
     out_dir = Path(out_dir)
     n = max(1, min(int(n or 1), 8))
-    ckpt = checkpoint()
+    # 그림체 사전 설정 — 호출부가 명시하면 그것, 아니면 매니페스트에 저장된 것.
+    # 체크포인트까지 함께 갈리므로(그게 그림체의 진짜 레버다) 여기서 한 번에 정한다.
+    st = resolve_style(configured_style() if style is None else style)
+    ckpt = st["ckpt"]
     s = settings(ckpt)
     plan = size_plan(long_edge)
     pos = _with_prefix(text, s.get("prompt_prefix", ""))
+    if st["positive"]:
+        # 매니페스트의 visual_style 은 저장된 프롬프트 **안에** 박혀 있다(조립할 때
+        # 모델이 그렇게 쓴다). 그걸 두고 실사풍을 앞에 붙이면 한 프롬프트 안에서
+        # "cel-shaded webtoon" 과 "photorealistic" 이 서로 싸운다 — 실측으로 그랬다.
+        # 그림체를 골랏으면 그것이 정본이다 — 예전 그림체 문구를 빼고 바꿔 끼운다.
+        pos = _drop_style_words(pos)
+        pos = _with_prefix(pos, st["positive"])
     neg = negative_text(s, negative)
+    if st["negative"] and neg:
+        neg = st["negative"] + ", " + neg
+    elif st["negative"]:
+        neg = st["negative"]
     base = _seed(seed)
     warns: list[str] = list(size_warnings(plan))
+    if st.get("note"):
+        warns.append(st["note"])       # 조용히 다른 그림체로 굽지 않는다
     if input_images:
         warns.append(REF_WARNING)
     for msg in warns:
         _say("  ⚠ " + msg, quiet)
-    _say(f"  {LABEL} · {ckpt} · {plan['width']}x{plan['height']}"
+    _say(f"  {LABEL} · {st['label']} · {ckpt} · {plan['width']}x{plan['height']}"
          f"{' (hires ' + str(plan['base_width']) + 'x' + str(plan['base_height']) + '→)' if plan['hires'] else ''}"
          f" · seed {base}{'+' if n > 1 else ''}", quiet)
     saved: list[Path] = []
@@ -807,7 +943,7 @@ def _record_generator(scene_id: str, ckpt: str) -> str:
 def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
                        negative: bool = True, on_progress=None, quiet: bool = False,
                        reference: bool = True, seed=None, on_each=None,
-                       should_stop=None) -> GenResult:
+                       should_stop=None, style: str | None = None) -> GenResult:
     """장면의 이미지 프롬프트(prompt.grok_output)로 렌더해 images/raw/<scene>/ 에 저장.
 
     성공하면 scene_ops.record_external_generator 로 "ComfyUI · <체크포인트>" 를 남긴다(실패는 경고).
@@ -822,7 +958,7 @@ def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
     res = generate_to_dir(prompt, RAW_DIR / scene_id, n=n, name=scene_id, long_edge=long_edge,
                           negative=negative, scene_id=scene_id, on_progress=on_progress,
                           quiet=quiet, input_images=refs, seed=seed,
-                          on_each=on_each, should_stop=should_stop)
+                          on_each=on_each, should_stop=should_stop, style=style)
     warn = _record_generator(scene_id, checkpoint())
     if warn:
         res.warnings.append(warn)

@@ -946,6 +946,132 @@ def r_image_engine(b):
     return image_gen.health(b.get("engine") or None)
 
 
+def r_image_style(b):
+    """그림체 사전 설정 — 읽기와 저장을 한 라우트에서.
+
+    ``style`` 키가 오면 저장하고, 없으면 목록만 돌려준다. 목록에는 각 그림체가 **실제로
+    어느 체크포인트로 굽는지**를 같이 싣는다 — 못 찾으면 화면이 그 사실을 말해야 한다
+    (고른 것과 다른 그림체로 조용히 굽는 것이 제일 나쁘다).
+    """
+    cc = image_gen.client("comfyui")
+    if "style" in b:
+        with WRITE_LOCK:
+            cc.set_style(b.get("style") or "")
+    cur = cc.configured_style()
+    out = [{"key": "", "label": "지금 설정", "ckpt": "", "found": True}]
+    for k in cc.style_keys():
+        r = cc.resolve_style(k)
+        out.append({"key": k, "label": r["label"], "ckpt": r["ckpt"],
+                    "found": r["found"], "note": r.get("note", "")})
+    return {"style": cur, "styles": out}
+
+
+# ---------------------------------------------------------------- 장면마다 한 장씩
+#
+# 장면이 열 개면 [그림 뽑기] 를 열 번 눌러야 했고, 한 번에 23초씩이라 사람이 화면 앞에
+# 붙어 있어야 했다. 한 번 눌러 두고 자리를 뜰 수 있게 한다 — 조립을 서버로 내린 것과
+# 같은 이유다.
+#
+# 규칙 셋:
+#   * **아직 그림이 없는 장면만.** 이미 후보가 있는 장면을 다시 굽는 것은 사람이 고를 때
+#     할 일이지 일괄 작업이 할 일이 아니다.
+#   * **승인된 장면은 건드리지 않는다.** scene_ops 가 어차피 거절하지만, 여기서 먼저
+#     걸러야 "10개 중 7개 실패" 같은 보고가 나오지 않는다.
+#   * **장면당 한 장.** 사람이 그렇게 시켰고, 4장씩이면 열 장면에 15분이 넘는다.
+_ALL_LOCK = threading.Lock()
+_ALL: dict = {"running": False}
+
+
+def _gen_all_targets() -> list:
+    """일괄 생성 대상 — 프롬프트가 있고, 그림이 없고, 승인되지 않은 장면."""
+    out = []
+    for _f, sc in vn_core.iter_scenes():
+        sid = str(sc.get("scene_id") or "")
+        if not sid or sc.get("status") == "APPROVED":
+            continue
+        if not str((sc.get("prompt") or {}).get("grok_output", "") or "").strip():
+            continue
+        assets = sc.get("assets") if isinstance(sc.get("assets"), dict) else {}
+        if assets.get("raw_images"):
+            continue
+        out.append(sid)
+    return out
+
+
+def gen_all_status() -> dict:
+    with _ALL_LOCK:
+        return dict(_ALL)
+
+
+def _gen_all_worker(sids: list, style):
+    done, failed = [], []
+    try:
+        for i, sid in enumerate(sids, 1):
+            with _ALL_LOCK:
+                if _ALL.get("cancel"):
+                    _ALL["message"] = "멈췄습니다."
+                    break
+                _ALL.update({"message": f"{sid} 굽는 중… ({i}/{len(sids)})",
+                             "done": len(done), "total": len(sids), "current": sid})
+            try:
+                gen_jobs.run(sid, lambda: image_gen.generate_for_scene(
+                    sid, n=1, engine="comfyui", quiet=True, style=style), "일괄 생성")
+                scene_ops.register_images(sid)
+                done.append(sid)
+            except Exception as exc:
+                failed.append({"scene_id": sid, "error": str(exc)[:160]})
+                log.warning("일괄 생성 실패 %s: %s", sid, exc)
+    finally:
+        with _ALL_LOCK:
+            _ALL.update({"running": False, "done": len(done), "total": len(sids),
+                         "created": done, "failed": failed, "current": "",
+                         "message": _gen_all_summary(done, failed, _ALL.get("cancel"))})
+
+
+def _gen_all_summary(done, failed, cancelled) -> str:
+    parts = [f"{len(done)}장 나왔습니다"]
+    if failed:
+        parts.append(f"{len(failed)}개 실패")
+    if cancelled:
+        parts.append("나머지는 멈췄습니다")
+    return " · ".join(parts)
+
+
+def r_gen_all(b):
+    """그림 없는 장면마다 한 장씩, 순서대로. 화면을 닫아도 계속 돈다."""
+    with _ALL_LOCK:
+        if _ALL.get("running"):
+            raise VNError("이미 일괄 생성이 돌고 있습니다 — 진행 상황을 확인하세요.")
+    sids = _gen_all_targets()
+    if not sids:
+        raise VNError("그림이 필요한 장면이 없습니다. "
+                      "(프롬프트가 없거나, 이미 후보가 있거나, 승인된 장면은 건너뜁니다.)")
+    style = b.get("style")
+    with _ALL_LOCK:
+        _ALL.clear()
+        _ALL.update({"running": True, "cancel": False, "done": 0, "total": len(sids),
+                     "created": [], "failed": [], "current": "",
+                     "message": f"{len(sids)}개 장면에 한 장씩 굽습니다…"})
+    threading.Thread(target=_gen_all_worker, args=(sids, style), daemon=True).start()
+    return {"started": True, "scenes": sids, "total": len(sids)}
+
+
+def r_gen_all_status(b):
+    return gen_all_status()
+
+
+def r_gen_all_cancel(b):
+    with _ALL_LOCK:
+        if not _ALL.get("running"):
+            return {"cancelled": False, "message": "돌고 있는 일괄 생성이 없습니다."}
+        _ALL["cancel"] = True
+        _ALL["message"] = "이번 장까지만 굽고 멈춥니다…"
+    cur = gen_all_status().get("current")
+    if cur:
+        gen_jobs.request_cancel(cur)
+    return {"cancelled": True}
+
+
 def r_gen_image(b):
     """설정된 이미지 엔진으로 장면 이미지 생성 → images/raw/<scene>/ 저장 + 자동 등록·검사.
 
@@ -1314,7 +1440,9 @@ POST_ROUTES = {
     "/api/talk": r_talk, "/api/talk-status": r_talk_status,
     "/api/talk-history": r_talk_history,
     "/api/gen-prompt": r_gen_prompt, "/api/gen-image": r_gen_image,
-    "/api/image-engine": r_image_engine,
+    "/api/image-engine": r_image_engine, "/api/image-style": r_image_style,
+    "/api/gen-all": r_gen_all, "/api/gen-all-status": r_gen_all_status,
+    "/api/gen-all-cancel": r_gen_all_cancel,
     "/api/gen-status": r_gen_status, "/api/gen-cancel": r_gen_cancel,
     "/api/refetch": r_refetch,
     "/api/upscale": r_upscale, "/api/credits": r_credits,

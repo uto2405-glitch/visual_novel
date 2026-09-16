@@ -1,7 +1,7 @@
 {
   "scene_id": "SCENE-004",
   "scene_order": 4,
-  "status": "PROMPT",
+  "status": "IMAGE",
   "location_id": "LOC-002",
   "time": "오전 10시",
   "characters": [
@@ -24,8 +24,8 @@
   "prompt": {
     "grok_input_version": 1,
     "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, 벚꽃 공원: spring park path with cherry blossoms falling, soft pink petals in the air. Low angle shot from cat's perspective showing grass texture and fallen petals. 이지혜: 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings standing 나: 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt. No text.",
-    "external_generator": "",
-    "external_model": ""
+    "external_generator": "ComfyUI",
+    "external_model": "waiIllustriousSDXL_v170.safetensors"
   },
   "dialogue": [
     {
@@ -40,11 +40,13 @@
     }
   ],
   "assets": {
-    "raw_images": [],
+    "raw_images": [
+      "images/raw/SCENE-004/cf_f77fd7_1.png"
+    ],
     "selected_image": ""
   },
   "review": {
-    "auto": "PENDING",
+    "auto": "PASS",
     "human": "PENDING",
     "score": null,
     "notes": []
