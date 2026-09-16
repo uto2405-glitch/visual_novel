@@ -180,6 +180,10 @@ def _short_reason(reason) -> str:
     for code, text in known.items():
         if code in s:
             return text
+    # 타임아웃은 오류 번호가 없이 "timed out" 한 마디로 온다 — 기계가 꺼져 있을 때의
+    # 전형적인 모습이다(꺼진 기계는 거절도 안 한다 — 아무 대답이 없다).
+    if "timed out" in s.lower() or "timeout" in s.lower():
+        return "응답이 없습니다(기기가 꺼져 있거나 절전 중입니다)"
     s = re.sub(r"^\[\w+ \d+\]\s*", "", s)      # [WinError NNNN] 머리표 제거
     return s[:70] or "알 수 없는 연결 오류"
 
@@ -338,6 +342,12 @@ def _auth_error(url: str, code: int) -> str:
             f"{where} 의 값이 그것과 다릅니다.")
 
 
+def host_hint(url: str) -> str:
+    """어느 기계인지 한 마디 — 이 집엔 기계가 둘이라 그걸 먼저 말해야 한다."""
+    hp = vn_core.host_port(url)
+    return f"{hp} —" if hp else "로컬 LLM —"
+
+
 def status() -> dict:
     """서버가 떠 있고 모델이 로드됐는지 — 그리고 **키가 맞는지**까지.
 
@@ -360,8 +370,12 @@ def status() -> dict:
         return {"up": False, "url": url, "models": [], "reason": "unreachable",
                 "error": f"HTTP {exc.code}"}
     except Exception as exc:
+        # 날것을 그대로 실지 않는다. 이 값은 화면의 상태 칩 툴팁으로 그대로 나간다 —
+        # 실측으로 "<urlopen error timed out>" 이 사용자 화면에 떠 있었다. 그 문구로는
+        # 무엇을 해야 하는지 알 수 없고, 이 저장소에는 그걸 사람의 말로 바꾸는 함수가 이미 있다.
+        reason = getattr(exc, "reason", exc)
         return {"up": False, "url": url, "models": [], "reason": "unreachable",
-                "error": str(exc)}
+                "error": f"{host_hint(url)} {_short_reason(reason)}"}
     if _auth_probe(url) is False:
         return {"up": False, "url": url, "models": models, "reason": "auth",
                 "error": _auth_error(url, 401)}
