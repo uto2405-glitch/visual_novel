@@ -88,6 +88,15 @@ main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
  border-radius:12px;padding:10px 12px;font:inherit;min-height:80px;resize:vertical;width:100%}
 .editbox .row button.go{border-color:var(--jade-d);color:var(--jade)}
 
+/* 지금 돌고 있는 일 — 탭과 무관하게 항상 같은 자리에 있다.
+   여기 있는 버튼은 화면을 옮겨도 사라지지 않는다. */
+.live{flex:0 0 auto;border-bottom:1px solid var(--line);background:var(--panel2);
+ padding:9px 14px;display:flex;flex-direction:column;gap:7px}
+.live[hidden]{display:none}
+.livemsg{margin:0;font-size:13px;color:var(--ink);word-break:break-word}
+.live .row{gap:6px}
+.live .row button{padding:6px 11px;font-size:13px}
+
 /* 아래로 내리는 단추 — 긴 대화에서 손가락으로 끝까지 쓸어내리지 않아도 되게 */
 .jump{position:fixed;right:14px;bottom:96px;z-index:5;
  background:var(--panel2);color:var(--ink);border:1px solid var(--line);
@@ -233,6 +242,17 @@ textarea:focus{outline:none;border-color:var(--jade-d)}
   <button id="tabGallery" type="button">갤러리</button>
   <button id="tabView" type="button">감상</button>
 </nav>
+
+<!--
+  진행 막대는 탭 밖에 산다. #stream 은 탭을 옮길 때마다 통째로 비워지는데, 예전에는
+  조립 진행과 실패 복구 버튼([이어서 다시]·[받은 N개로 마무리])이 거기 있었다 —
+  장면 탭을 한 번 눌렀다 오면 받아 둔 장면을 되살릴 방법이 화면에서 사라졌다.
+-->
+<section class="live" id="live" hidden>
+  <p class="livemsg" id="liveMsg"></p>
+  <div class="bar"><i id="liveBar"></i></div>
+  <div class="row" id="liveActs"></div>
+</section>
 
 <main id="stream" aria-live="polite"></main>
 <button class="jump" id="jump" type="button" hidden>맨 아래로</button>

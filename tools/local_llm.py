@@ -125,6 +125,28 @@ def where_hint(url: str | None = None) -> str:
             f'(또는 setx LOCAL_LLM_URL "{u}" · 환경변수가 항상 우선).')
 
 
+def _short_reason(reason) -> str:
+    """OS 오류를 사람이 읽을 한 조각으로 줄인다.
+
+    예전에는 ``[WinError 10061] 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다``
+    가 문장 **맨 앞**에 붙었다. 사용자에게 필요한 것은 무엇을 해야 하는가인데, 그 안내가
+    윈도우 내부 코드 뒤로 밀려 화면에서 잘렸다. 원인은 끝에 짧게 붙이고, 앞자리는
+    행동에 내준다. 진단에 필요한 전문은 logs/webapp.log 에 그대로 남는다.
+    """
+    s = str(reason or "").strip()
+    known = {
+        "10061": "그 주소에서 아무도 듣고 있지 않습니다(서버 꺼짐)",
+        "10060": "응답이 없습니다(기기가 꺼져 있거나 IP 가 바뀜)",
+        "11001": "그 이름을 찾을 수 없습니다(주소 오타)",
+        "10065": "그 주소에 닿을 수 없습니다(네트워크가 다름)",
+    }
+    for code, text in known.items():
+        if code in s:
+            return text
+    s = re.sub(r"^\[\w+ \d+\]\s*", "", s)      # [WinError NNNN] 머리표 제거
+    return s[:70] or "알 수 없는 연결 오류"
+
+
 def serve_hint() -> str:
     """서버를 어떻게 살리는가 — **주소가 가리키는 기기에 따라 문장이 달라진다**.
 
@@ -411,7 +433,8 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
             raise VNError(_auth_error(url, e.code))
         raise VNError(f"로컬 LLM HTTP {e.code}({url}) — 서버/모델 상태를 확인하세요.")
     except urllib.error.URLError as e:
-        raise VNError(f"로컬 LLM({url}) 에 연결할 수 없습니다({e.reason}). {serve_hint()}")
+        raise VNError(f"로컬 LLM({url}) 에 연결할 수 없습니다. {serve_hint()}"
+                      f" (원인: {_short_reason(e.reason)})")
     try:
         data = json.loads(raw.decode("utf-8"))
         content = data["choices"][0]["message"]["content"]

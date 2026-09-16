@@ -595,6 +595,14 @@ def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
     return _create_scenes_from_items(items, force, expected=count)
 
 
+class _ComposeStop(Exception):
+    """사람이 멈춤을 눌렀다 — 스트림 한가운데서 빠져나오기 위한 신호.
+
+    배치 경계에서만 보면 3장면 배치가 끝날 때까지 최대 100초를 더 기다려야 한다.
+    장면이 하나 완성될 때마다 보면 그 대기가 30초로 줄고, 이미 받은 장면은 그대로 남는다.
+    """
+
+
 class _SceneStream:
     """흐르는 글자에서 **장면 하나가 끝나는 순간**을 잡아낸다.
 
@@ -648,6 +656,8 @@ class _SceneStream:
         if _looks_like_scene(obj):
             try:
                 self.on_scene(obj)
+            except _ComposeStop:
+                raise                 # 멈춤은 신호다 — 삼키면 멈출 수 없다
             except Exception:
                 pass      # 화면 갱신 실패가 조립을 멈추게 두지 않는다
 
@@ -738,6 +748,43 @@ def compose_job_items() -> list:
     return list(_job_snapshot().get("items") or [])
 
 
+def compose_job_save(force: bool = False) -> dict:
+    """모아 둔 장면을 저장하고 작업을 비운다 — **한 번만** 일어나게 묶어서 한다.
+
+    따로 두면 두 가지가 깨진다.
+      * 아직 돌고 있는 작업에 저장이 끼어들면, 반쯤 모인 장면이 디스크에 박히고 그 뒤
+        끝난 본 작업은 "이미 장면이 있습니다" 로 영영 저장하지 못한다.
+      * 화면 두 개(폰·PC)가 같은 2.5초 안에 끝을 보면 둘 다 저장을 부른다. 둘째는
+        같은 이유로 실패 문구를 띄우는데, 사실 저장은 성공한 상태다 — 그 문구를 읽고
+        --force 로 다시 구성하면 방금 저장한 앨범이 백업으로 밀려난다.
+    그래서 '누가 저장할 자격이 있나' 를 잠금 안에서 한 번에 정한다.
+    """
+    with _JOB_LOCK:
+        if _JOB.get("running"):
+            raise VNError("조립이 아직 돌고 있습니다 — 끝나면 저장됩니다.")
+        items = [dict(it) for it in (_JOB.get("items") or []) if isinstance(it, dict)]
+        if not items:
+            raise VNError("저장할 장면이 없습니다. 이미 저장되었을 수 있습니다.")
+        total = int(_JOB.get("total") or 0)
+        _JOB["items"] = []          # 자격을 여기서 가져간다 — 둘째 요청은 위에서 걸린다
+        _JOB["message"] = "저장 중…"
+    try:
+        for i, it in enumerate(items):
+            it["order"] = i + 1     # 배치마다 1부터 다시 세는 일이 흔하다
+        res = compose_from_json(json.dumps(items, ensure_ascii=False), force,
+                                expected=total or len(items))
+    except Exception:
+        with _JOB_LOCK:             # 실패하면 자격을 돌려준다 — 다시 누를 수 있어야 한다
+            if not _JOB.get("items"):
+                _JOB["items"] = items
+                _JOB["message"] = ""
+        raise
+    with _JOB_LOCK:
+        _JOB.clear()
+        _JOB["running"] = False
+    return res
+
+
 def compose_job_cancel() -> dict:
     """지금 배치가 끝나면 멈춘다. 받아 둔 장면은 그대로 둔다(버리지 않는다)."""
     with _JOB_LOCK:
@@ -760,7 +807,10 @@ def compose_job_clear() -> dict:
 def _compose_worker(total: int, batch: int, branching: bool) -> None:
     """배치를 돌며 장면을 모은다. 실패해도 **이미 받은 것은 버리지 않는다.**"""
     try:
-        start = 1
+        # 이어받기: 이미 들고 있는 장면 다음부터 시작한다. 1 로 고정하면 [이어서 다시] 가
+        # 이미 받은 구간을 다시 굽고(장면당 30초) 그 사이 사본이 하나뿐인 장면들이 날아간다.
+        with _JOB_LOCK:
+            start = len(_JOB.get("items") or []) + 1
         while start <= total:
             with _JOB_LOCK:
                 if _JOB.get("cancel"):
@@ -774,6 +824,10 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
             seen: list = []
 
             def _arrived(obj, _seen=seen):
+                # 장면 하나가 끝난 이 순간이 배치 안에서 멈출 수 있는 유일한 자리다.
+                with _JOB_LOCK:
+                    if _JOB.get("cancel"):
+                        raise _ComposeStop()
                 """장면 하나가 완성되는 즉시 화면이 볼 수 있게 올린다.
 
                 최종 목록은 배치가 끝난 뒤 _extract_json_array 가 다시 만든다 — 여기서
@@ -790,6 +844,12 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
                                     [{"order": m.get("order"), "purpose": m.get("purpose")}
                                      for m in made],
                                     on_scene=_arrived)
+            except _ComposeStop:              # 사람이 멈췄다 — 지금까지 받은 것은 그대로 둔다
+                with _JOB_LOCK:
+                    kept = len(_JOB.get("items") or [])
+                    _JOB["cancelled"] = True
+                    _JOB["message"] = f"멈췄습니다. 받아 둔 {kept}개는 그대로 있습니다."
+                break
             except Exception as exc:          # 모델·네트워크 실패 — 받은 것은 지키고 멈춘다
                 with _JOB_LOCK:
                     _JOB["error"] = str(exc)
@@ -808,15 +868,29 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
                     _JOB["failed_from"], _JOB["failed_to"] = start, end
                     _JOB["message"] = ""
                 break
+            fresh = [it for it in items if isinstance(it, dict)]
+            want = end - start + 1
             with _JOB_LOCK:
                 # 스트림으로 미리 올린 것을 걷어내고 정본(파싱 결과)으로 갈아 끼운다.
                 # 미리 올리는 목적은 도착을 빨리 보여 주는 것이지 저장이 아니다.
                 got = list(_JOB.get("items") or [])
                 if seen:
                     got = got[:max(0, len(got) - len(seen))]
-                got.extend(it for it in items if isinstance(it, dict))
+                got.extend(fresh)
                 _JOB["items"] = got
                 _JOB["message"] = f"장면 {start}~{end} 나왔습니다 — 지금까지 {len(got)}개"
+
+            if len(fresh) < want:
+                # 개수가 모자란 채로 다음 구간으로 넘어가면 그 자리가 영영 빈다 — 다음
+                # 구간의 '앞에서 만든 것' 요약이 이미 채워진 것처럼 말하기 때문이다.
+                # 저장까지 가면 번호가 1..N 으로 다시 매겨져 구멍의 흔적도 사라진다.
+                with _JOB_LOCK:
+                    _JOB["error"] = (f"장면 {start}~{end} 를 {want}개 시켰는데 {len(fresh)}개만 왔습니다. "
+                                     "모자란 자리를 비워 둔 채로 넘어가지 않고 여기서 멈춥니다.")
+                    _JOB["raw"] = raw
+                    _JOB["failed_from"], _JOB["failed_to"] = start + len(fresh), end
+                    _JOB["message"] = ""
+                break
             start = end + 1
         else:
             with _JOB_LOCK:
@@ -827,8 +901,15 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
             _JOB["finished_at"] = int(time.time())
 
 
-def compose_job_start(total: int, batch: int = 3, branching: bool = False) -> dict:
-    """조립을 서버에서 시작한다. 화면을 닫아도 계속 돈다."""
+def compose_job_start(total: int, batch: int = 3, branching: bool = False,
+                      resume: bool = False) -> dict:
+    """조립을 서버에서 시작한다. 화면을 닫아도 계속 돈다.
+
+    resume=True 면 **이미 받아 둔 장면을 지우지 않고 그 다음부터** 이어서 받는다.
+    이 갈래가 없던 동안 화면의 [이어서 다시] 버튼은 _JOB.clear() 를 거쳐 1번 장면부터
+    다시 시작했다 — 화면은 "버리지 않았습니다" 라고 적어 두고 실제로는 버렸고, 남은
+    유일한 사본이던 그 장면들이 사라졌다. 라벨이 하는 약속을 코드가 지키게 한다.
+    """
     total = max(1, min(int(total or 1), MAX_SCENES))
     batch = max(1, min(int(batch or 3), 6))
     if vn_core.scene_files():
@@ -836,11 +917,28 @@ def compose_job_start(total: int, batch: int = 3, branching: bool = False) -> di
     with _JOB_LOCK:
         if _JOB.get("running"):
             raise VNError("이미 조립이 돌고 있습니다 — 진행 상황을 확인하세요.")
+        kept = list(_JOB.get("items") or []) if resume else []
+        if not resume and _JOB.get("items"):
+            # 새로 시작하는데 받아 둔 것이 있으면 조용히 지우지 않는다. 지우는 것이
+            # 맞는 경우라도 사람이 알고 지워야 한다.
+            raise VNError(f"받아 둔 장면 {len(_JOB['items'])}개가 아직 있습니다 — "
+                          "먼저 저장하거나 [받은 것 버리기] 로 비운 뒤에 새로 시작하세요.")
         _JOB.clear()
-        _JOB.update({"running": True, "total": total, "batch": batch, "items": [],
-                     "message": "조립을 시작합니다…", "started_at": int(time.time())})
+        _JOB.update({"running": True, "total": total, "batch": batch, "items": kept,
+                     "message": ("이어서 받습니다…" if kept else "조립을 시작합니다…"),
+                     "started_at": int(time.time())})
     threading.Thread(target=_compose_worker, args=(total, batch, branching),
                      daemon=True).start()
+    return compose_job_status()
+
+
+def compose_job_discard() -> dict:
+    """받아 둔 장면을 버린다 — 사람이 명시적으로 눌렀을 때만."""
+    with _JOB_LOCK:
+        if _JOB.get("running"):
+            raise VNError("조립이 아직 돌고 있습니다 — 먼저 멈추세요.")
+        _JOB.clear()
+        _JOB["running"] = False
     return compose_job_status()
 
 

@@ -207,13 +207,28 @@ def delete_story_chat(chat_id: Any) -> bool:
         return False
     path = story_chat_path_for(cid)
     ok = False
-    for p in (path, archive_path(path)):
-        try:
-            if p.is_file():
-                p.unlink()
-                ok = True
-        except OSError:
-            pass
+    try:
+        if path.is_file():
+            path.unlink()
+            ok = True
+    except OSError:
+        pass
+    # 보관 기록은 지우지 않는다 — 이름만 바꿔 둔다. 거기에는 사용자가 '수정'·'다시 생성'
+    # 으로 밀어낸 말들이 들어 있고, 대화를 지운다는 것이 그것까지 태운다는 뜻은 아니다.
+    arch = archive_path(path)
+    try:
+        if arch.is_file():
+            arch.replace(arch.with_name(arch.stem + ".deleted.jsonl"))
+            ok = True
+    except OSError:
+        pass
+    # 설정도 같이 지운다 — 남겨 두면 같은 id 를 다시 쓸 때 죽은 값을 물려받는다.
+    try:
+        meta = load_chat_meta()
+        if meta.pop(cid, None) is not None:
+            vn_core.atomic_write_json(chat_meta_path(), meta)
+    except OSError:
+        pass
     return ok
 
 

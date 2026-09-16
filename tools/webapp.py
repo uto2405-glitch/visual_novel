@@ -367,13 +367,19 @@ def do_chat(messages: list[dict], chat_id: str = "") -> str:
 
     (이 함수에 남는 일은 '창 자르기 → 호출 → 병합 저장' 뿐이다.)
     """
+    # 지워진 대화는 되살아나지 않는다. 예전에는 다른 기기가 그 대화에 한 마디만 보내면
+    # 파일이 다시 만들어졌고, 그때 보관 기록은 이미 지워진 뒤라 영영 사라졌다.
+    # **모델을 부르기 전에** 본다 — 1~2분 기다리게 한 뒤 거절하는 것은 거절이 아니라 낭비다.
+    cid = talk_store.normalize_chat_id(chat_id)
+    path = talk_store.story_chat_path_for(chat_id)
+    if cid and not path.exists() and messages:
+        raise VNError("이 대화는 삭제되었습니다. 목록에서 새 대화를 시작하세요.")
+
     # 이 갈래가 작품 문맥을 쓰는지는 서버에 저장된 값이 단일 출처다 — 클라이언트가
     # 매번 보내면 기기마다 다른 값이 오가고, 어느 쪽이 맞는지 알 수 없게 된다.
     sys_msg = prompt_build.story_system_message(talk_store.chat_use_context(chat_id))
     window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
     reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000)
-    # 갈래마다 파일이 다르다 — 그래서 문맥이 섞이지 않는다. id 가 없으면 예전 그대로.
-    path = talk_store.story_chat_path_for(chat_id)
     with WRITE_LOCK:
         # 인물 대화와 같은 규칙: 클라이언트가 보낸 목록으로 덮어쓰지 않고 저장본과 병합한다.
         # (/api/state 가 더 이상 챗로그를 싣지 않으므로, 병합이 없으면 새 탭에서 보낸
@@ -433,7 +439,19 @@ def r_chat_trim(b):
     keep = int(b.get("keep", 0) or 0)
     path = talk_store.story_chat_path_for(b.get("chat_id"))
     with WRITE_LOCK:
-        return talk_store.truncate_log(path, keep)
+        # 화면이 들고 있는 번호는 **화면이 본 시점**의 것이다. 그 사이 다른 기기가 말을
+        # 보탰으면 그 번호는 남의 대화를 가리킨다 — 실제로 폰에서 [다시 생성] 한 번이
+        # 데스크탑의 질문과 답을 통째로 잘라낸 적이 있다. 길이가 다르면 자르지 않는다.
+        expect = b.get("expect_len")
+        if expect is not None:
+            have = len(talk_store.load_log(path))
+            if int(expect) != have:
+                raise VNError(f"그 사이 대화가 바뀌었습니다(화면 {int(expect)}턴 · 저장본 {have}턴). "
+                              "새로고침한 뒤 다시 시도하세요 — 아무것도 자르지 않았습니다.")
+        res = talk_store.truncate_log(path, keep)
+    if res.get("error"):
+        raise VNError(res["error"])        # 200 안에 숨기지 않는다 — 화면이 성공으로 읽는다
+    return res
 
 
 def r_chat_meta(b):
@@ -495,7 +513,8 @@ def r_compose_job_start(b):
     """
     return vn_compose.compose_job_start(int(b.get("total", 6) or 6),
                                         int(b.get("batch", 3) or 3),
-                                        bool(b.get("branching")))
+                                        bool(b.get("branching")),
+                                        resume=bool(b.get("resume")))
 
 
 def r_compose_job_status(b):
@@ -512,17 +531,15 @@ def r_compose_job_save(b):
     """서버가 모아 둔 장면을 저장한다 → compose_from_json 과 같은 결과.
 
     저장까지 서버가 들고 있으므로, 조립 도중 화면을 닫았다가 나중에 열어도 마무리할 수 있다.
+    '누가 저장하는가' 의 판정은 vn_compose 안에서 잠금으로 한 번만 일어난다(화면 두 개가
+    같은 순간에 눌러도 한 번만 저장된다).
     """
-    items = vn_compose.compose_job_items()
-    if not items:
-        raise VNError("저장할 장면이 없습니다.")
-    for i, it in enumerate(items):
-        if isinstance(it, dict):
-            it["order"] = i + 1          # 배치마다 1부터 다시 세는 일이 흔하다
-    res = vn_compose.compose_from_json(json.dumps(items, ensure_ascii=False),
-                                       bool(b.get("force")), expected=len(items))
-    vn_compose.compose_job_clear()
-    return res
+    return vn_compose.compose_job_save(bool(b.get("force")))
+
+
+def r_compose_job_discard(b):
+    """받아 둔 장면을 버린다 — 사람이 명시적으로 눌렀을 때만."""
+    return vn_compose.compose_job_discard()
 
 
 def r_compose_manual(b):
@@ -1038,6 +1055,7 @@ POST_ROUTES = {
     "/api/compose-job-status": r_compose_job_status,
     "/api/compose-job-cancel": r_compose_job_cancel,
     "/api/compose-job-save": r_compose_job_save,
+    "/api/compose-job-discard": r_compose_job_discard,
     "/api/compose-manual": r_compose_manual, "/api/scene-brief": r_scene_brief,
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/set-crop": r_set_crop, "/api/set-scene": r_set_scene,

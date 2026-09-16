@@ -71,6 +71,7 @@ const S = {
   abort: null,       // 답을 기다리는 중이면 AbortController
   job: null,         // 서버가 들고 도는 조립 작업의 마지막 상태
   shown: 0,          // 화면에 이미 줄을 올린 장면 수
+  picking: false,    // 고르기·승인 중 (굽는 중에도 골라야 하므로 busy 와 따로 둔다)
   busy: false,
 };
 
@@ -233,7 +234,11 @@ async function trimAndAsk(idx, newUserText) {
 
   setBusy(true);
   try {
-    await api("/api/chat-trim", { chat_id: S.chatId, keep: keep });
+    const d = await api("/api/chat-trim",
+                        { chat_id: S.chatId, keep: keep, expect_len: S.msgs.length });
+    /* 자르기가 조용히 실패하면(아카이브 저장 불가 등) 화면만 깔끔해지고 저장본은 그대로다
+     * — 다음에 열면 고친 줄과 옛 줄이 나란히 있다. 200 안에 실린 오류도 오류로 다룬다. */
+    if (d && d.error) throw new Error(d.error);
   } catch (e) {
     setBusy(false);
     addNote(String(e.message || e), true);
@@ -247,6 +252,11 @@ async function trimAndAsk(idx, newUserText) {
 
 /* 마지막 발화까지를 서버에 보내 답을 받는다 — send/수정/다시생성이 모두 이걸 통한다. */
 async function askServer() {
+  /* 답을 기다리는 1~2분 사이에 사람이 다른 대화로 넘어갈 수 있다. 서버는 요청에 실린
+   * chat_id 로 올바른 파일에 저장하지만, 화면이 그걸 지금 열린 대화에 붙이면 남의 대화에
+   * 남의 답이 섞이고 다음 한 마디에 그대로 저장된다. 떠날 때를 기억해 두고 확인한다. */
+  const askedIn = S.chatId;
+  const askedList = S.msgs;
   const wait = addNote("생각하는 중… (이 모델은 초당 12~14자 정도라 긴 답은 1~2분 걸립니다)");
   showStop(true);
   S.abort = new AbortController();
@@ -255,6 +265,12 @@ async function askServer() {
                         { messages: S.msgs, chat_id: S.chatId }, S.abort.signal);
     const reply = (d && d.reply) || "";
     wait.remove();
+    if (S.chatId !== askedIn || S.msgs !== askedList) {
+      // 다른 대화로 옮겨 갔다. 서버에는 제대로 저장됐으니 여기서는 알리기만 한다.
+      addNote("다른 대화에서 답이 도착했습니다. 목록에서 그 대화를 열면 보입니다.");
+      loadChats();
+      return;
+    }
     S.msgs.push({ role: "assistant", content: reply });
     const turn = addTurn("assistant", reply, S.msgs.length - 1);
     renderOffers(reply, turn);
@@ -426,7 +442,34 @@ async function runCompose() {
   }
   addNote("현상을 시작했습니다 — " + total + "장면, 약 " + fmtSecs(total * 32) + ". "
           + "화면을 닫거나 폰을 잠그셔도 계속 돕니다.");
+  liveShow("현상을 시작했습니다…", [], 0);
   startPolling();
+}
+
+/* 지금 돌고 있는 일을 탭 밖의 고정 자리에 그린다.
+ * #stream 은 탭을 옮길 때마다 비워진다 — 진행과 복구 버튼이 거기 있으면 장면 탭을
+ * 한 번 눌렀다 오는 것만으로 받아 둔 장면을 되살릴 방법이 사라진다. */
+function liveShow(msg, actions, frac) {
+  const box = $("live");
+  if (!box) return;
+  box.hidden = false;
+  $("liveMsg").textContent = msg || "";
+  const bar = $("liveBar");
+  if (bar) bar.style.width = (frac == null ? 0 : Math.max(0, Math.min(1, frac)) * 100) + "%";
+  const acts = $("liveActs");
+  while (acts.firstChild) acts.removeChild(acts.firstChild);
+  (actions || []).forEach((a) => {
+    const b = el("button", a.go ? "go" : null, a.label);
+    b.type = "button";
+    if (a.id) b.id = a.id;
+    b.addEventListener("click", () => a.onClick(b));
+    acts.appendChild(b);
+  });
+}
+
+function liveHide() {
+  const box = $("live");
+  if (box) box.hidden = true;
 }
 
 function fmtSecs(n) {
@@ -473,15 +516,44 @@ async function pollCompose() {
     setBar(S.shown, st.total || 1);
   }
 
-  if (st.running) { showCancel(true); return; }
+  if (st.running) {
+    liveShow(st.message || ("현상 중… " + (st.done || 0) + "/" + (st.total || "?")),
+             [{ label: "현상 멈추기", onClick: async (b) => {
+                  b.disabled = true; b.textContent = "이번 구간까지만…";
+                  try { await api("/api/compose-job-cancel", {}); } catch (e) { /* 폴링이 본다 */ }
+                } }],
+             (st.total ? (st.done || 0) / st.total : 0));
+    return;
+  }
 
   stopPolling();
-  showCancel(false);
 
   if (st.error) { composeFailed(st); return; }
+  if (st.message) addNote(st.message);
   if (st.cancelled) {
     addNote("멈췄습니다. 받아 둔 " + scenes.length + "개는 그대로 있습니다.");
-    if (scenes.length) offerSave(scenes.length);
+    if (scenes.length) {
+      liveShow("멈췄습니다 — 받아 둔 " + scenes.length + "개를 들고 있습니다.", [
+        { label: "받은 " + scenes.length + "개로 마무리", go: true,
+          onClick: (b) => { b.disabled = true; saveJob(); } },
+        { label: "이어서 더 받기",
+          onClick: async (b) => {
+            b.disabled = true;
+            try {
+              await api("/api/compose-job", { total: st.total, batch: st.batch || 3,
+                                              branching: false, resume: true });
+              startPolling();
+            } catch (e) { b.disabled = false; addNote(String(e.message || e), true); }
+          } },
+        { label: "받은 것 버리기",
+          onClick: async (b) => {
+            b.disabled = true;
+            try { await api("/api/compose-job-discard", {}); liveHide();
+                  addNote("받아 둔 장면을 버렸습니다."); }
+            catch (e) { b.disabled = false; addNote(String(e.message || e), true); }
+          } },
+      ], (st.total ? scenes.length / st.total : 0));
+    } else { liveHide(); }
     return;
   }
   if (scenes.length) await saveJob();
@@ -514,16 +586,46 @@ function composeFailed(st) {
     ? ("앞서 받은 " + got + "개는 그대로 있습니다 — 버리지 않았습니다.")
     : "아직 받은 장면이 없습니다.");
 
+  /* 복구 버튼은 탭 밖에 둔다 — 여기 두지 않으면 탭 한 번에 사라진다. */
+  const acts = [];
+  const left = Math.max(0, (st.total || 0) - got);
+  acts.push({ label: "이어서 다시 · 약 " + fmtSecs(left * 32), go: true,
+              onClick: async (b) => {
+                b.disabled = true;
+                try {
+                  await api("/api/compose-job", { total: st.total, batch: st.batch || 3,
+                                                  branching: false, resume: true });
+                  startPolling();
+                } catch (e) { b.disabled = false; addNote(String(e.message || e), true); }
+              } });
+  if (got) {
+    acts.push({ label: "받은 " + got + "개로 마무리",
+                onClick: (b) => { b.disabled = true; saveJob(); } });
+    acts.push({ label: "받은 것 버리기",
+                onClick: async (b) => {
+                  b.disabled = true;
+                  try { await api("/api/compose-job-discard", {}); liveHide();
+                        addNote("받아 둔 장면을 버렸습니다."); }
+                  catch (e) { b.disabled = false; addNote(String(e.message || e), true); }
+                } });
+  }
+  liveShow(got ? ("현상이 멈췄습니다 — 받아 둔 " + got + "개를 들고 있습니다.")
+               : "현상이 멈췄습니다.", acts, 0);
+
   const row = el("div", "offer");
   const from = st.failed_from || (got + 1);
   const to = st.failed_to || from;
 
-  const again = el("button", null, "이어서 다시 · 약 " + fmtSecs(((st.total || to) - got) * 32));
+  const again = el("button", null, "받은 글자 보기 자리");
   again.type = "button";
+  again.hidden = true;
   again.addEventListener("click", async () => {
     row.remove();
     try {
-      await api("/api/compose-job", { total: st.total, batch: st.batch || 3, branching: false });
+      /* resume:true — 받아 둔 장면을 지우지 않고 그 다음부터 이어받는다.
+       * 이게 없던 동안 이 버튼은 라벨과 정반대로 동작했다(전부 버리고 1번부터). */
+      await api("/api/compose-job", { total: st.total, batch: st.batch || 3,
+                                      branching: false, resume: true });
       startPolling();
     } catch (e) { addNote(String(e.message || e), true); }
   });
@@ -581,6 +683,7 @@ async function saveJob() {
                ? " 자동 검사에서 지적이 있습니다 — 스튜디오의 검사에서 확인하세요." : ""));
     S.job = null;
     S.shown = 0;
+    liveHide();
     await refresh();
     const go = el("div", "offer");
     const btn = el("button", null, "장면 " + made + "개 보러 가기");
@@ -669,8 +772,11 @@ function sceneCard(sc) {
 }
 
 async function pick(sid, rel, btn) {
-  if (S.busy) return;
-  setBusy(true);
+  /* 굽는 중에도 고를 수 있어야 한다. 서버는 "한 장 나왔습니다 — 고르거나 더 뽑으세요" 라고
+   * 말하는데 화면이 S.busy 로 막고 있으면 그 안내가 거짓말이 된다. 고르기는 장면 파일
+   * 하나를 바꾸는 일이고 굽는 일과 겹치지 않는다. */
+  if (S.picking) return;
+  S.picking = true;
   try {
     await api("/api/select", { scene_id: sid, image: rel });
     await refresh();
@@ -679,12 +785,12 @@ async function pick(sid, rel, btn) {
     showView(S.view);
   } catch (e) {
     addNote(String(e.message || e), true);
-  } finally { setBusy(false); }
+  } finally { S.picking = false; }
 }
 
 async function approve(sid, btn) {
-  if (S.busy) return;
-  setBusy(true);
+  if (S.picking) return;
+  S.picking = true;
   btn.disabled = true;
   try {
     await api("/api/approve", { scene_id: sid });
@@ -693,7 +799,7 @@ async function approve(sid, btn) {
   } catch (e) {
     addNote(String(e.message || e), true);
     btn.disabled = false;
-  } finally { setBusy(false); }
+  } finally { S.picking = false; }
 }
 /* 그림 뽑기 — 후보가 나오는 대로 보여 주고, 원할 때 멈춘다.
  *
@@ -709,18 +815,12 @@ async function genFor(sid, btn, want) {
   setBusy(true);
   if (btn) btn.disabled = true;
 
-  const note = addNote(sid + " · " + n + "장 요청 — 한 장에 약 23초");
-  const row = el("div", "offer");
-  const stop = el("button", null, "그만 뽑기");
-  stop.type = "button";
-  stop.addEventListener("click", async () => {
-    stop.disabled = true;
-    stop.textContent = "이번 장까지만…";
-    try { await api("/api/gen-cancel", { scene_id: sid }); } catch (e) { /* 폴링이 본다 */ }
-  });
-  row.appendChild(stop);
-  stream().appendChild(row);
-  scrollEnd();
+  liveShow(sid + " · " + n + "장 요청 — 한 장에 약 23초", [
+    { label: "그만 뽑기", onClick: async (b) => {
+        b.disabled = true; b.textContent = "이번 장까지만…";
+        try { await api("/api/gen-cancel", { scene_id: sid }); } catch (e) { /* 폴링이 본다 */ }
+      } },
+  ], 0);
 
   let seen = 0;
   try {
@@ -728,7 +828,14 @@ async function genFor(sid, btn, want) {
     for (;;) {
       await new Promise((r) => setTimeout(r, 2200));
       const st = await api("/api/gen-status", { scene_id: sid });
-      if (st && st.message) note.textContent = sid + " · " + st.message;
+      if (st) {
+        liveShow(sid + " · " + (st.message || "굽는 중…"), [
+          { label: "그만 뽑기", onClick: async (b) => {
+              b.disabled = true; b.textContent = "이번 장까지만…";
+              try { await api("/api/gen-cancel", { scene_id: sid }); } catch (e) { /* 폴링 */ }
+            } },
+        ], n ? (Number(st.done || 0) / n) : 0);
+      }
 
       /* 한 장이 등록될 때마다 장면 목록이 늘어난다 — 그때마다 다시 그려서 바로 보이게 한다.
        * 숫자는 문구가 아니라 done 칸에서 읽는다: 문구는 엔진 폴링이 1.5초마다 갈아치운다. */
@@ -742,14 +849,13 @@ async function genFor(sid, btn, want) {
         break;
       }
     }
-    row.remove();
-    note.textContent = sid + " · 후보가 나왔습니다. 마음에 드는 것을 고르세요.";
+    liveHide();
+    addNote(sid + " · 후보가 나왔습니다. 마음에 드는 것을 고르세요.");
     await refresh();
     showView("scenes");
   } catch (e) {
-    row.remove();
-    note.textContent = String(e.message || e);
-    note.className = "bubble sys err";
+    liveHide();
+    addNote(String(e.message || e), true);
     await refresh();
   } finally {
     if (btn) btn.disabled = false;
@@ -798,16 +904,22 @@ async function openChat(id) {
    * 기본 갈래는 작품을 알고, 새 갈래는 백지. */
   S.useContext = rec && typeof rec.use_context === "boolean"
     ? rec.use_context : !S.chatId;
+  const want = S.chatId;
   setBusy(true);
   try {
-    const h = await api("/api/chat-history", { chat_id: S.chatId });
+    const h = await api("/api/chat-history", { chat_id: want });
+    /* 목록을 빠르게 두 번 누르면 두 요청이 겹친다. 늦게 온 응답이 지금 열린 대화를
+     * 덮으면 A 의 내용이 B 이름 밑에 뜨고, 거기서 한 마디 보내면 두 대화가 합쳐진다. */
+    if (S.chatId !== want) return;
     S.msgs = (h && h.messages) || [];
   } catch (e) {
+    if (S.chatId !== want) return;
     S.msgs = [];
     addNote(String(e.message || e), true);
   } finally {
     setBusy(false);
   }
+  if (S.chatId !== want) return;
   showView("talk");
 }
 
