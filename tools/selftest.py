@@ -6026,6 +6026,14 @@ def j18(b: Box):
                        ("장면으로 조립", "조립 버튼")):
         ok(probe in talk, "대화 화면에 %s 가 없다" % why)
 
+    # 고유캐릭터 탭도 진짜로 그려지는가 — 버튼만 있고 화면이 안 열리는 상태가 흔하다
+    # 여기서 보는 것은 **화면이 열리는가** 까지다. 서랍 내용(인물·사진·얼굴 고정 안내)은
+    # 화면이 뜬 뒤에 받아 오는데, --dump-dom 은 그 응답을 기다려 주지 않는다 —
+    # 그걸 여기서 단정하면 검사가 기계 부하에 따라 깜빡인다. 그 내용은 W38 이 본다.
+    cast = dom("cast", "대화에서 만들기")
+    for probe, why in (("대화에서 만들기", "[+ 대화에서 만들기]"), ("+ 빈 인물", "[+ 빈 인물]")):
+        ok(probe in cast, "고유캐릭터 화면에 %s 가 없다" % why)
+
     lst = dom("list", 'class="chatlist"')
     ok('class="chatlist"' in lst, "목록 화면이 안 그려졌다 — 주소창 해시로 탭이 안 열린다")
     for probe, why in (("가져오기", "[가져오기] 버튼"), ("내보내기", "[내보내기] 버튼"),
@@ -7119,6 +7127,16 @@ def u53(b: Box):
            "기록만 있고 파일이 없는 사진으로 얼굴 고정을 켰다")
     finally:
         ch.DIR, ch.REFS, ch.ARCHIVE = keep
+
+    # 그림체가 멀면 얼굴이 흐려진다 — **그 순간에** 말한다.
+    # 실측: 웹툰 체크포인트로 구웠더니 사진 속 남자가 다른 사람으로 나왔는데,
+    # 얼굴 고정은 분명히 켜졌고 화면도 '켜짐' 이라고 적혀 있었다.
+    eq(cf.face_style_warning("juggernautXL_ragnarok.safetensors"), "",
+       "실사 체크포인트인데 경고를 낸다")
+    for weak in ("waiIllustriousSDXL_v170.safetensors", "lustifyNSFWCheckpoint_zenithV9.safetensors", ""):
+        w = cf.face_style_warning(weak)
+        ok(w and "실사" in w,
+           "그림체가 멀어 얼굴이 흐려지는데 아무 말도 안 한다: %r → %r" % (weak, w))
 
     # (3) 없을 때 — 조용히 넘어가지 않는다
     real = cf.photomaker_models

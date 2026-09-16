@@ -668,6 +668,25 @@ def photomaker_models(refresh: bool = False) -> list:
     return names
 
 
+def face_style_warning(ckpt: str) -> str:
+    """이 체크포인트에서 얼굴 고정이 얼마나 듣는가 — 약하면 **그 순간에** 말한다.
+
+    실측이 아팠다. 웹툰 체크포인트로 구웠더니 사진 속 남자가 **다른 사람**(그림체도
+    성별도 다른)으로 나왔다. 얼굴 고정은 분명히 켜졌고(로그에 남았다) 화면도 '켜짐' 이라고
+    적혀 있었다 — 사람이 보기에는 기능이 거짓말을 한 것이다.
+
+    PhotoMaker 는 실사 SDXL 로 학습돼서 그림체가 멀수록 얼굴이 흐려진다. 그림체를
+    제 마음대로 바꾸지는 않는다(사람이 웹툰풍을 고른 데는 이유가 있다). 대신 말한다.
+    """
+    name = str(ckpt or "").lower()
+    hint = str(STYLE_PRESETS.get("real", {}).get("hint", "")).lower()
+    if hint and hint in name:
+        return ""
+    return ("이 체크포인트(%s)에서는 사진으로 잡은 얼굴이 약하게 반영됩니다 — "
+            "PhotoMaker 는 실사 계열에서 가장 잘 듣습니다. 얼굴을 확실히 잡으려면 "
+            "그림체를 실사풍으로 두고 구우세요." % (ckpt or "?"))
+
+
 def face_ready() -> dict:
     """사진으로 얼굴을 잡을 수 있는가 — **지금 이 엔진 기준으로**.
 
@@ -996,6 +1015,9 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
                 warns.append("얼굴 고정을 건너뜁니다 — ComfyUI 에 PhotoMaker 모델이 없습니다.")
             else:
                 face = {"model": names[0], "image": upload_image(face_photo)}
+                soft = face_style_warning(ckpt)
+                if soft:
+                    warns.append(soft)
         except (VNError, OSError) as e:
             face = None
             warns.append(f"얼굴 고정을 건너뜁니다({e}).")
