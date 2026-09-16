@@ -1,0 +1,62 @@
+{
+  "scene_id": "SCENE-001",
+  "scene_order": 1,
+  "status": "REVIEW_HUMAN",
+  "location_id": "LOC-001",
+  "time": "오후",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "wardrobe": {},
+  "purpose": "카페에서 만나 음료를 나누며 지혜의 취향을 기억했음을 밝히는 설렘의 시작",
+  "action_beat": "나와 지혜가 카페 창가 테이블에 마주 앉는다. 지혜가 라떼를 마시며 만족해하자, 내가 주문할 때 그녀의 취향을 미리 알았다고 말한다.",
+  "emotion": "설렘",
+  "intimacy": "",
+  "camera": {
+    "shot": "wide",
+    "angle": "eye-level",
+    "framing": "Two subjects sitting at a cafe table near a window with afternoon sunlight.",
+    "focus": "Both characters"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings sitting next to 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt, cozy warm wood-toned cafe near a school, afternoon sunlight through the window, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt",
+    "external_generator": "ComfyUI",
+    "external_model": "waiIllustriousSDXL_v170.safetensors"
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "와, 이거 진짜 달달하네! 내가 제일 좋아하는 거야.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(아직 말하지 않았지만, 그녀는 딸기 라떼를 좋아한다는 걸 알고 있었다.)",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "내가 알아서 시켰어. 잘 맞지?",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [
+      "images/raw/SCENE-001/cf_11db68_2.png",
+      "images/raw/SCENE-001/cf_8ea31d_1.png"
+    ],
+    "selected_image": "images/raw/SCENE-001/cf_11db68_2.png"
+  },
+  "review": {
+    "auto": "PASS",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1,
+  "episode": 1
+}

@@ -114,6 +114,38 @@ def _default_use_context(chat_id: str) -> bool:
     return not chat_id
 
 
+def chat_composed_upto(chat_id: Any) -> int:
+    """이 갈래에서 **어디까지 장면으로 만들었는가**(발화 수).
+
+    이것이 있어야 [장면으로 조립] 을 다시 눌렀을 때 **새로 쓴 대목만** 만들 수 있다.
+    없으면 누를 때마다 처음부터 다시 만들어 같은 장면이 쌓이고, 그게 바로
+    "통스토리로 바로 굽는다" 는 불만의 정체다.
+    """
+    rec = load_chat_meta().get(normalize_chat_id(chat_id) or "")
+    n = (rec or {}).get("composed_upto") if isinstance(rec, dict) else None
+    try:
+        return max(0, int(n))
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_chat_composed_upto(chat_id: Any, n: int) -> int:
+    """장면으로 만든 지점을 옮긴다. 뒤로는 가지 않는다(같은 대목을 두 번 만들지 않게)."""
+    cid = normalize_chat_id(chat_id) or ""
+    meta = load_chat_meta()
+    rec = meta.get(cid)
+    cur = 0
+    if isinstance(rec, dict):
+        try:
+            cur = max(0, int(rec.get("composed_upto") or 0))
+        except (TypeError, ValueError):
+            cur = 0
+    val = max(cur, max(0, int(n or 0)))
+    meta[cid] = {**(rec if isinstance(rec, dict) else {}), "composed_upto": val}
+    vn_core.atomic_write_json(chat_meta_path(), meta)
+    return val
+
+
 def load_chat_meta() -> dict:
     """{chat_id: {use_context: bool}} — 파일이 없거나 깨졌으면 빈 dict."""
     raw = vn_core.load_json_safe(chat_meta_path(), {})
@@ -307,6 +339,34 @@ def deleted_archive_path(path: Path) -> Path:
         cand = p.with_name("%s-%d%s" % (base, n, ARCHIVE_SUFFIX))
         n += 1
     return cand
+
+
+def clear_default_chat() -> dict:
+    """기본 대화를 **비운다**(지우는 것이 아니라).
+
+    기본 갈래는 사라질 수 없다 — 스튜디오의 스토리 탭이 같은 파일을 쓰고, 그 자리가
+    없으면 저쪽 탭이 깨진다. 그런데 목록에서는 삭제 버튼만 회색으로 꺼져 있어서,
+    사람은 "왜 이것만 안 지워지나" 만 알고 비울 방법은 알 수 없었다.
+
+    그래서 지우는 대신 비운다. 내용은 보관본으로 옮기고(이 모듈의 규칙 그대로)
+    빈 기록을 남긴다 — 사람이 보기엔 사라진 것이고, 되돌릴 길도 남는다.
+    """
+    path = story_chat_path()
+    msgs = load_log(path)
+    if not msgs:
+        return {"cleared": 0}
+    try:
+        _append_archive(archive_path(path), msgs)
+    except OSError:
+        raise vn_core.VNError("보관에 실패해 비우지 않았습니다 — 대화는 그대로 있습니다.")
+    vn_core.atomic_write_json(path, {"messages": []})
+    forget_summary(path)
+    meta = load_chat_meta()
+    rec = meta.get("")
+    if isinstance(rec, dict) and rec.get("composed_upto"):
+        meta[""] = {**rec, "composed_upto": 0}   # 비웠으니 조립 지점도 처음으로
+        vn_core.atomic_write_json(chat_meta_path(), meta)
+    return {"cleared": len(msgs)}
 
 
 def delete_story_chat(chat_id: Any) -> bool:

@@ -1,0 +1,54 @@
+{
+  "scene_id": "SCENE-004",
+  "scene_order": 4,
+  "status": "PROMPT",
+  "location_id": "LOC-002",
+  "time": "오전 10시",
+  "characters": [
+    "CHAR-002",
+    "CHAR-001"
+  ],
+  "props": [],
+  "wardrobe": {},
+  "purpose": "집 밖으로 나온 순간의 경계심과 설렘을 묘사하며 이야기를 시작한다.",
+  "action_beat": "문턱을 넘어 공원으로 첫 발을 내딛는 고양이와 주인공의 시야를 보여준다.",
+  "emotion": "호기심",
+  "intimacy": "",
+  "camera": {
+    "shot": "wide",
+    "angle": "low-angle",
+    "framing": "full",
+    "focus": "background cherry blossoms and foreground cat paws"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, 벚꽃 공원: spring park path with cherry blossoms falling, soft pink petals in the air. Low angle shot from cat's perspective showing grass texture and fallen petals. 이지혜: 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings standing 나: 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt. No text.",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-002",
+      "text": "드디어 밖으로 나왔네. 냄새가 참 독특해.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-001",
+      "text": "맞아~ 날씨가 너무 좋잖아~ 고양이도 기분 좋을 거야!",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1,
+  "episode": 1
+}

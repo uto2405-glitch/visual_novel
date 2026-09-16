@@ -634,7 +634,11 @@ def r_chat_delete(b):
     """갈래 하나 삭제. 기본 갈래(id 없음)는 지우지 않는다 — 스튜디오가 같은 파일을 쓴다."""
     cid = talk_store.normalize_chat_id(b.get("chat_id"))
     if not cid:
-        raise VNError("기본 대화는 지울 수 없습니다 — 새 대화를 만들어 쓰세요.")
+        # 기본 갈래는 사라질 수 없다(스튜디오의 스토리 탭이 같은 파일을 쓴다).
+        # 하지만 그것이 "아무것도 못 한다" 는 뜻은 아니었다 — 비우는 것은 된다.
+        with WRITE_LOCK:
+            res = talk_store.clear_default_chat()
+        return {"deleted": False, "cleared": res.get("cleared", 0), "chat_id": ""}
     with WRITE_LOCK:
         ok = talk_store.delete_story_chat(cid)
         # 그 대화의 작품도 같이 치운다. 장면·그림은 다시 만들 수 없으므로
@@ -652,6 +656,71 @@ def r_storyline(b):
 def r_compose(b):
     return vn_compose.compose_scenes(int(b.get("count", 10)), bool(b.get("force")),
                                      bool(b.get("branching")))
+
+
+CHAT_COMPOSE_CAP = 4        # 한 번에 이어 붙일 수 있는 장면 수 상한
+CHAT_COMPOSE_CHARS = 12000  # 모델에 넘기는 이야기 본문 상한(그 이상이면 뒤쪽만)
+
+
+def _chat_story_text(msgs: list, start: int) -> str:
+    """대화의 ``start`` 번째 발화부터를 '이야기 본문' 한 덩어리로.
+
+    역할 표시를 붙이는 이유: 모델이 쓴 원고와 사람이 준 지시를 구별해야 장면이 지시문을
+    대사로 착각하지 않는다. 사람 발화는 대개 "이렇게 해 줘" 라 원고가 아니다.
+    """
+    out = []
+    for m in msgs[start:]:
+        role = "작가" if m.get("role") == "user" else "원고"
+        txt = str(m.get("content") or "").strip()
+        if txt:
+            out.append(f"[{role}] {txt}")
+    body = "\n\n".join(out)
+    return body[-CHAT_COMPOSE_CHARS:] if len(body) > CHAT_COMPOSE_CHARS else body
+
+
+def r_compose_chat(b):
+    """**지금 이 대화**를 장면으로 만든다 — 새로 쓴 대목만, 기존 장면 뒤에 이어서.
+
+    예전에는 [장면으로 조립] 이 project/story/storyline.md 를 읽었다. 그런데 통합 화면은
+    그 파일을 한 번도 쓰지 않는다 — 사람은 대화창에 이야기를 쓰는데 조립은 엉뚱한 예전
+    문서로 장면을 만들었다(실측: 대화는 고양이·공원, 나온 장면은 지혜·카페).
+
+    개수를 묻지 않는 이유: 사람이 원한 것은 "대화하다가 누르면 그 대목이 장면이 되는 것"
+    이지 "지금부터 몇 장면을 만들지 정하는 것" 이 아니었다. 새로 쓴 분량에 들어 있는
+    만큼만 만들고 상한만 둔다.
+    """
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    path = talk_store.story_chat_path_for(cid)
+    msgs = talk_store.load_log(path)
+    done = talk_store.chat_composed_upto(cid)
+    if bool(b.get("all")):
+        done = 0                       # 사람이 "처음부터 다시" 를 고른 경우
+    if done >= len(msgs):
+        raise VNError("지난번 조립 이후 새로 쓴 이야기가 없습니다. "
+                      "대화를 더 이어 쓴 뒤에 다시 눌러 주세요.")
+    body = _chat_story_text(msgs, done)
+    if len(body.strip()) < 40:
+        raise VNError("장면으로 만들 이야기가 너무 짧습니다 — 조금 더 써 보세요.")
+
+    cap = max(1, min(int(b.get("max") or CHAT_COMPOSE_CAP), CHAT_COMPOSE_CAP))
+    res = vn_compose.compose_job_start(total=cap, batch=cap, branching=False,
+                                       source=body, append=True)
+    # 어디까지 썼는지는 **시작할 때** 적어 둔다. 저장까지 기다리면, 저장 전에 사람이 대화를
+    # 더 이어 썼을 때 그 새 발화까지 '이미 조립함' 으로 삼켜 버린다.
+    talk_store.set_chat_composed_upto(cid, len(msgs))
+    res["from_message"] = done
+    res["upto_message"] = len(msgs)
+    return res
+
+
+def r_compose_chat_ready(b):
+    """조립할 새 대목이 있는가 — 버튼 문구를 정하는 데 쓴다."""
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    msgs = talk_store.load_log(talk_store.story_chat_path_for(cid))
+    done = talk_store.chat_composed_upto(cid)
+    return {"messages": len(msgs), "composed_upto": done,
+            "fresh": max(0, len(msgs) - done),
+            "scenes": len(vn_core.scene_files())}
 
 
 def r_compose_input(b):
@@ -1228,6 +1297,7 @@ POST_ROUTES = {
     "/api/chat-meta": r_chat_meta, "/api/chat-trim": r_chat_trim,
     "/api/storyline": r_storyline,
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,
+    "/api/compose-chat": r_compose_chat, "/api/compose-chat-ready": r_compose_chat_ready,
     "/api/compose-batch": r_compose_batch,
     "/api/compose-job": r_compose_job_start,
     "/api/compose-job-status": r_compose_job_status,

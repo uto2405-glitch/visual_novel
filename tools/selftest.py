@@ -6612,6 +6612,65 @@ def u47(b: Box):
     eq(tag_now(), "A", "제자리 전환이 작품을 바꿨다")
 
 
+@test("unit", "U48 조립은 **지금 이 대화**를 읽는다 — 새로 쓴 대목만, 기존 장면 뒤에 이어서")
+def u48(b: Box):
+    """사용자 신고: "대화와 장면 만들기의 내용이 다름." 맞았다.
+
+    ``build_compose_instruction`` 은 project/story/storyline.md 를 읽는데, 통합 화면은
+    그 파일을 **한 번도 쓰지 않는다**(chat_ui.js 에 storyline 이라는 낱말이 0번 나온다).
+    그래서 사람은 대화창에 이야기를 쓰고 [장면으로 조립] 을 누르는데, 조립은 엉뚱한 예전
+    문서를 읽어 그걸로 장면을 만들었다. 실측: 대화는 고양이·공원인데 붙은 장면 3개가
+    전부 "카페에서 지혜와…" 였다. 두 화면이 서로 다른 작품을 보고 있었다.
+
+    같이 고친 것이 '통으로 굽지 않는다' 이다. 예전에는 누를 때마다 "총 몇 장면?" 을 묻고
+    그만큼을 한 번에 만들었다(기본 6개 = 3~4분). 사람이 원한 것은 "대화하다 누르면 그
+    대목이 장면이 되는 것" 이라, 새로 쓴 분량에 든 만큼만(최대 4개) 만들고 **기존 장면
+    뒤에 이어 붙인다.** 이어 붙이기는 앞 장면을 한 글자도 건드리지 않는다.
+    """
+    vc = b.mod("vn_compose")
+    ts = b.mod("talk_store")
+
+    # (1) 지시문이 **넘겨준 이야기**를 읽는가 — 스토리라인 파일이 아니라
+    (b.p("project/story")).mkdir(parents=True, exist_ok=True)
+    (b.p("project/story/storyline.md")).write_text(
+        "옛 문서: 지혜와 카페에서 만난다.", encoding="utf-8")
+    ins = vc.build_compose_instruction(3, False, source="고양이가 공원을 산책한다.")
+    ok("고양이" in ins, "넘겨준 이야기가 지시문에 없다 — 대화를 읽지 않는다")
+    ok("지혜" not in ins, "넘겨준 이야기가 있는데도 예전 스토리라인이 섞였다")
+    # 안 넘기면 예전대로 파일을 읽는다(스튜디오의 통짜 구성 경로는 그대로여야 한다)
+    old = vc.build_compose_instruction(3, False)
+    ok("지혜" in old, "source 를 안 줬는데 스토리라인 파일을 안 읽는다 — 옛 경로가 깨졌다")
+
+    # (2) 어디까지 만들었는지 기억하는가 — 없으면 누를 때마다 처음부터 다시 만든다
+    eq(ts.chat_composed_upto("u48"), 0, "처음부터 조립한 것으로 나온다")
+    ts.set_chat_composed_upto("u48", 4)
+    eq(ts.chat_composed_upto("u48"), 4, "조립 지점이 저장되지 않는다")
+    ts.set_chat_composed_upto("u48", 2)
+    eq(ts.chat_composed_upto("u48"), 4, "조립 지점이 뒤로 갔다 — 같은 대목을 두 번 만든다")
+
+    # (3) 이어 붙이기가 **기존 장면을 건드리지 않는가**
+    so = b.mod("scene_ops")
+    before = [f.name for f in vn_core_files(b)]
+    ok(before, "샌드박스에 기존 장면이 없다 — 이 검사가 성립하지 않는다")
+    first = b.p("project/scenes") / before[0]
+    keep = first.read_bytes()
+    items = [{"order": 1, "purpose": "고양이가 문을 나선다", "camera": {"shot": "wide"},
+              "dialogue": [], "characters": [], "location_id": "",
+              "image_prompt": "a cat at the door"}]
+    res = vc.append_scenes_from_items(items)
+    eq(res["count"], 1, "이어 붙인 장면 수가 다르다")
+    eq(res["appended_after"], len(before), "기존 장면 뒤가 아닌 자리에 붙였다")
+    ok(res["created"][0] not in before, "기존 장면 번호를 다시 썼다 — 덮어쓰기 사고다")
+    eq(first.read_bytes(), keep, "기존 장면 파일이 변했다 — 이어 붙이기가 앞을 건드렸다")
+    after = [f.name for f in vn_core_files(b)]
+    eq(len(after), len(before) + 1, "장면 수가 하나 늘지 않았다: %s" % after)
+
+
+def vn_core_files(b: Box):
+    """샌드박스의 장면 파일 목록 — b.mod('vn_core') 는 샌드박스를 본다."""
+    return sorted(b.mod("vn_core").scene_files())
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.

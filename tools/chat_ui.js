@@ -346,6 +346,7 @@ async function askServer() {
       return;
     }
     S.msgs.push({ role: "assistant", content: reply });
+    refreshComposeBtn();
     const turn = addTurn("assistant", reply, S.msgs.length - 1);
     renderOffers(reply, turn);
     loadChats();
@@ -402,10 +403,11 @@ function renderOffers(text, after) {
     if (seen[key]) return;
     seen[key] = 1;
     if (o.kind === "조립") {
-      const n = Math.max(1, Math.min(parseInt(o.arg, 10) || 6, 24));
-      const b = el("button", null, "장면 " + n + "개로 조립 (약 " + Math.ceil(n * 0.55) + "분)");
+      /* 모델이 적어 준 개수는 참고만 한다. 이 버튼이 하는 일은 문구와 같아야 한다 —
+       * "여기까지 장면으로". 예전엔 이걸 누르면 스토리라인 문서로 통으로 굽기 시작했다. */
+      const b = el("button", null, "여기까지 장면으로");
       b.type = "button";
-      b.addEventListener("click", () => { $("total").value = String(n); openDrawer(); });
+      b.addEventListener("click", () => composeChat(false));
       row.appendChild(b);
     } else if (o.kind === "그림" && /^SCENE-\d+$/.test(o.arg)) {
       const b = el("button", null, o.arg + " 그림 뽑기");
@@ -497,6 +499,47 @@ function pullScenes(text) {
   }
   const objs = found.filter(looksLikeScene);                    // ③ 배열 없이 객체만 줄줄이
   return objs.length ? objs : null;
+}
+
+/* 지금 이 대화를 장면으로 — 새로 쓴 대목만, 기존 장면 뒤에 이어서.
+ *
+ * 예전 [장면으로 조립] 은 "총 몇 장면?" 을 묻고 project/story/storyline.md 를 읽었다.
+ * 그런데 이 화면은 그 파일을 한 번도 쓰지 않는다 — 사람은 대화창에 이야기를 쓰는데
+ * 조립은 엉뚱한 예전 문서로 장면을 만들었다(실측: 대화는 고양이·공원, 장면은 지혜·카페).
+ *
+ * 개수도 안 묻는다. 사람이 원한 것은 "대화하다 누르면 그 대목이 장면이 되는 것" 이지
+ * "지금부터 몇 장면을 만들지 정하는 것" 이 아니었다. 새로 쓴 분량에 든 만큼(최대 4개)
+ * 만들고, 통으로 다시 굽지 않으니 30~90초면 끝난다. */
+async function composeChat(all) {
+  if (S.composing) return;
+  const btn = $("composeNow");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api("/api/compose-chat", { chat_id: S.chatId, all: !!all });
+    S.shown = 0;
+    addNote(all ? "이 대화 전체를 장면으로 만듭니다 — 다 되면 이어 붙입니다."
+                : "새로 쓴 대목을 장면으로 만듭니다 — 기존 장면 뒤에 이어 붙입니다.");
+    liveShow("현상을 시작했습니다…", [], 0);
+    startPolling();
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* 버튼 문구가 사실을 말하게 한다 — 새로 쓴 것이 없으면 그렇다고 적는다. */
+async function refreshComposeBtn() {
+  const btn = $("composeNow");
+  if (!btn) return;
+  try {
+    const d = await api("/api/compose-chat-ready", { chat_id: S.chatId });
+    const fresh = Number((d && d.fresh) || 0);
+    btn.textContent = fresh ? ("여기까지 장면으로 (" + fresh + "턴)") : "장면으로 조립";
+    btn.title = fresh
+      ? "지난번 조립 이후 새로 쓴 " + fresh + "턴만 장면으로 만듭니다. 기존 장면은 그대로 둡니다."
+      : "새로 쓴 이야기가 없습니다 — 대화를 더 이어 쓴 뒤에 누르세요.";
+  } catch (e) { /* 문구만 못 고칠 뿐이다 */ }
 }
 
 async function runCompose() {
@@ -1038,6 +1081,11 @@ async function loadChats() {
 
 async function openChat(id) {
   S.chatId = id || "";
+  /* 마지막에 본 대화를 기억한다 — 이 기기에만. 예전엔 열 때마다 기본 대화로
+   * 되돌아가서, 어제 쓰던 이야기를 이어가려면 매번 목록에서 다시 찾아야 했다.
+   * 서버에 두지 않는 이유: 폰과 PC 가 각자 다른 대화를 보고 있을 수 있고,
+   * 그게 자연스럽다 — 한쪽이 다른 쪽을 끌고 다니면 안 된다. */
+  try { localStorage.setItem("vn_last_chat", S.chatId); } catch (e) { /* 사사로운 편의다 */ }
   const rec = (S.chats || []).filter((c) => c.id === S.chatId)[0];
   /* 서버가 준 값이 단일 출처다. 없으면(아직 파일이 없는 새 갈래) 기본값:
    * 기본 갈래는 작품을 알고, 새 갈래는 백지. */
@@ -1235,11 +1283,31 @@ function renderList() {
     keep.addEventListener("click", () => exportChat(c, keep));
     row.appendChild(keep);
 
-    const del = el("button", "del", "삭제");
+    /* 기본 대화는 사라질 수 없다(스튜디오의 스토리 탭이 같은 파일을 쓴다).
+     * 그렇다고 버튼만 회색으로 꺼 두면, 사람은 "왜 이것만 안 지워지나" 만 알고
+     * 비울 방법은 모른다. 할 수 있는 일을 이름으로 준다 — 비우기. */
+    const del = el("button", "del", c.id ? "삭제" : "비우기");
     del.type = "button";
     if (!c.id) {
-      del.disabled = true;
-      del.title = "기본 대화는 스튜디오와 같은 기록이라 지울 수 없습니다";
+      del.title = "기본 대화는 스튜디오와 같은 기록이라 사라지지는 않습니다. "
+                + "내용을 보관본으로 옮기고 비웁니다.";
+      del.addEventListener("click", async () => {
+        if (!c.count) { addNote("기본 대화는 이미 비어 있습니다."); return; }
+        if (!window.confirm(
+          "기본 대화의 " + c.count + "턴을 비웁니다.\n" +
+          "내용은 보관본으로 옮겨서 사라지지 않습니다.\n\n계속할까요?")) return;
+        del.disabled = true;
+        try {
+          const d = await api("/api/chat-delete", { chat_id: "" });
+          if (S.chatId === "") S.msgs = [];
+          addNote((d && d.cleared ? d.cleared : 0) + "턴을 보관본으로 옮기고 비웠습니다.");
+          await loadChats();
+          renderList();
+        } catch (e) {
+          del.disabled = false;
+          addNote(String(e.message || e), true);
+        }
+      });
     } else {
       del.addEventListener("click", async () => {
         del.disabled = true;
@@ -1698,9 +1766,16 @@ async function boot() {
   const hint = $("hint");
   const open = el("button", null, "장면으로 조립");
   open.type = "button";
-  open.addEventListener("click", openDrawer);
+  open.id = "composeNow";
+  open.addEventListener("click", () => composeChat(false));
+  /* 개수를 직접 정하고 싶을 때만 서람을 열어 준다 — 기본은 묻지 않는 것이다. */
+  const more = el("button", null, "개수 정해서…");
+  more.type = "button";
+  more.title = "예전 방식 — 스토리라인 문서로 정해진 개수만큼 통으로 만듭니다.";
+  more.addEventListener("click", openDrawer);
   hint.textContent = "";
   hint.appendChild(open);
+  hint.appendChild(more);
 
   try {
     await refresh();
@@ -1715,6 +1790,14 @@ async function boot() {
     S.msgs = (h && h.messages) || [];
   } catch (e) { S.msgs = []; }
   await loadChats();
+
+  /* 마지막에 보던 대화로 돌아간다. 그 대화가 그사이 지워졌으면 기본으로 떨어진다. */
+  let last = "";
+  try { last = localStorage.getItem("vn_last_chat") || ""; } catch (e) { last = ""; }
+  if (last && (S.chats || []).some((c) => c.id === last)) {
+    await openChat(last);
+  }
+  refreshComposeBtn();
 
   showView(viewFromHash() || "talk");
 

@@ -222,7 +222,8 @@ def _episode_block(mf: dict) -> str:
 """
 
 
-def build_compose_instruction(count: int, branching: bool = False) -> str:
+def build_compose_instruction(count: int, branching: bool = False,
+                             source: str = "") -> str:
     """스토리라인 → 장면 분해 지시문을 조립한다. (API 호출용·수동 복붙용 공용)
 
     branching=True 면 선택지/분기 출력 형식을 추가로 요청한다(기본은 선형 작품).
@@ -233,11 +234,18 @@ def build_compose_instruction(count: int, branching: bool = False) -> str:
     if count > MAX_SCENES:
         raise VNError(f"장면 수는 한 번에 최대 {MAX_SCENES}개입니다(요청 {count}개). "
                       "나눠서 구성하세요.")
-    storyline = ""
-    if (STORY_DIR / "storyline.md").exists():
-        storyline = (STORY_DIR / "storyline.md").read_text(encoding="utf-8").strip()
+    # 입력은 두 가지다. 사람이 넘겼으면(source) 그것이 정본이고, 아니면 스토리라인 파일이다.
+    #
+    # 예전에는 storyline.md 뿐이었다. 그런데 통합 화면은 그 파일을 **한 번도 안 쓴다** —
+    # 사람은 대화창에 이야기를 쓰고 [장면으로 조립] 을 누르는데, 조립은 엉뚱한 예전 문서를
+    # 읽어 그걸로 장면을 만들었다. 실측 사례: 대화는 고양이·공원인데 나온 장면은
+    # 지혜·카페였다. 두 화면이 서로 다른 작품을 보고 있었다.
+    storyline = str(source or "").strip()
     if not storyline:
-        raise VNError("스토리라인이 비어 있습니다. 스토리 탭(또는 project/story/storyline.md)에서 먼저 저장하세요.")
+        if (STORY_DIR / "storyline.md").exists():
+            storyline = (STORY_DIR / "storyline.md").read_text(encoding="utf-8").strip()
+        if not storyline:
+            raise VNError("장면으로 만들 이야기가 없습니다. 대화창에서 먼저 이야기를 써 보세요.")
 
     mf = vn_core.load_json_safe(MANIFEST, {})
     if not mf:
@@ -442,6 +450,63 @@ def prune_backups(keep: int = BACKUP_KEEP) -> list[str]:
 
 
 _EXISTS_MSG = "이미 장면이 있습니다. '기존 장면 백업 후 재구성'(--force) 으로 다시 실행하세요."
+
+
+def append_scenes_from_items(items) -> dict:
+    """장면 배열을 **기존 장면 뒤에 이어 붙인다.** 기존 장면은 한 글자도 건드리지 않는다.
+
+    ``_create_scenes_from_items`` 와 갈라 둔 이유: 그쪽은 '작품 하나를 통째로 만든다' 는
+    동작이라 기존 장면이 있으면 거절하고, force 면 **전부 백업으로 밀어낸다.** 대화하다가
+    "여기까지 장면으로" 를 누르는 것은 그 반대다 — 앞의 장면은 그대로 두고 뒤에 붙여야 한다.
+
+    번호는 :func:`scene_ops.create_scene` 이 잠금 안에서 정한다(빈 번호를 스스로 찾는다).
+    여기서 번호를 계산하면 두 요청이 겹칠 때 같은 번호가 두 번 나오고, 그것은 기존 장면을
+    덮어쓰는 사고가 된다 — 생성의 유일한 구현에 맡긴다.
+    """
+    if not isinstance(items, list) or not items:
+        raise VNError("장면 배열이 비어 있거나 형식이 올바르지 않습니다.")
+    dict_items = [it for it in items if isinstance(it, dict)]
+    if not dict_items:
+        raise VNError("받은 JSON 배열의 원소가 모두 객체({...})가 아닙니다.")
+    if len(dict_items) > MAX_SCENES:
+        raise VNError(f"한 번에 이어 붙일 수 있는 장면은 최대 {MAX_SCENES}개입니다.")
+
+    mf = vn_core.load_json_safe(MANIFEST, {})
+    chars, locs = mf.get("characters", []), mf.get("locations", [])
+    char_ids = [c.get("character_id") for c in chars]
+    loc_ids = {l.get("location_id") for l in locs}
+
+    base = len(vn_core.scene_files())
+    prev_ep = None
+    for _f, sc in vn_core.iter_scenes():
+        prev_ep = norm_episode(sc.get("episode")) or prev_ep
+    if prev_ep is None:
+        prev_ep = _first_episode(mf)
+
+    created, fixed_anchors = [], []
+    for i, it in enumerate(dict_items, 1):
+        built = build_scene(it, base + i, char_ids, loc_ids, locs, episode=prev_ep)
+        text = str(built.get("prompt", {}).get("grok_output", "") or "")
+        if text:
+            text, touched = scene_ops.fix_anchor_text(built, text)
+            if touched:
+                built["prompt"]["grok_output"] = text
+        prev_ep = norm_episode(built.get("episode")) or prev_ep
+        # id·번호·존재 확인·저장은 전부 create_scene 안에서 잠금을 쥐고 일어난다.
+        built.pop("scene_id", None)
+        built.pop("scene_order", None)
+        made = scene_ops.create_scene(fields=built, episode=built.get("episode"))
+        created.append(made.get("scene_id"))
+        if text and text != str(it.get("image_prompt", "") or ""):
+            fixed_anchors.append(made.get("scene_id"))
+
+    code, out = 0, ""
+    try:
+        code, out = vn_core.run_checker()
+    except Exception:
+        pass
+    return {"created": created, "count": len(created), "appended_after": base,
+            "checker_pass": code == 0, "fixed_anchors": fixed_anchors}
 
 
 def _create_scenes_from_items(items, force: bool, expected: int | None = None) -> dict:
@@ -725,7 +790,7 @@ class _SceneStream:
 
 
 def compose_batch(total: int, branching: bool, start: int, end: int,
-                  made: list | None = None, on_scene=None) -> str:
+                  made: list | None = None, on_scene=None, source: str = "") -> str:
     """장면 구성을 **구간으로 나눠** 한 번 부른다 → 모델의 원문 응답 그대로.
 
     왜 나누는가: 장면 1개에 약 30초다(실측 12~14 tok/s). 10개를 한 번에 시키면 254초가
@@ -750,7 +815,7 @@ def compose_batch(total: int, branching: bool, start: int, end: int,
         raise VNError(f"구간 끝({end})이 전체({total})보다 큽니다.")
 
     want = end - start + 1
-    lines = [build_compose_instruction(total, branching), "", "[이번 요청]",
+    lines = [build_compose_instruction(total, branching, source), "", "[이번 요청]",
              f"전체 {total}개 장면 중 {start}번째부터 {end}번째까지, {want}개만 출력하라.",
              f"order 에는 전체 기준 번호({start}~{end})를 그대로 넣어라. 1 부터 다시 세지 마라.",
              f"{want}개보다 많이도 적게도 쓰지 마라."]
@@ -955,13 +1020,20 @@ def compose_job_save(force: bool = False) -> dict:
         if not items:
             raise VNError("저장할 장면이 없습니다. 이미 저장되었을 수 있습니다.")
         total = int(_JOB.get("total") or 0)
+        appending = bool(_JOB.get("append"))
         _JOB["items"] = []          # 자격을 여기서 가져간다 — 둘째 요청은 위에서 걸린다
         _JOB["message"] = "저장 중…"
     try:
         for i, it in enumerate(items):
             it["order"] = i + 1     # 배치마다 1부터 다시 세는 일이 흔하다
-        res = compose_from_json(json.dumps(items, ensure_ascii=False), force,
-                                expected=total or len(items))
+        if appending:
+            # 이어 붙이기는 개수를 강제하지 않는다 — "새로 쓴 만큼" 가 이 모드의 약속이다.
+            for it in items:
+                it.pop("order", None)
+            res = append_scenes_from_items(items)
+        else:
+            res = compose_from_json(json.dumps(items, ensure_ascii=False), force,
+                                    expected=total or len(items))
     except Exception:
         with _JOB_LOCK:             # 실패하면 자격을 돌려준다 — 다시 누를 수 있어야 한다
             if not _JOB.get("items"):
@@ -994,7 +1066,7 @@ def compose_job_clear() -> dict:
     return compose_job_status()
 
 
-def _compose_worker(total: int, batch: int, branching: bool) -> None:
+def _compose_worker(total: int, batch: int, branching: bool, source: str = "") -> None:
     """배치를 돌며 장면을 모은다. 실패해도 **이미 받은 것은 버리지 않는다.**"""
     try:
         # 이어받기: 이미 들고 있는 장면 다음부터 시작한다. 1 로 고정하면 [이어서 다시] 가
@@ -1046,7 +1118,7 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
                 raw = compose_batch(total, branching, start, end,
                                     [{"order": m.get("order"), "purpose": m.get("purpose")}
                                      for m in made],
-                                    on_scene=_arrived)
+                                    on_scene=_arrived, source=source)
             except _ComposeStop:              # 사람이 멈췄다 — 지금까지 받은 것은 그대로 둔다
                 with _JOB_LOCK:
                     kept = len(_JOB.get("items") or [])
@@ -1114,7 +1186,7 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
 
 
 def compose_job_start(total: int, batch: int = 3, branching: bool = False,
-                      resume: bool = False) -> dict:
+                      resume: bool = False, source: str = "", append: bool = False) -> dict:
     """조립을 서버에서 시작한다. 화면을 닫아도 계속 돈다.
 
     resume=True 면 **이미 받아 둔 장면을 지우지 않고 그 다음부터** 이어서 받는다.
@@ -1124,7 +1196,9 @@ def compose_job_start(total: int, batch: int = 3, branching: bool = False,
     """
     total = max(1, min(int(total or 1), MAX_SCENES))
     batch = max(1, min(int(batch or 3), 6))
-    if vn_core.scene_files():
+    # 이어 붙이는 조립은 기존 장면이 있어도 된다 — 그게 목적이다.
+    # 통째 구성(append=False)은 예전대로 거절한다(사람이 모르고 덮지 않게).
+    if not append and vn_core.scene_files():
         raise VNError(_EXISTS_MSG)
     with _JOB_LOCK:
         if _JOB.get("running"):
@@ -1137,9 +1211,10 @@ def compose_job_start(total: int, batch: int = 3, branching: bool = False,
                           "먼저 저장하거나 [받은 것 버리기] 로 비운 뒤에 새로 시작하세요.")
         _JOB.clear()
         _JOB.update({"running": True, "total": total, "batch": batch, "items": kept,
+                     "source": str(source or ""), "append": bool(append),
                      "message": ("이어서 받습니다…" if kept else "조립을 시작합니다…"),
                      "started_at": int(time.time())})
-    threading.Thread(target=_compose_worker, args=(total, batch, branching),
+    threading.Thread(target=_compose_worker, args=(total, batch, branching, str(source or "")),
                      daemon=True).start()
     return compose_job_status()
 

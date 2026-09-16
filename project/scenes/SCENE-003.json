@@ -1,0 +1,54 @@
+{
+  "scene_id": "SCENE-003",
+  "scene_order": 3,
+  "status": "PROMPT",
+  "location_id": "LOC-003",
+  "time": "노을",
+  "characters": [
+    "CHAR-001",
+    "CHAR-002"
+  ],
+  "props": [],
+  "wardrobe": {},
+  "purpose": "노을 지는 강변에서 지혜가 손을 내밀며 함께 가자는 제안을 하여 하루의 마무리",
+  "action_beat": "강변 산책로에 도착해 노을이 수면에 비친다. 지혜가 나를 보며 미소 짓고 손을 내민다.",
+  "emotion": "두근거림",
+  "intimacy": "",
+  "camera": {
+    "shot": "close-up",
+    "angle": "eye-level",
+    "framing": "Girl's hand reaching out towards the boy, sunset glow in background.",
+    "focus": "Girl's hand and face"
+  },
+  "visual_style": "",
+  "prompt": {
+    "grok_input_version": 1,
+    "grok_output": "bright cel-shaded Korean romance webtoon, soft warm palette, clean line art, 18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings reaching out her hand with a smile, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt standing opposite, riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water, sunset glow, 18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt",
+    "external_generator": "",
+    "external_model": ""
+  },
+  "dialogue": [
+    {
+      "speaker_id": "CHAR-001",
+      "text": "그럼… 갈까? 같이.",
+      "placement": "bottom"
+    },
+    {
+      "speaker_id": "CHAR-002",
+      "text": "(심장이 빨라진다. 그녀의 손이 나를 부르고 있다.)",
+      "placement": "bottom"
+    }
+  ],
+  "assets": {
+    "raw_images": [],
+    "selected_image": ""
+  },
+  "review": {
+    "auto": "PENDING",
+    "human": "PENDING",
+    "score": null,
+    "notes": []
+  },
+  "version": 1,
+  "episode": 1
+}
