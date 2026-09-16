@@ -83,7 +83,7 @@ def icon_files(from_cut: bool) -> list[str]:
 
 
 # 결합열 도중에서 잘리면 안 되는 문자 — ZWJ, 변이 선택자(emoji/text presentation).
-_JOINERS = "‍️︎"
+_JOINERS = "\u200d\ufe0f\ufe0e"   # ZWJ · 이모지 표현 선택자 — 보이지 않는 글자라 이스케이프로 적는다
 
 
 def _clean_title(title: str) -> str:

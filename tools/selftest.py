@@ -5739,6 +5739,92 @@ def u36(b: Box):
        "zip 안의 경로 탈출이 파일을 만들었다")
 
 
+@test("unit", "U37 프롬프트에 남은 맨 id — 걷어내되 앵커는 지키고, 낱말 경계를 넘지 않는다")
+def u37(b: Box):
+    """실측(씽크북·Qwen3.6-35B, 32장면)에서 모델이 앵커를 풀어 쓰는 대신 "CHAR-001",
+    "LOC-002" 를 프롬프트에 그대로 적어 넣는 경우가 있었다.
+
+    이게 왜 조용한 사고인가: 앵커 보정이 앵커를 뒤에 붙이므로 **검사는 통과한다.** 그런데
+    프롬프트에는 "CHAR-001" 이 남아 있고, SDXL 은 그것을 그려야 할 글자로 읽어 그림 안에
+    글자 무늬를 넣는다. 굽기 전에는 아무도 모르고, 굽고 나면 23초와 한 장이 버려진다.
+
+    반대 방향의 사고도 같이 잠근다 — 너무 많이 걷어내는 것. 'coat LOC-002' 의 'coat' 에서
+    'at' 을 떼면 남는 것은 'co' 다. 프롬프트는 사람이 다시 읽지 않는 글이라, 조용히 망가지면
+    조용히 이상한 그림이 나온다.
+    """
+    so = b.mod("scene_ops")
+    cases = [
+        # (원문, 참조 id, 기대 결과, 뺐는가)
+        ("CHAR-001 standing in the rain at LOC-002, cinematic", ["CHAR-001", "LOC-002"],
+         "standing in the rain, cinematic", True),
+        ("a girl, CHAR-001, wet hair", ["CHAR-001"], "a girl, wet hair", True),
+        ("two people in LOC-002, dusk", ["LOC-002"], "two people, dusk", True),
+        # 낱말 경계 — 'coat' 의 at, 'CHAR-0012' 는 다른 토큰이다
+        ("a coat LOC-002 test", ["LOC-002"], "a coat test", True),
+        ("CHAR-0012 is a different token", ["CHAR-001"], "CHAR-0012 is a different token", False),
+        # 대소문자만 다른 것도 같은 id 다
+        ("char-001 close up", ["CHAR-001"], "close up", True),
+        # 참조하지 않는 id 는 건드리지 않는다
+        ("CHAR-009 somewhere", ["CHAR-001"], "CHAR-009 somewhere", False),
+        # 전부 걷어내면 남는 게 없다 → 원문을 지킨다(빈 프롬프트보다 지저분한 편이 낫다)
+        ("CHAR-001", ["CHAR-001"], "CHAR-001", False),
+    ]
+    for text, refs, want, changed in cases:
+        out, dropped = so._drop_bare_ids(text, refs)
+        eq(out, want, "맨 id 정리가 틀렸다: %r → %r (기대 %r)" % (text, out, want))
+        eq(bool(dropped), changed, "뺐는지 여부가 틀렸다: %r → %r" % (text, dropped))
+
+    # 실제 장면에 걸었을 때 — id 는 사라지고 앵커는 남는다(검사기 A6 는 여전히 통과)
+    mf = json.loads(b.p("project/manifest.json").read_text(encoding="utf-8"))
+    chars = [c for c in mf.get("characters", []) if isinstance(c, dict) and c.get("prompt_anchor")]
+    if not chars:
+        raise Gap("매니페스트에 앵커가 있는 인물이 없음")
+    cid = str(chars[0]["character_id"])
+    anchor = str(chars[0]["prompt_anchor"])
+    sc = {"characters": [cid], "location_id": ""}
+    out, touched = so.fix_anchor_text(sc, cid + " walking, rain")
+    ok(anchor in out, "앵커가 프롬프트에 없다 — A6 가 떨어진다: %r" % out)
+    ok(cid not in out, "맨 id 가 그대로 남았다 — 그림에 글자가 그려진다: %r" % out)
+    ok(cid in touched, "id 를 걷어냈는데 손댔다고 말하지 않는다")
+
+
+@test("unit", "U38 소스에 보이지 않는 제어문자가 없다 — 눈에 안 보이는 글자가 정규식을 바꾼다")
+def u38(b: Box):
+    """이 검사가 왜 있는가: 실제로 도구가 파이썬 소스에 **백스페이스 문자(0x08)**를 써 넣은
+    적이 있다. 정규식 안의 낱말 경계(백슬래시 b)를 만들려다 그것이 문자열 이스케이프로
+    해석돼 제어문자 한 글자가 됐다.
+
+    결과는 조용했다. 파일은 문법 통과, 테스트도 통과, 화면에도 아무 변화가 없다. 다만 그
+    정규식이 매칭하는 대상이 달라져서 "전치사도 같이 걷는다" 는 기능이 통째로 죽어 있었다.
+    사람이 sed·grep 으로 봐도 안 보인다 — 터미널이 그 글자를 그리지 않기 때문이다.
+
+    탭·줄바꿈·캐리지리턴만 허용한다. 나머지 C0 제어문자와 BOM·제로폭 글자는 소스에 있을
+    이유가 없다.
+    """
+    allowed = {0x09, 0x0A, 0x0D}
+    bad_cp = {0xFEFF, 0x200B, 0x200C, 0x200D, 0x2060}      # BOM · 제로폭
+    hits = []
+    roots = [b.p("tools"), b.p("viewer")]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in sorted(root.rglob("*")):
+            if not f.is_file() or f.suffix.lower() not in (".py", ".js", ".html", ".css", ".json"):
+                continue
+            try:
+                text = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
+                for ch in line:
+                    cp = ord(ch)
+                    if (cp < 0x20 and cp not in allowed) or cp == 0x7F or cp in bad_cp:
+                        hits.append("%s:%d U+%04X" % (f.name, n, cp))
+                        break
+    ok(not hits, "소스에 보이지 않는 제어문자가 있다(정규식·문자열이 조용히 달라진다): "
+                 + ", ".join(hits[:8]))
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.

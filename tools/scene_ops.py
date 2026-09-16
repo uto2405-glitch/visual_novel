@@ -408,6 +408,44 @@ def missing_anchors(sc: dict, text: str) -> list[str]:
     return [a for _ref, a in scene_anchors(sc) if a not in text]
 
 
+# 프롬프트에 남은 맨 id 문자열을 걷어낸다.
+#
+# 실측(씽크북·Qwen3.6-35B, 32장면)에서 모델이 앵커를 풀어 쓰는 대신 "CHAR-001", "LOC-002"
+# 를 그대로 적어 넣는 경우가 있었다. 그러면 위의 앵커 보정이 앵커를 뒤에 붙여 검사는
+# 통과하는데, 프롬프트에는 "CHAR-001" 이 그대로 남는다. SDXL 은 그걸 **그려야 할 글자**로
+# 읽어서 그림 안에 글자 무늬를 넣는다 — 굽기 전에는 아무도 모르고, 굽고 나면 23초와
+# 한 장이 버려진다.
+#
+# 이 장면이 실제로 참조하는 id 만 걷는다(scene_anchors 가 돌려준 것). 앵커가 비어 있는
+# 인물은 그 목록에 없으므로, id 가 유일한 단서인 경우는 건드리지 않는다.
+def _drop_bare_ids(text: str, refs: Iterable) -> tuple[str, list[str]]:
+    """프롬프트에서 맨 id 토큰을 빼고 (새 문자열, 뺀 id 목록)을 돌려준다."""
+    out = text
+    dropped: list[str] = []
+    for ref in refs:
+        ref = str(ref or "").strip()
+        if not ref:
+            continue
+        # 바로 앞의 전치사도 같이 걷는다 — "at LOC-002" 에서 id 만 빼면
+        # "standing in the rain at, cinematic" 같은 헛돈 "at" 이 남는다.
+        pat = re.compile(
+            r"(?:\b(?:at|in|on|with|of|by|near|from|beside|behind|inside|outside)\s+)?"
+            r"(?<![A-Za-z0-9_-])" + re.escape(ref) + r"(?![A-Za-z0-9_-])",
+            re.IGNORECASE)
+        if pat.search(out):
+            out = pat.sub("", out)
+            dropped.append(ref)
+    if not dropped:
+        return text, []
+    # 뺀 자리가 남긴 자국을 정리한다 — ", ,  " 같은 것이 남으면 그것도 프롬프트로 들어간다.
+    out = re.sub(r"\s+", " ", out)
+    out = re.sub(r"(?:,\s*){2,}", ", ", out)     # 콤마가 연달아 남은 자리를 하나로
+    out = re.sub(r"\s+,", ",", out)
+    out = out.strip().strip(",").strip()
+    # 모두 걷어내고 남은 것이 없으면 원문을 지킨다 — 빈 프롬프트보다는 지저분한 편이 낫다.
+    return (out, dropped) if out else (text, [])
+
+
 def fix_anchor_text(sc: dict, text: str) -> tuple[str, list[str]]:
     """빠진 앵커를 채운 프롬프트와 손댄 앵커 목록 → (text, touched).
 
@@ -428,6 +466,8 @@ def fix_anchor_text(sc: dict, text: str) -> tuple[str, list[str]]:
         touched.append(a)
     if appended:
         text = text.rstrip(" .,") + ", " + ", ".join(appended)
+    text, dropped = _drop_bare_ids(text, [r for r, _a in scene_anchors(sc)])
+    touched.extend(dropped)
     return text, touched
 
 
