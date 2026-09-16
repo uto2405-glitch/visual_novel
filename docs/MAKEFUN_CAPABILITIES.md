@@ -122,6 +122,58 @@ charging credits."* 요청은 `endpoint`(경로 문자열, 앞의 `POST ` 는 �
 지금 이 저장소가 부르는 `userText2Image/start` 에는 이 파라미터가 **없다**(명세 확인) —
 즉 지금까지 안전장치가 꺼진 채로 돈 적은 없다.
 
+### 크레딧을 **재는** 방법 (실측 단가)
+
+장당 몇 크레딧인지는 공급자가 공개하지 않는다. 그래서 묻는 대신 **잰다.**
+`GET /api/v1/transactionRecord/creditsHistory` 의 쿼리 파라미터가 명세로 확정된다:
+
+* `pageNum`(기본 1) · `pageSize`(기본 10)
+* `is_consumption` — *"When true, only returns consumption records"*
+* `startDate` / `endDate` — ISO date-time, `createdAt` 기준, **양끝 포함**
+
+그리고 부호 규약이 명세에 있다 — 이건 응답 스키마가 비어 있어도 확정이다:
+
+> *"Positive amounts are credit grants or purchases; negative amounts are credit consumption."*
+
+절차(`makefun_client.record_spend`):
+
+1. 굽기 **직전** 시각 T 를 UTC 로 적어 둔다(`now_iso`).
+2. 생성을 호출한다.
+3. `?is_consumption=true&pageSize=5&startDate=T` 로 그 뒤의 소비만 읽는다.
+4. **음수만** 더해서 대장(`logs/makefun_usage.jsonl`)에 `kind:"spend"` 한 줄로 남긴다.
+
+UTC 로 보내는 이유는 공급자 시각대를 모르기 때문이다 — 로컬 시각을 보내면 시차만큼
+남의 기록이 섞이거나 내 기록이 빠진다. `pageSize` 를 작게 두는 이유는 계정에 기록이
+아무리 쌓여도 이 조회가 가벼워야 하기 때문이다.
+
+**못 쟀으면 대장에 남기지 않는다.** 빈 줄은 나중에 읽는 사람에게 "0 크레딧이 나갔다"
+로 보이는데 그건 잰 것이 아니라 못 잰 것이다. 그 둘을 같은 모양으로 적으면 실측이
+오염된다. 조회가 실패해도 예외를 위로 올리지 않는다 — 재는 일은 덤이고, 여기서
+던지면 이미 성공한 생성이 실패로 뒤집힌다.
+
+두세 번 쌓이면 화면이 "지난 N번 실측: 평균 X 크레딧" 을 보여 준다(`measured_spend`).
+**실패도 과금되는가** 역시 이 기록으로만 답이 나온다 — 실패한 작업 뒤에 소비 기록이
+생기는지 보면 된다.
+
+### 음성(TTS) — 경로와 필드는 확인했고, 아직 안 붙였다
+
+`POST /api/v1/video/send_tts`. 스키마상 required 는 `msg` 하나지만, 설명이
+*"Must provide either `tts_id` (system voice) or `user_voice_id` (custom cloned voice)"*
+를 요구한다 — **스키마 검증에 안 걸리고 서버가 400 을 준다.** 붙이면 클라이언트에서 먼저 막아야 한다.
+
+* `msg` — 스키마 maxLength 는 3000 이지만 설명이 *"API users: Maximum 1000 characters"* 다.
+  **우리는 API 사용자라 1000 이 실제 상한**이다(유니코드 전부 셈).
+* `tts_id`(시스템 음성 · 400+종) 또는 `user_voice_id`(학습한 목소리 · country/region 필요)
+* `country`(기본 en) / `region`(기본 US) → 'en-US' 같은 로케일. 값의 출처는
+  `POST /api/v1/anchor/language_list`
+* `speechRate` — 기본 1 · 0.5~2.0
+* 캡차 관련 필드(`type` · `turnstile_token` · `captchaVerifyParam`)는
+  *"For non-API users"* 라 **토큰 사용자는 안 보내도 된다.**
+
+응답은 또 비어 있다 — 오디오 URL 필드명은 실호출로만 안다. 한국어 음성이 있는지도
+명세로는 모른다(`anchor/tts_list` · `anchor/language_list` 를 찍어 봐야 한다).
+붙이지 않은 이유는 기술이 아니라 **감상본이 정지 컷 구조**라는 것 하나다.
+
 ---
 
 ## 4. 새 경로를 붙일 때의 관례

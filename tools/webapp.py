@@ -1250,8 +1250,15 @@ def r_gen_cost(b):
                              "유효하다는 뜻은 아닙니다(공급자 명세 문구).")
             except Exception as exc:          # 견적을 못 받아도 굽기 자체는 막지 않는다
                 qnote = "견적을 받지 못했습니다(%s)." % str(exc)[:80]
+        # **실측**이 있으면 그걸 보여 준다 — 지어낸 숫자도, 남의 가격표도 아니고
+        # 이 계정에서 실제로 빠져나간 크레딧이다(대장의 spend 줄).
+        seen = makefun_client.measured_spend("text2image")
         return {"engine": engine, "billable": True, "credits": None,
                 "faces": faces, "quote": quoted, "quote_note": qnote,
+                "measured": (seen if seen.get("n") else None),
+                "measured_note": (("지난 %d번 실측: 평균 %s 크레딧(최근 %s)"
+                                   % (seen["n"], seen["avg"], seen["last"]))
+                                  if seen.get("n") else ""),
                 "note": ("유료 호출입니다 — 크레딧이 차감됩니다. 장당 얼마인지는 공급자가 "
                          "공개하지 않아 이 화면은 숫자를 지어내지 않습니다(계정 화면의 "
                          "가격표를 확인하세요). 견적을 켜면 굽기 전에 물어봅니다."),

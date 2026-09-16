@@ -48,6 +48,7 @@ import re
 import socket
 import sys
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1204,6 +1205,7 @@ def video_for_scene(scene_id: str, *, seconds: int = 5, prompt: str = "",
 
     응답 형식이 명세에 없어 **첫 호출의 원문을 로그에 남긴다.** 그 한 번으로 확정된다.
     """
+    started = now_iso()          # 소비 기록 조회의 시작 경계(명세: startDate 는 포함 경계)
     sc = _load_scene(scene_id)
     rel = selected_of(sc)
     if not rel:
@@ -1232,6 +1234,10 @@ def video_for_scene(scene_id: str, *, seconds: int = 5, prompt: str = "",
                               "requested": 1, "saved": 1 if saved else 0,
                               "ok": bool(saved), "model": model_version or "a2e",
                               "seconds": seconds, "billable": True, "error": err})
+        # 얼마가 실제로 나갔는지 **잰다**. 실패 뒤에도 재는 이유: 실패도 과금되는지는
+        # 공급자가 말해 주지 않고, 이 기록으로만 알 수 있다.
+        record_spend("image2video", scene_id, started,
+                     {"seconds": seconds, "task_id": vid, "gen_ok": bool(saved)})
     return {"scene_id": scene_id, "task_id": vid, "seconds": seconds,
             "file": saved.relative_to(ROOT).as_posix()}
 
@@ -1314,6 +1320,7 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
     size_warns: list[str] = list(size_warnings(plan))
     warns: list[str] = []
     capped = {"capped": True, "want_px": plan["want"], "cap_px": plan["cap"]} if plan["capped"] else {}
+    spend_from = now_iso()        # 굽기 **전** 시각 — 이 뒤의 소비만 이번 호출의 몫이다
     task_ids = start(sent, n=n, name=name, long_edge=long_edge, negative=False, quiet=quiet,
                      input_images=refs)
     if scene_id:
@@ -1347,6 +1354,11 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
                                  "files": [f.name for f in files], **capped,
                                  "status": "ok" if files and not w2 else ("partial" if files else "failed"),
                                  "error": "; ".join(w2)[:200]})
+    # 얼마가 실제로 나갔는지 **잰다**(호출 한 번에 한 줄). 공급자가 장당 단가를 공개하지
+    # 않으므로 이 기록이 화면에 숫자를 띄울 수 있는 유일한 근거가 된다.
+    record_spend("text2image", scene_id, spend_from,
+                 {"requested": n, "model": model, "width": w, "height": h,
+                  "gen_ok": bool(saved)})
     if not saved:
         raise VNError("생성된 이미지가 없습니다." + (" " + " / ".join(warns) if warns else ""))
     return GenResult(saved, size_warns + warns, task_ids)
@@ -1715,6 +1727,116 @@ def credits(*, page: int = 1, size: int = 20, quiet: bool = True) -> dict:
               "실제 잔액은 makefun.ai 계정 화면에서 확인하세요.")
     log_usage({"kind": "credits", "billable": False, "ok": True, "records": len(items)})
     return {"ok": True, "raw": _trim(d, 800), "note": note}
+
+
+def now_iso() -> str:
+    """지금 시각(UTC · ISO 8601). 소비 기록 조회의 시작 경계로 쓴다.
+
+    UTC 로 보내는 이유: 공급자 시각대를 모른다. 로컬 시각을 보내면 시차만큼 앞뒤의
+    남의 기록이 섞여 들어오거나 내 기록이 빠진다 — 둘 다 실측을 조용히 망친다.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def consumption_since(since_iso: str, *, limit: int = 5, quiet: bool = True) -> list:
+    """그 시각 이후의 **소비 기록**만 → [{amount, at, raw}] (실패하면 빈 목록).
+
+    공급자는 "장당 몇 크레딧" 을 공개하지 않는다. 그래서 물어보는 대신 **잰다** —
+    굽기 직전 시각을 적어 두고, 구운 뒤에 그 시각 이후의 소비만 조회한다.
+    두세 번 쌓이면 "이 크기·이 모델이면 얼마" 가 나오고, 그때부터 화면이 **실측한** 숫자를
+    보여 줄 수 있다. 추측한 숫자와 잰 숫자는 다른 물건이다.
+
+    부호 규약은 명세가 확정해 준 몇 안 되는 것 중 하나다:
+    *"Positive amounts are credit grants or purchases; negative amounts are credit consumption."*
+    그래서 **음수만** 소비로 센다. 응답 스키마 자체는 여전히 비어 있어 필드 이름은 모른다 —
+    숫자를 찾되 이름을 단정하지 않는다.
+
+    실패해도 조용히 넘어간다(빈 목록). 이건 **덤으로 재는 일**이라, 여기서 예외를 던지면
+    이미 성공한 생성이 실패로 뒤집힌다.
+    """
+    stamp = str(since_iso or "").strip()
+    if not stamp:
+        return []
+    q = urllib.parse.urlencode({"pageNum": 1, "pageSize": max(1, min(int(limit), 50)),
+                                "is_consumption": "true", "startDate": stamp})
+    try:
+        d = _call("GET", f"{P_CREDITS}?{q}", timeout=30, quiet=quiet)
+    except (RuntimeError, VNError) as exc:
+        log.warning("소비 기록을 못 읽었습니다(실측만 건너뜁니다): %s", str(exc)[:120])
+        return []
+    out = []
+    for it in (_as_list(d.get("data")) or _as_list(d)):
+        if not isinstance(it, dict):
+            continue
+        amount = None
+        for _k, v in _flat_numbers(it):
+            if v < 0:                     # 명세: 음수 = 소비
+                amount = v
+                break
+        if amount is None:
+            continue
+        out.append({"amount": amount, "at": _pick(it, ("createdAt", "created_at", "date", "time")),
+                    "raw": _trim(it, 200)})
+    return out
+
+
+def _flat_numbers(node, prefix=""):
+    """중첩된 응답에서 (이름, 숫자) 를 납작하게 — 이름을 해석하지 않고 값만 본다."""
+    out = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            out.extend(_flat_numbers(v, f"{prefix}.{k}" if prefix else str(k)))
+    elif isinstance(node, (int, float)) and not isinstance(node, bool):
+        out.append((prefix, float(node)))
+    return out
+
+
+def record_spend(kind: str, scene_id: str, since_iso: str, detail: dict | None = None) -> dict:
+    """유료 호출 뒤 **실제로 얼마가 나갔는지** 재서 대장에 남긴다.
+
+    이 한 줄이 쌓이면 다음번엔 사람에게 "지난번엔 이만큼 나갔습니다" 를 보여 줄 수 있다.
+    실패한 호출 뒤에도 부른다 — **실패도 과금되는지**가 여기서만 답이 나온다.
+    """
+    rows = consumption_since(since_iso)
+    total = round(sum(abs(r["amount"]) for r in rows), 4)
+    rec = {"kind": "spend", "of": str(kind), "scene_id": str(scene_id or ""),
+           "billable": False, "ok": bool(rows), "records": len(rows),
+           "spent": total if rows else None, "since": str(since_iso or "")}
+    if detail:
+        rec.update({k: v for k, v in detail.items() if k not in rec})
+    if not rows:
+        # **못 쟀으면 대장에 남기지 않는다.** 아무것도 안 적힌 줄은 나중에 읽는 사람에게
+        # '0 크레딧이 나갔다' 로 보이고, 그건 잰 것이 아니라 못 잰 것이다.
+        log.info("소비 기록이 없어 실측을 건너뜁니다(%s · %s 이후)", kind, since_iso)
+        return rec
+    log_usage(rec)
+    return rec
+
+
+def measured_spend(of: str = "", limit: int = 20) -> dict:
+    """대장에 쌓인 실측을 요약 → {"n", "avg", "last"} (없으면 n=0).
+
+    **화면이 숫자를 보여도 되는 유일한 근거**다. 지어낸 값도, 남의 가격표도 아니고
+    이 계정에서 실제로 빠져나간 크레딧이다.
+    """
+    rows = []
+    try:
+        with open(USAGE_LOG, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("kind") == "spend" and isinstance(r.get("spent"), (int, float)):
+                    if not of or r.get("of") == of:
+                        rows.append(r)
+    except OSError:
+        return {"n": 0, "avg": None, "last": None}
+    rows = rows[-max(1, int(limit)):]
+    if not rows:
+        return {"n": 0, "avg": None, "last": None}
+    vals = [float(r["spent"]) for r in rows]
+    return {"n": len(vals), "avg": round(sum(vals) / len(vals), 3), "last": vals[-1]}
 
 
 # --- 중복 과금 방지: 생성 작업 상태기계(gen_jobs) 연동 ------------------------

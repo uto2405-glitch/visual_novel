@@ -1277,9 +1277,14 @@ async function makeVideo(sc, btn) {
  * 사람은 그 숫자를 믿고 돈 쓰는 결정을 한다. */
 function quoteLine(cost) {
   const rows = (cost && cost.quote) || [];
-  if (!rows.length) return "";
-  return "견적: " + rows.map((r) => r.field + "=" + r.value).join(" · ")
-         + (cost.quote_note ? ("\n" + cost.quote_note) : "");
+  const bits = [];
+  if (rows.length) {
+    bits.push("견적: " + rows.map((r) => r.field + "=" + r.value).join(" · "));
+    if (cost.quote_note) bits.push(cost.quote_note);
+  }
+  /* 실측은 견적보다 강한 근거다 — 이 계정에서 **실제로 빠져나간** 값이다. */
+  if (cost && cost.measured_note) bits.push(cost.measured_note);
+  return bits.join("\n");
 }
 
 async function genFor(sid, btn, want) {

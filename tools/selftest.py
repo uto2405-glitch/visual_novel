@@ -7406,6 +7406,80 @@ def m16(b: Box):
         ok("고른" in str(e), "왜 못 만드는지 말하지 않는다: %s" % str(e)[:60])
 
 
+@test("makefun", "M17 실측 단가 — 공급자가 안 알려 주면 재서 안다(음수만 소비 · 못 쟀으면 안 적는다)")
+def m17(b: Box):
+    """공급자는 장당 몇 크레딧인지 공개하지 않는다. 그래서 묻는 대신 **잰다**:
+    굽기 직전 시각을 적어 두고, 구운 뒤 그 시각 이후의 소비만 조회해 대장에 남긴다.
+    두세 번 쌓이면 "이 크기·이 모델이면 얼마" 가 나오고, 그때부터 화면이 **실측한** 숫자를
+    보여 줄 수 있다. 추측한 숫자와 잰 숫자는 다른 물건이다.
+
+    명세(A2E Developer API v1.0.0, 2026-08 보존본)가 확정해 준 것 둘만 믿는다:
+      * 쿼리 파라미터 `is_consumption` · `startDate`(**포함 경계**) · `pageNum`/`pageSize`
+      * 부호 규약 — *"Positive amounts are credit grants or purchases; negative amounts are
+        credit consumption."*
+    응답 스키마 자체는 여전히 비어 있어 **필드 이름은 모른다.** 그래서 이름을 해석하지 않고
+    숫자만 보고, 음수만 소비로 센다.
+
+    **못 쟀으면 대장에 남기지 않는다.** 빈 줄은 나중에 읽는 사람에게 '0 크레딧이 나갔다' 로
+    보이는데, 그건 잰 것이 아니라 못 잰 것이다. 그 둘을 같은 모양으로 적으면 실측이 오염된다.
+    """
+    mk = b.mod("makefun_client")
+    asked = {}
+
+    def api(m, p_, bd):
+        if "creditsHistory" in p_:
+            asked["path"] = p_
+            return {"data": [
+                {"_id": "r1", "amount": -12, "createdAt": "2026-09-16T13:00:00Z"},
+                {"_id": "r2", "amount": -3.5, "createdAt": "2026-09-16T13:00:05Z"},
+                {"_id": "r3", "amount": 500, "createdAt": "2026-09-16T12:00:00Z"},   # 충전
+            ]}
+        return {"data": []}
+
+    with mf_stub(mk, api):
+        rows = mk.consumption_since("2026-09-16T12:59:00Z", limit=5)
+    q = asked.get("path", "")
+    ok("is_consumption=true" in q, "소비만 달라고 하지 않았다: %s" % q)
+    ok("startDate=" in q, "시작 경계를 안 보냈다 — 계정 전체 이력을 끌어온다: %s" % q)
+    ok("pageSize=5" in q, "가져올 개수를 안 줄였다 — 기록이 쌓이면 무거워진다: %s" % q)
+    eq([r["amount"] for r in rows], [-12, -3.5],
+       "충전(양수)까지 소비로 셌다 — 명세의 부호 규약과 반대다")
+
+    # 대장 — 잰 것이 있을 때만 남기고, 합계는 절댓값이다
+    n0 = _usage_len(b)
+    with mf_stub(mk, api):
+        rec = mk.record_spend("text2image", "SCENE-001", "2026-09-16T12:59:00Z", {"requested": 2})
+    eq(rec["spent"], 15.5, "쓴 크레딧 합계가 틀리다")
+    rows2 = [r for r in _usage_tail(b, n0) if r.get("kind") == "spend"]
+    eq(len(rows2), 1, "실측이 대장에 남지 않았다")
+    eq(rows2[0]["of"], "text2image", "무엇의 실측인지 안 적었다")
+    eq(rows2[0]["billable"], False, "재는 일 자체가 과금이라고 적었다")
+
+    n1 = _usage_len(b)
+    with mf_stub(mk, lambda m, p_, bd: {"data": []}):
+        empty = mk.record_spend("text2image", "SCENE-001", "2026-09-16T12:59:00Z")
+    eq(empty["spent"], None, "못 쟀는데 0 이라고 한다")
+    eq([r for r in _usage_tail(b, n1) if r.get("kind") == "spend"], [],
+       "못 쟀는데 대장에 남겼다 — 나중에 '0 크레딧' 으로 읽힌다")
+
+    # 조회가 통째로 실패해도 생성은 안 뒤집힌다(덤으로 재는 일이다)
+    def boom(m, p_, bd):
+        raise RuntimeError("크레딧 서버 장애")
+
+    with mf_stub(mk, boom):
+        eq(mk.consumption_since("2026-09-16T12:59:00Z"), [],
+           "조회가 실패했는데 예외가 위로 올라간다 — 이미 성공한 생성이 실패로 뒤집힌다")
+
+    # 요약 — 화면이 숫자를 보여도 되는 유일한 근거
+    got = mk.measured_spend("text2image")
+    ok(got["n"] >= 1, "쌓인 실측을 못 읽는다: %s" % got)
+    ok(got["avg"] is not None and got["avg"] > 0, "평균이 없다: %s" % got)
+    eq(mk.measured_spend("없는종류")["n"], 0, "다른 종류의 실측까지 섞어 센다")
+
+    # UTC 로 보낸다 — 로컬 시각이면 시차만큼 남의 기록이 섞이거나 내 기록이 빠진다
+    ok(mk.now_iso().endswith("Z"), "시작 경계를 UTC 로 안 보낸다: %s" % mk.now_iso())
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —
