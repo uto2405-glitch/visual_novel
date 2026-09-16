@@ -7153,6 +7153,77 @@ def u53(b: Box):
         cf.photomaker_models = real
 
 
+@test("unit", "U54 비공개 폴더 — 저장소 밖만 받고, 설정이 깨지면 조용히 안으로 돌아가지 않는다")
+def u54(b: Box):
+    """사람이 "아무도 안 봤으면 좋겠다" 고 말한 파일이 있다 — 자기 얼굴 사진이다.
+    이 저장소는 편집기의 작업 폴더이고, 거기서 도는 에이전트는 그 안을 읽는다.
+    그러니 '안 읽겠다' 는 약속은 규칙일 뿐 구조가 아니다. 폴더를 밖으로 내면 구조가 된다.
+
+    그래서 이 검사가 지키는 것은 둘이다.
+
+    (1) **밖만 받는다.** 저장소 안을 가리키는 설정은 거절한다 — 받아 주면 사람은 밖에
+        있다고 믿는데 실제로는 안에 쌓인다. 상대경로도 거절한다(어디를 기준으로 하는지에
+        따라 저장소 안이 될 수 있다).
+
+    (2) **깨지면 말한다.** 설정이 잘못됐을 때 조용히 예전 자리로 돌아가면, 사람은 사진이
+        밖에 있다고 믿고 얼굴 사진을 더 올린다. 그 믿음이 틀렸다는 것은 나중에, 다른
+        사람이 저장소를 열었을 때 드러난다.
+    """
+    vc = b.mod("vn_core")
+    ch = b.mod("characters")
+    keep_env = os.environ.get(vc.PRIVATE_ENV)
+    keep = (ch.REFS, ch.PRIVATE_ERROR)
+
+    def setenv(val):
+        if val is None:
+            os.environ.pop(vc.PRIVATE_ENV, None)
+        else:
+            os.environ[vc.PRIVATE_ENV] = val
+
+    try:
+        setenv(None)
+        eq(vc.private_dir(), None, "설정이 없는데 비공개 폴더가 있다고 한다")
+        eq(vc.private_or(vc.PROJECT / "x", "a", "b"), vc.PROJECT / "x",
+           "설정이 없는데 예전 자리를 안 쓴다")
+
+        # 저장소 안은 거절 — 여기가 이 기능의 전부다
+        for inside in (str(vc.ROOT), str(vc.PROJECT / "secret"), str(vc.ROOT / "tools" / "x")):
+            setenv(inside)
+            e = raises(vc.private_dir)
+            ok(e and ("저장소 밖" in str(e) or "저장소 안" in str(e)),
+               "저장소 안을 받아들였다: %s → %r" % (inside, e))
+
+        # 상대경로도 거절
+        setenv("private_stuff")
+        e = raises(vc.private_dir)
+        ok(e and "절대경로" in str(e), "상대경로를 받아들였다: %r" % e)
+
+        # 밖이면 받는다
+        out = b.root.parent / "vn_private_test"
+        setenv(str(out))
+        eq(vc.private_dir(), out, "저장소 밖인데 거절했다")
+        eq(vc.private_or(vc.PROJECT / "x", "characters", "refs"), out / "characters" / "refs",
+           "비공개 폴더 아래 자리를 안 만든다")
+        made = vc.private_dir(make=True)
+        ok(made.is_dir(), "make=True 인데 폴더를 안 만들었다")
+        made.rmdir()
+
+        # (2) 설정이 깨졌으면 사진을 다루지 않는다
+        ch.PRIVATE_ERROR = "시험용 오류"
+        e = raises(lambda: ch.add_reference("OC-001", b"\x89PNG\r\n\x1a\n" + b"0" * 32))
+        ok(e and "시험용 오류" in str(e),
+           "설정이 깨졌는데 사진을 받았다 — 사람은 밖에 있다고 믿고 더 올린다: %r" % e)
+        ch.PRIVATE_ERROR = ""
+
+        # 화면에 보여 줄 답은 **문구가 아니라 경로**다("밖에 있습니다" 는 확인할 수 없다)
+        home = ch.photo_home()
+        ok(home.get("path"), "사진이 어디 사는지 경로를 주지 않는다")
+        eq(home.get("env"), vc.PRIVATE_ENV, "어느 설정으로 바꾸는지 말하지 않는다")
+    finally:
+        setenv(keep_env)
+        ch.REFS, ch.PRIVATE_ERROR = keep
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —
@@ -7249,6 +7320,70 @@ def w38(b: Box):
     code, st = b.wapi("/api/state", None)
     ok(any(c.get("id") == cid for c in (st.get("characters") or [])),
        "매니페스트에서까지 뺐다 — 그 인물로 만든 장면이 검사기에서 빨간불이 된다")
+
+
+@test("webapp", "W39 시크릿 대화 — 오간 말이 디스크 어디에도 남지 않는다(파일도, 로그도)", web=True)
+def w39(b: Box):
+    """이 기능의 약속은 하나다: **오간 말이 이 기계에 남지 않는다.**
+
+    그 약속은 코드를 읽어서 확인할 수 있는 종류가 아니다. 남지 않는다는 것은 '어디에도'
+    라는 뜻이고, 어디에는 내가 생각하지 못한 자리도 들어간다. 그래서 이 검사는 반대로 한다:
+    **저장소 전체를 훑어서 그 문장이 있는지 찾는다.** 대화 폴더만 보는 것이 아니라 로그도,
+    매니페스트도, 작업 폴더도 본다.
+
+    찾는 문장은 일부러 저장소 어디에도 없을 법한 말로 짓는다 — 흔한 말이면 우연히
+    걸려서 검사가 거짓 경보를 낸다.
+
+    같이 확인하는 것:
+      * 평범한 대화는 **여전히 남는다**(시크릿이 일반 경로를 망가뜨리지 않았는가).
+      * 목록에 시크릿 대화가 **안 보인다**(서버는 그런 게 있었는지도 모른다).
+    """
+    # **조각으로 만든다.** 통짜로 적으면 이 파일 자신이 걸려서 검사가 늘 빨간불이다
+    # (첫 실행에서 실제로 그랬다). 소스에는 조각만 있고, 찾는 문장은 실행 중에만 존재한다.
+    needle = "요란한" + "보라색코끼리가" + "재채기를했다"
+    calm = "평범한" + "대화문장하나"
+
+    code, got = b.wapi("/api/chat", {"private": True, "use_context": False,
+                                     "messages": [{"role": "user", "content": needle}]})
+    eq(code, 200, "시크릿 대화가 200 이 아니다: %s" % str(got)[:160])
+    ok(got.get("reply") is not None, "답이 없다")
+    eq(got.get("private"), True, "시크릿으로 처리했다고 말하지 않는다")
+
+    # 평범한 경로는 그대로 저장돼야 한다(시크릿이 일반 경로를 망가뜨리지 않았는가)
+    code, _ = b.wapi("/api/chat", {"chat_id": "w39plain",
+                                   "messages": [{"role": "user", "content": calm}]})
+    eq(code, 200, "평범한 대화가 깨졌다")
+
+    # **저장소 전체**를 훑는다. 텍스트로 열리는 파일만 본다(png 를 뒤질 이유는 없다).
+    def hunt(word):
+        hits = []
+        for p in b.root.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".zip", ".pyc"):
+                continue
+            try:
+                if word in p.read_text(encoding="utf-8", errors="ignore"):
+                    hits.append(str(p.relative_to(b.root)))
+            except OSError:
+                continue
+        return hits
+
+    left = hunt(needle)
+    eq(left, [], "시크릿 대화가 디스크에 남았다: %s" % left)
+
+    kept = hunt(calm)
+    ok(kept, "평범한 대화가 저장되지 않았다 — 시크릿이 일반 경로를 망가뜨렸다")
+
+    # 서버는 시크릿 대화가 있었다는 것조차 모른다
+    code, lst = b.wapi("/api/chats", {})
+    ids = [c.get("id") for c in (lst.get("chats") or [])]
+    ok("w39plain" in ids, "평범한 대화가 목록에 없다")
+    for cid in ids:
+        ok(not str(cid).startswith("s_"), "시크릿 대화가 서버 목록에 나타났다: %s" % cid)
+
+    # 글을 들고 오는 조립 경로 — 너무 짧으면 거절한다(모델을 1~2분 붙잡지 않게)
+    eq(b.code("/api/compose-text", {"text": "짧다"}), 400, "너무 짧은 글로 조립을 시작했다")
 
 
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")

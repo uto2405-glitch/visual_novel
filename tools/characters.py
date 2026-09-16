@@ -41,7 +41,19 @@ import vn_core  # noqa: E402
 from vn_core import VNError  # noqa: E402
 
 DIR = vn_core.PROJECT / "characters"          # works 가 바꾸지 않는 자리 = 모든 대화 공유
-REFS = DIR / "refs"                           # 사람이 올린 참고 사진 (커밋 금지 — .gitignore)
+# 사람이 올린 참고 사진. **저장소에서 가장 사적인 파일**이다 — 진짜 사람의 얼굴이다.
+# VN_PRIVATE_DIR 이 설정돼 있으면 저장소 **밖**의 그 폴더에 둔다(편집기·에이전트의 작업
+# 폴더 밖이라 구조적으로 보이지 않는다). 설정이 없으면 예전 자리(.gitignore 로 커밋만 차단).
+#
+# 설정이 **잘못된** 경우에는 조용히 예전 자리로 돌아가지 않는다. 그러면 사람은 사진이
+# 밖에 있다고 믿는데 실제로는 저장소 안에 쌓인다 — 믿음과 사실이 갈리는 쪽이 더 나쁘다.
+# 그래서 오류를 들고 있다가 **사진을 다루는 순간** 그대로 말한다(_require_private).
+try:
+    REFS = vn_core.private_or(DIR / "refs", "characters", "refs")
+    PRIVATE_ERROR = ""
+except VNError as _exc:                       # noqa: N816  (설정 오류 보관용)
+    REFS = DIR / "refs"
+    PRIVATE_ERROR = str(_exc)
 ARCHIVE = vn_core.PROJECT / "characters_deleted"
 ID_RE = re.compile(r"^OC-(\d{3,})$")
 
@@ -250,6 +262,16 @@ def delete(cid: str) -> dict:
 
 
 # ------------------------------------------------------------------ 참고 사진
+def _require_private() -> None:
+    """비공개 폴더 설정이 깨져 있으면 **사진을 다루기 전에** 멈춘다.
+
+    조용히 저장소 안으로 돌아가면 사람은 사진이 밖에 있다고 믿고 얼굴 사진을 더 올린다.
+    그 믿음이 틀렸다는 것은 나중에, 다른 사람이 저장소를 열었을 때 드러난다.
+    """
+    if PRIVATE_ERROR:
+        raise VNError("참고 사진을 다룰 수 없습니다 — " + PRIVATE_ERROR)
+
+
 def ref_path(cid: str, rel: str) -> Path | None:
     """기록된 사진 경로 → **디스크의 실제 파일.** 밖으로 나가는 길은 없다.
 
@@ -281,6 +303,7 @@ def add_reference(cid: str, data: bytes, label: str = "") -> dict:
     **머리 바이트로 그림인지 본다** — 확장자는 믿지 않는다. 이 파일은 나중에 웹으로 다시
     나가므로, 그림이 아닌 것을 그림인 척 저장하면 그 경로가 임의 파일 배달로 변한다.
     """
+    _require_private()
     cid = _require_id(cid)
     oc = get(cid)
     if not isinstance(data, (bytes, bytearray)) or not data:
@@ -336,6 +359,21 @@ def remove_reference(cid: str, rel: str) -> dict:
     except OSError:
         pass
     return {"character_id": cid, "removed": want, "file_gone": gone, "count": len(have)}
+
+
+def photo_home() -> dict:
+    """참고 사진이 **실제로** 어디 사는가 — 화면이 사람에게 그대로 보여 준다.
+
+    "비공개 폴더에 저장됩니다" 라고 적어 두고 실제로는 저장소 안이면, 그 문구는
+    거짓말이다. 그래서 문구를 쓰지 않고 **경로를 보여 준다.**
+    """
+    return {"path": str(REFS), "outside_repo": vn_core.ROOT not in REFS.parents and REFS != vn_core.ROOT,
+            "env": vn_core.PRIVATE_ENV, "error": PRIVATE_ERROR,
+            "note": ("참고 사진은 저장소 밖 비공개 폴더에 있습니다 — 편집기와 에이전트의 작업 폴더 "
+                     "밖입니다." if not PRIVATE_ERROR and vn_core.private_dir() else
+                     "참고 사진이 저장소 안에 있습니다(커밋은 .gitignore 로 막혀 있지만, 이 폴더를 "
+                     "여는 편집기·에이전트는 읽을 수 있습니다). 밖으로 빼려면 환경변수 "
+                     "%s 에 저장소 밖 절대경로를 넣으세요." % vn_core.PRIVATE_ENV)}
 
 
 # ------------------------------------------------------------------ 매니페스트 투영

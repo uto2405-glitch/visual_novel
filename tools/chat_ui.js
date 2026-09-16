@@ -337,8 +337,10 @@ async function askServer() {
   showStop(true);
   S.abort = new AbortController();
   try {
+    const secret = isSecret(S.chatId);
     const d = await api("/api/chat",
-                        { messages: S.msgs, chat_id: S.chatId }, S.abort.signal);
+                        secret ? { messages: S.msgs, private: true, use_context: false }
+                               : { messages: S.msgs, chat_id: S.chatId }, S.abort.signal);
     const reply = (d && d.reply) || "";
     wait.remove();
     if (S.chatId !== askedIn || S.msgs !== askedList) {
@@ -348,6 +350,7 @@ async function askServer() {
       return;
     }
     S.msgs.push({ role: "assistant", content: reply });
+    if (secret) secretPut(askedIn, S.msgs);      /* 서버가 아니라 이 기기에 적는다 */
     /* 그림체 목록을 **그리기 전에** 받는다. 뒤에서 받으면 첫 화면의 드롭다운이
    * 빈 채로 그려지고, 사람은 탭을 한 번 옮겨야 보게 된다. */
   try {
@@ -525,7 +528,21 @@ async function composeChat(all) {
   const btn = $("composeNow");
   if (btn) btn.disabled = true;
   try {
-    const r = await api("/api/compose-chat", { chat_id: S.chatId, all: !!all });
+    let r;
+    if (isSecret(S.chatId)) {
+      /* 서버에는 이 대화가 없다 — 글을 본문으로 들고 간다. 서버는 그 글을 저장하지 않지만,
+       * **나오는 장면과 그림은 디스크에 남는다.** 누르기 전에 그 말을 한다. */
+      const body = S.msgs.map((m) => (m.role === "user" ? "나: " : "상대: ")
+                                     + String(m.content || "")).join("\n");
+      if (body.trim().length < 40) throw new Error("장면으로 만들 이야기가 너무 짧습니다.");
+      if (!window.confirm(
+        "시크릿 대화를 장면으로 만듭니다.\n\n" +
+        "대화 내용은 서버에 저장되지 않지만, **만들어지는 장면과 그림은 디스크에 남습니다** " +
+        "(그것이 장면을 만드는 목적이므로).\n\n계속할까요?")) { if (btn) btn.disabled = false; return; }
+      r = await api("/api/compose-text", { text: body, cast: S.cast || null });
+    } else {
+      r = await api("/api/compose-chat", { chat_id: S.chatId, all: !!all });
+    }
     S.shown = 0;
     addNote(all ? "이 대화 전체를 장면으로 만듭니다 — 다 되면 이어 붙입니다."
                 : "새로 쓴 대목을 장면으로 만듭니다 — 기존 장면 뒤에 이어 붙입니다.");
@@ -542,6 +559,13 @@ async function composeChat(all) {
 async function refreshComposeBtn() {
   const btn = $("composeNow");
   if (!btn) return;
+  if (isSecret(S.chatId)) {
+    const turns = (S.msgs || []).length;
+    btn.textContent = turns ? ("여기까지 장면으로 (" + turns + "턴)") : "장면으로 조립";
+    btn.title = "시크릿 대화는 서버에 없으므로, 지금 화면에 있는 이야기를 그대로 보냅니다. "
+              + "만들어지는 장면과 그림은 디스크에 남습니다.";
+    return;
+  }
   try {
     const d = await api("/api/compose-chat-ready", { chat_id: S.chatId });
     const fresh = Number((d && d.fresh) || 0);
@@ -1310,6 +1334,17 @@ async function openChat(id) {
   S.useContext = rec && typeof rec.use_context === "boolean"
     ? rec.use_context : !S.chatId;
   const want = S.chatId;
+  /* 시크릿 대화는 서버에 물어볼 것이 없다 — 이 기기에만 있다. */
+  if (isSecret(want)) {
+    S.msgs = secretGet(want).msgs.slice();
+    S.shown = 0;
+    S.useContext = false;          /* 백지에서 시작한다 — 작품 문맥을 끌어오면 그것도 흔적이다 */
+    renderTalk();
+    showView("talk");
+    refreshComposeBtn();
+    renderList();
+    return;
+  }
   /* setBusy 를 쓰지 않는다 — 대화를 바꾸는 일이 남이 걸어 둔 잠금을 풀면,
    * 답을 기다리는 중에 목록을 눌렀다는 이유로 보내기 버튼이 되살아난다. */
   const box = $("box");
@@ -1481,11 +1516,20 @@ function renderList() {
   nw.appendChild(nb);
   wrap.appendChild(nw);
 
-  (S.chats || []).forEach((c) => {
+  const sw = el("div", "chatrow");
+  const sb = el("button", "open");
+  sb.type = "button";
+  sb.appendChild(el("span", "nm", "+ 시크릿 대화"));
+  sb.appendChild(el("span", "meta", "이 기기에만 저장됩니다 — 서버에 남지 않고, 백업도 없습니다"));
+  sb.addEventListener("click", startSecretChat);
+  sw.appendChild(sb);
+  wrap.appendChild(sw);
+
+  secretRows().concat(S.chats || []).forEach((c) => {
     const row = el("div", "chatrow" + (c.id === S.chatId ? " on" : ""));
     const open = el("button", "open");
     open.type = "button";
-    open.appendChild(el("span", "nm", chatLabel(c)));
+    open.appendChild(el("span", "nm", (c.secret ? "🔒 " : "") + chatLabel(c)));
     const when = c.mtime ? new Date(c.mtime * 1000).toLocaleString("ko-KR",
       { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "새 대화";
     const nsc = (S.works || {})[c.id || ""];
@@ -1495,18 +1539,31 @@ function renderList() {
     open.addEventListener("click", () => openChat(c.id));
     row.appendChild(open);
 
-    const keep = el("button", "keep", "내보내기");
-    keep.type = "button";
-    keep.title = "이 대화를 zip 한 덩어리로 받습니다(보관 기록까지 들어있습니다).";
-    keep.addEventListener("click", () => exportChat(c, keep));
-    row.appendChild(keep);
+    if (!c.secret) {
+      /* 시크릿 대화에는 내보내기를 두지 않는다 — zip 을 만들려면 서버가 그 내용을
+       * 한 번은 디스크에 써야 한다. 그 순간 이 기능의 약속이 깨진다. */
+      const keep = el("button", "keep", "내보내기");
+      keep.type = "button";
+      keep.title = "이 대화를 zip 한 덩어리로 받습니다(보관 기록까지 들어있습니다).";
+      keep.addEventListener("click", () => exportChat(c, keep));
+      row.appendChild(keep);
+    }
 
     /* 기본 대화는 사라질 수 없다(스튜디오의 스토리 탭이 같은 파일을 쓴다).
      * 그렇다고 버튼만 회색으로 꺼 두면, 사람은 "왜 이것만 안 지워지나" 만 알고
      * 비울 방법은 모른다. 할 수 있는 일을 이름으로 준다 — 비우기. */
     const del = el("button", "del", c.id ? "삭제" : "비우기");
     del.type = "button";
-    if (!c.id) {
+    if (c.secret) {
+      del.title = "이 기기에서 지웁니다. 서버에는 애초에 없습니다 — 되돌릴 수 없습니다.";
+      del.addEventListener("click", () => {
+        if (!window.confirm(
+          "이 시크릿 대화를 지웁니다.\n서버에는 사본이 없으므로 **되돌릴 수 없습니다.**\n\n계속할까요?")) return;
+        secretDrop(c.id);
+        if (S.chatId === c.id) { S.chatId = ""; S.msgs = []; }
+        renderList();
+      });
+    } else if (!c.id) {
       del.title = "기본 대화는 스튜디오와 같은 기록이라 사라지지는 않습니다. "
                 + "내용을 보관본으로 옮기고 비웁니다.";
       del.addEventListener("click", async () => {
@@ -1850,10 +1907,12 @@ function isTyping() {
 }
 
 function renderTalk() {
+  /* 시크릿 띠는 renderTalk 안에서 매번 다시 단다 — 탭을 옮기면 화면이 통째로 비워진다. */
   if (S.view !== "talk") return;
   const m = stream();
   while (m.firstChild) m.removeChild(m.firstChild);
-  m.appendChild(ctxSwitch());
+  if (isSecret(S.chatId)) m.appendChild(secretBanner());
+  else m.appendChild(ctxSwitch());
   if (S.llmDown) m.appendChild(pasteBox());
   if (!S.msgs.length) {
     addNote("이야기를 시작해 보세요. 예: \"고등학교 옥상에서 시작하는 짧은 연애물을 쓰고 싶어\"");
@@ -1868,6 +1927,107 @@ function renderTalk() {
     });
   }
   scrollEnd();
+}
+
+/* ---------------------------------------------------------------- 시크릿 대화
+ *
+ * 이 대화는 **이 기기의 이 브라우저에만** 있다. 서버 디스크에 한 글자도 안 남는다.
+ *
+ * 왜 서버에 '시크릿 대화가 있다' 는 표시조차 두지 않는가: 그 표시 자체가 기록이다.
+ * 그래서 서버는 매 요청의 private 플래그만 보고, 끝나면 잊는다.
+ *
+ * 무엇이 남고 무엇이 안 남는지 — 화면이 이걸 그대로 말해야 한다(추측하게 두면 안 된다):
+ *   남지 않는다: 대화 내용, 대화 목록, '이런 대화가 있었다' 는 흔적
+ *   남는다:     여기서 조립한 **장면과 그림**(만들어 보관하려고 만드는 것이다),
+ *              여기서 만든 **고유 캐릭터**(여러 대화가 함께 쓰는 서랍이다)
+ *
+ * 저장 자리는 localStorage 다. 브라우저를 지우면 같이 사라진다 — 그게 이 기능의 값이다.
+ * 백업이 없다는 뜻이기도 해서, 시작할 때 그 말을 한 번 한다. */
+var SECRET_KEY = "vn_secret_v1";
+var SECRET_PREFIX = "s_";
+
+function isSecret(id) { return String(id || "").indexOf(SECRET_PREFIX) === 0; }
+
+function secretAll() {
+  try {
+    const raw = localStorage.getItem(SECRET_KEY);
+    const got = raw ? JSON.parse(raw) : {};
+    return got && typeof got === "object" ? got : {};
+  } catch (e) {
+    return {};      /* 사생활 모드 브라우저·저장 거부 — 기능이 없을 뿐, 화면은 살아야 한다 */
+  }
+}
+
+function secretSave(all) {
+  try {
+    localStorage.setItem(SECRET_KEY, JSON.stringify(all));
+    return true;
+  } catch (e) {
+    addNote("이 기기에 저장하지 못했습니다(저장 공간이 꽉 찼거나 브라우저가 막고 있습니다). "
+            + "이 대화는 창을 닫으면 사라집니다.", true);
+    return false;
+  }
+}
+
+function secretGet(id) {
+  const rec = secretAll()[id];
+  return rec && Array.isArray(rec.msgs) ? rec : { msgs: [], at: 0 };
+}
+
+function secretPut(id, msgs) {
+  const all = secretAll();
+  all[id] = { msgs: msgs, at: Math.floor(Date.now() / 1000) };
+  secretSave(all);
+}
+
+function secretDrop(id) {
+  const all = secretAll();
+  delete all[id];
+  secretSave(all);
+}
+
+/* 목록에 섞어 준다 — 서버가 주는 목록과 나란히 보여야 사람이 하나로 생각한다. */
+function secretRows() {
+  const all = secretAll();
+  return Object.keys(all).map((id) => {
+    const rec = all[id] || {};
+    const msgs = Array.isArray(rec.msgs) ? rec.msgs : [];
+    let title = "";
+    for (let i = 0; i < msgs.length; i += 1) {
+      if (msgs[i] && msgs[i].role === "user") {
+        title = String(msgs[i].content || "").replace(/\n/g, " ").slice(0, 40);
+        break;
+      }
+    }
+    return { id: id, title: title, count: msgs.length, mtime: rec.at || 0, secret: true };
+  }).sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+}
+
+function newSecretId() {
+  const d = new Date();
+  const two = (n) => String(n).padStart(2, "0");
+  return SECRET_PREFIX + two(d.getFullYear() % 100) + two(d.getMonth() + 1) + two(d.getDate())
+         + "-" + two(d.getHours()) + two(d.getMinutes()) + two(d.getSeconds());
+}
+
+async function startSecretChat() {
+  if (!window.confirm(
+    "시크릿 대화를 시작합니다.\n\n" +
+    "· 대화 내용은 이 기기의 이 브라우저에만 저장됩니다 — 서버 디스크에 한 글자도 남지 않습니다.\n" +
+    "· 그래서 **백업이 없습니다.** 브라우저 기록을 지우거나 다른 기기에서 열면 사라집니다.\n" +
+    "· 여기서 장면으로 조립하면 그 장면과 그림은 디스크에 남습니다(만들어 보관하는 것이므로).\n\n" +
+    "시작할까요?")) return;
+  const id = newSecretId();
+  secretPut(id, []);
+  await openChat(id);
+}
+
+/* 시크릿 대화에서는 화면 맨 위에 늘 이 띠가 있다. 한 번 알리고 마는 것으로는 부족하다 —
+ * 사람은 몇 분 뒤에 자기가 어느 대화에 있는지 잊는다. */
+function secretBanner() {
+  const b = el("div", "secretbar");
+  b.textContent = "시크릿 — 이 대화는 이 기기에만 저장됩니다 (서버에 남지 않고, 백업도 없습니다)";
+  return b;
 }
 
 /* ---------------------------------------------------------------- 고유 캐릭터
@@ -1894,6 +2054,7 @@ async function loadCast() {
   const d = await api("/api/oc", {});
   S.oc = (d && d.characters) || [];
   S.faceLock = (d && d.face_lock) || null;
+  S.photoHome = (d && d.photo_home) || null;
   const c = await api("/api/cast", { chat_id: S.chatId || "" });
   S.cast = (c && c.cast) || null;         /* null = 안 정함, [] = 아무도 안 나옴 */
   return S.oc;
@@ -1922,6 +2083,15 @@ function renderCast() {
     const n = el("p", "note");
     n.textContent = (S.faceLock.ok ? "얼굴 고정 켜짐: " : "얼굴 고정: ") + S.faceLock.note;
     m.appendChild(n);
+  }
+
+  /* 사진이 어디 사는지 **경로째** 보여 준다. 이건 사람이 확인할 수 있는 유일한 형태다 —
+   * "안전하게 보관됩니다" 같은 문구는 확인할 방법이 없다. */
+  if (S.photoHome && S.photoHome.path) {
+    const h = el("p", "note");
+    h.textContent = (S.photoHome.outside_repo ? "사진 자리(저장소 밖): " : "사진 자리: ")
+                    + S.photoHome.path + " — " + (S.photoHome.error || S.photoHome.note || "");
+    m.appendChild(h);
   }
 
   const list = (S.oc || []);

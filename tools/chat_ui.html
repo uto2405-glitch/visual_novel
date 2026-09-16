@@ -172,6 +172,10 @@ main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
 /* 장면 탭 위의 도구 띄 — 그림체·일괄 굽기·장면 추가. 목록 띄와 같은 틀을 쓴다. */
 .scenebar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;padding:0 0 10px}
 /* 고유 캐릭터의 참고 사진 선반 — 폰 한 손 폭에서도 두 장이 보이게 작게 둔다. */
+/* 시크릿 띠 — 대화 화면 맨 위에 늘 있다. 한 번 알리고 마는 것으로는 부족하다:
+   사람은 몇 분 뒤에 자기가 어느 대화에 있는지 잊는다. */
+.secretbar{width:100%;border:1px solid var(--seal);border-radius:10px;padding:8px 12px;
+  font-size:12px;color:var(--seal-ink);background:rgba(160,60,60,.10);margin-bottom:10px}
 .shelf{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .thumb{display:flex;flex-direction:column;gap:4px;align-items:center}
 .thumb img{width:88px;height:88px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}

@@ -65,6 +65,54 @@ GEN_META_NAME = "_gen_meta.json"
 # 로만 드러난다 — 드러났을 때는 이미 올라간 뒤다.
 PRIVATE_PATTERNS = ("project/story/chatlog.json", "project/story/talk_*.json",
                     "project/story/*.archive.jsonl", "project/story/memory_*.json")
+
+# ---------------------------------------------------------------- 비공개 폴더
+# **저장소 밖**에 두는 자리. 여기 있는 것은 이 폴더를 아는 도구만 읽는다.
+#
+# 왜 저장소 밖인가: 이 저장소는 VS Code 의 작업 폴더이고, 거기서 도는 에이전트는
+# 작업 폴더 안을 읽는다. 사람이 "이건 아무도 안 봤으면 좋겠다" 고 말하는 파일
+# (자기 얼굴 사진, 사적인 대화)이 그 안에 있으면, 안 읽겠다는 약속은 규칙일 뿐
+# 구조가 아니다. 폴더를 밖으로 내면 구조가 된다 — 작업 폴더에 없으니 보이지 않는다.
+#
+# 설정: 환경변수 VN_PRIVATE_DIR (절대경로). 없으면 예전 그대로 저장소 안에 둔다.
+# 저장소 안을 가리키면 **거절한다** — 밖에 두는 것이 이 기능의 전부이기 때문이다.
+PRIVATE_ENV = "VN_PRIVATE_DIR"
+
+
+def private_dir(make: bool = False):
+    """비공개 폴더(``Path``) 또는 ``None``(설정 안 됨).
+
+    ``make=True`` 면 없을 때 만든다. 만들지 못하면 **조용히 저장소 안으로 돌아가지
+    않는다** — 그러면 사람은 사진이 밖에 있다고 믿는데 실제로는 안에 있다.
+    """
+    raw = os.environ.get(PRIVATE_ENV, "").strip().strip('"')
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        raise VNError(f"{PRIVATE_ENV} 는 절대경로여야 합니다: {raw!r}")
+    try:
+        inside = p.resolve() == ROOT.resolve() or ROOT.resolve() in p.resolve().parents
+    except OSError:
+        inside = False
+    if inside:
+        raise VNError(
+            f"{PRIVATE_ENV} 가 저장소 안({p})을 가리킵니다 — 비공개 폴더는 **저장소 밖**이어야 "
+            "합니다. 저장소 안이면 편집기와 에이전트가 그대로 읽습니다.")
+    if make:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise VNError(f"비공개 폴더를 만들지 못했습니다({p}): {exc}")
+    return p
+
+
+def private_or(fallback: Path, *parts: str) -> Path:
+    """비공개 폴더가 있으면 그 밑의 자리, 없으면 저장소 안의 예전 자리."""
+    base = private_dir()
+    return base.joinpath(*parts) if base else fallback
+
+
 OUTPUT = ROOT / "output"
 LOGS = ROOT / "logs"
 BACKUPS = ROOT / "backups"

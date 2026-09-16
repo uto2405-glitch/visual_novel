@@ -419,6 +419,48 @@ def _log_mark(path) -> tuple:
         return (0, 0, 0)
 
 
+def do_chat_private(messages: list[dict], use_context: bool = False) -> str:
+    """시크릿 대화 한 턴 — **디스크에 아무것도 쓰지 않는다.**
+
+    지키는 약속은 하나다: 이 함수가 끝나고 나면 이 대화의 내용이 이 기계 어디에도
+    남아 있지 않다. 그래서 여기서 하는 일은 셋뿐이다 — 받은 말로 프롬프트를 만들고,
+    모델을 부르고, 답을 돌려준다. 저장도, 병합도, '어디까지 조립했는가' 도 없다.
+
+    남을 뻔한 자리를 하나씩 확인했다:
+      * ``logs/webapp.log`` — 요청 **경로**만 적는다. 본문은 어느 경로로도 안 들어간다.
+      * ``project/story/`` — 이 함수는 talk_store 를 아예 부르지 않는다.
+      * 모델 서버(llama.cpp) — 그쪽 프로세스가 무엇을 적는지는 이 저장소가 보장할 수
+        없다. 기본 설정에서는 프롬프트를 파일로 남기지 않지만, **그건 그쪽의 약속이다.**
+
+    대화는 기기(브라우저)에만 있으므로 매 턴 **전체를 받아야 한다** — 서버에 이어 붙일
+    저장본이 없다. 그래서 창 자르기만 여기서 한다.
+    """
+    sys_msg = prompt_build.story_system_message(bool(use_context))
+    window = [m for m in (messages if isinstance(messages, list) else []) if isinstance(m, dict)]
+    window = window[-CHAT_WINDOW:]
+    if not window:
+        raise VNError("보낼 말이 없습니다.")
+    last = ""
+    for m in reversed(window):
+        if m.get("role") == "user":
+            last = str(m.get("content") or "")
+            break
+    # 시크릿 대화에서도 '고유캐릭터 생성하기' 는 동작한다. 다만 **인물은 서랍에 남는다** —
+    # 그건 여러 대화가 함께 쓰는 자산이고, 남지 않으면 만드는 의미가 없다.
+    # 그래서 여기서만은 사람에게 그 사실을 말해 준다(조용히 남기지 않는다).
+    hint = oc_trigger_hint(last)
+    if hint is not None:
+        made = make_oc_from_chat(window, "", hint)
+        who = made["character"]
+        return ("고유 캐릭터를 만들었습니다 — %s %s\n"
+                "· 그림 문장: %s\n"
+                "⚠ 시크릿 대화지만 **인물은 서랍에 남습니다**(여러 대화가 함께 쓰는 자산이라 "
+                "남지 않으면 쓸 수가 없습니다). 대화 내용은 남지 않습니다."
+                % (who["id"], who["name"], who["prompt_anchor"] or "(비어 있음)"))
+    return vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000,
+                                timeout=_chat_timeout(llm_queue_wait()))
+
+
 def do_chat(messages: list[dict], chat_id: str = "") -> str:
     """스토리 챗 1턴 — 프롬프트 조립은 prompt_build, 모델 선택은 vn_compose 담당.
 
@@ -504,7 +546,40 @@ def _load_scene(sid) -> dict:
 # ---------------------------------------------------------------- POST 라우팅
 # 각 핸들러는 요청 body(dict) 를 받아 응답 dict 를 반환하거나 RuntimeError 를 던진다.
 def r_chat(b):
+    """한 턴. ``private:true`` 면 **서버 디스크에 아무것도 쓰지 않는다**(시크릿 대화).
+
+    시크릿 여부를 서버에 저장하지 않는 이유: 저장하는 순간 '이 사람이 시크릿 대화를
+    했다' 는 기록이 남는다. 매 요청이 스스로 말하게 두면 그 기록조차 없다.
+    """
+    if bool(b.get("private")):
+        return {"reply": do_chat_private(b.get("messages", []), bool(b.get("use_context"))),
+                "private": True}
     return {"reply": do_chat(b.get("messages", []), str(b.get("chat_id") or ""))}
+
+
+def r_compose_text(b):
+    """받은 글을 그대로 장면으로 조립한다 — 시크릿 대화가 쓰는 길.
+
+    보통 조립은 chat_id 로 디스크의 대화를 읽는다. 시크릿 대화는 디스크에 없으므로
+    **글을 요청 본문으로 들고 온다.** 서버는 그 글을 저장하지 않는다(모델에게 보내고 버린다).
+
+    다만 **나오는 장면은 디스크에 남는다.** 그건 이 기능의 한계가 아니라 정의다 —
+    장면과 그림은 만들어서 보관하려고 만드는 것이다. 화면이 그 사실을 먼저 말한다.
+    """
+    text = str(b.get("text") or "").strip()
+    if len(text) < 40:
+        raise VNError("장면으로 만들 이야기가 너무 짧습니다 — 조금 더 써 보세요.")
+    if len(text) > CHAT_COMPOSE_TEXT_CAP:
+        text = text[-CHAT_COMPOSE_TEXT_CAP:]
+    cast = b.get("cast")
+    cast = [str(x).strip() for x in cast if str(x).strip()] if isinstance(cast, list) else None
+    if cast:
+        characters.sync_manifest(cast)
+    cap = max(1, min(int(b.get("max") or CHAT_COMPOSE_CAP), CHAT_COMPOSE_CAP))
+    res = vn_compose.compose_job_start(total=cap, batch=cap, branching=False,
+                                       source=text, append=True, cast=cast)
+    res["private_source"] = True
+    return res
 
 
 def r_chat_history(b):
@@ -680,6 +755,10 @@ def r_compose(b):
 
 
 CHAT_COMPOSE_CAP = 4        # 한 번에 이어 붙일 수 있는 장면 수 상한
+# 시크릿 대화는 글을 **요청 본문으로** 들고 온다(디스크에 없으니까). 그 글의 상한이다 —
+# 본문 상한(MAX_BODY_BYTES)보다 훨씬 작게 두는 이유는, 모델에게 보낼 수 있는 양이
+# 그보다 작기 때문이다. 넘으면 **뒤에서부터** 자른다(최근 이야기가 장면이 된다).
+CHAT_COMPOSE_TEXT_CAP = 40000
 CHAT_COMPOSE_CHARS = 12000  # 모델에 넘기는 이야기 본문 상한(그 이상이면 뒤쪽만)
 
 
@@ -914,7 +993,10 @@ def r_oc_from_chat(b):
 def r_oc_list(b):
     """서랍 전체 + 얼굴 고정이 지금 어디까지 되는가."""
     return {"characters": [_oc_view(oc) for oc in characters.list_all()],
-            "face_lock": image_gen.face_state()}
+            "face_lock": image_gen.face_state(),
+            # 사진이 **실제로** 어디 사는지 경로째 보여 준다. "비공개 폴더에 저장됩니다" 라는
+            # 문구는 사람이 확인할 수 없다 — 경로는 확인할 수 있다.
+            "photo_home": characters.photo_home()}
 
 
 def r_oc_save(b):
@@ -1661,6 +1743,7 @@ POST_ROUTES = {
     "/api/oc": r_oc_list, "/api/oc-save": r_oc_save, "/api/oc-delete": r_oc_delete,
     "/api/oc-photo": r_oc_photo, "/api/oc-photo-delete": r_oc_photo_delete,
     "/api/cast": r_cast, "/api/oc-from-chat": r_oc_from_chat,
+    "/api/compose-text": r_compose_text,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/export-pwa": r_export_pwa,
