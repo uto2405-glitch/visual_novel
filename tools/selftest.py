@@ -5665,6 +5665,80 @@ def u35(b: Box):
         ts._SUMMARY.clear()
 
 
+@test("unit", "U36 대화 zip — 통째로 나갔다 돌아오고, 가져오기는 무슨 일이 있어도 덮어쓰지 않는다")
+def u36(b: Box):
+    """이 로그들은 이 저장소에서 사용자가 가장 아끼는 자산이다. 지금까지 백업하는 길이
+    "F 드라이브를 통째로 복사한다" 하나뿐이었고, 폰에서 쓰기 시작한 뒤로는 그것도 없었다.
+
+    그래서 두 가지를 잠근다.
+
+    (1) **통째로** 나간다 — 본문뿐 아니라 보관 기록(사용자가 '수정'·'다시 생성' 으로 밀어낸
+        말들)과 작품 설정까지. 그게 빠지면 "이 대화를 옮겼다" 가 거짓말이 된다.
+    (2) **덮어쓰지 않는다** — 같은 id 가 있으면 이름을 비켜 새 갈래로 들어온다. 덮어쓰기는
+        이 화면에서 유일하게 되돌릴 수 없는 동작이 됐을 것이다. 그 편함은 이 파일들에
+        걸 만한 것이 아니다.
+
+    쓰레기 입력도 함께 본다 — 가져오기는 사용자가 **다른 데서 받은 파일**을 넣는 자리라,
+    이 화면에서 만들지 않은 바이트가 반드시 들어온다.
+    """
+    ts = b.mod("talk_store")
+    msgs = [{"role": "user", "content": "비 오는 버스"},
+            {"role": "assistant", "content": "좋아요. 첫 장면은…"}]
+    ts.save_log(ts.story_chat_path_for("u36a"), msgs)
+    ts.set_chat_use_context("u36a", False)
+    ts._append_archive(ts.archive_path(ts.story_chat_path_for("u36a")),
+                       [{"role": "assistant", "content": "밀려난 예전 답"}])
+
+    name, data = ts.export_chat_bytes("u36a")
+    ok(name.endswith(".zip"), "내보낸 이름이 zip 이 아니다: %s" % name)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        names = set(z.namelist())
+        for want in ("meta.json", "chat.json", "archive.jsonl"):
+            ok(want in names, "zip 에 %s 가 없다 — 통째로 옮겨지지 않는다 (%s)" % (want, sorted(names)))
+        meta = json.loads(z.read("meta.json").decode("utf-8"))
+    eq(meta.get("chat_id"), "u36a", "어느 대화인지 적혀 있지 않다")
+    eq(meta.get("use_context"), False, "작품 설정이 안 실렸다 — 가져온 쪽이 다르게 답한다")
+
+    # (2) 같은 저장소로 되돌려 넣어도 원본은 한 글자도 안 변한다
+    r = ts.import_chat_bytes(data)
+    ok(r["chat_id"] != "u36a", "기존 대화를 덮어썼다 — 되돌릴 수 없는 사고다")
+    ok(r["renamed"] is True, "이름을 비켰는데 화면에 말해 주지 않는다")
+    eq(ts.load_log(ts.story_chat_path_for("u36a")), msgs, "원본 대화가 변했다")
+    eq(r["count"], 2, "옮겨진 발화 수가 다르다")
+    eq(r["archived"], 1, "보관 기록이 따라오지 않았다")
+    eq(ts.chat_use_context(r["chat_id"]), False, "작품 설정이 따라오지 않았다")
+
+    # 두 번 넣어도 서로를 덮지 않는다
+    r2 = ts.import_chat_bytes(data)
+    ok(r2["chat_id"] not in ("u36a", r["chat_id"]), "두 번째 가져오기가 첫 번째를 덮었다")
+
+    # 쓰레기·빈 것·zip 아닌 것은 아무것도 만들지 않는다
+    before = {c["id"] for c in ts.list_story_chats()}
+    empty = io.BytesIO()
+    with zipfile.ZipFile(empty, "w") as z:
+        z.writestr("chat.json", json.dumps({"messages": []}))
+    for bad, why in ((b"definitely not a zip", "zip 이 아닌 바이트"),
+                     (b"", "빈 바이트"),
+                     (empty.getvalue(), "대화가 없는 zip")):
+        try:
+            ts.import_chat_bytes(bad)
+            ok(False, "%s 를 받아들였다" % why)
+        except Exception as e:
+            ok(not isinstance(e, (KeyError, AttributeError, TypeError)),
+               "%s 에 역추적이 났다(사람이 읽을 말이 없다): %r" % (why, e))
+    eq({c["id"] for c in ts.list_story_chats()}, before,
+       "거절한 입력이 대화를 만들었다 — 목록에 빈 대화가 쌓인다")
+
+    # 경로를 탈출하려는 항목이 들어 있어도 무시한다(고정된 이름만 읽는다)
+    eviltmp = io.BytesIO()
+    with zipfile.ZipFile(eviltmp, "w") as z:
+        z.writestr("../../pwned.txt", "x")
+        z.writestr("chat.json", json.dumps({"messages": msgs}, ensure_ascii=False))
+    ts.import_chat_bytes(eviltmp.getvalue())
+    ok(not (b.root.parent / "pwned.txt").exists() and not (b.root / "pwned.txt").exists(),
+       "zip 안의 경로 탈출이 파일을 만들었다")
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.

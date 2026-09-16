@@ -159,6 +159,16 @@ main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
  border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
 .chatrow .del:hover{border-color:var(--seal);color:var(--seal-ink)}
 .chatrow .del[disabled]{opacity:.35;cursor:default}
+/* 저장·삭제 단추는 같은 틀을 쓴다 — 다른 것은 닿았을 때의 색뿐이다.
+ * 저장은 무해하므로 옥을 달구(옥), 삭제는 되돌릴 수 없으므로 붉은색(인장)이다. */
+.keep{flex:0 0 auto;background:none;border:1px solid var(--line);color:var(--sub);
+ border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer;
+ text-decoration:none;display:inline-block;line-height:1.3}
+.keep:hover{border-color:var(--jade-d);color:var(--ink)}
+.keep[disabled]{opacity:.35;cursor:default}
+.listbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:760px;width:100%;
+ padding:0 0 6px}
+.listbar .note{font-size:11px;color:var(--sub);flex:1 1 200px;min-width:0}
 
 /* ---------------------------------------------------------------- 갤러리 */
 .gbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;

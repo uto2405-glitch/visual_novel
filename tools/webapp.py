@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import gzip
 import hashlib
 import http.cookies
@@ -468,6 +469,76 @@ def r_chat_meta(b):
     with WRITE_LOCK:
         val = talk_store.set_chat_use_context(cid, bool(b.get("use_context")))
     return {"chat_id": cid, "use_context": val}
+
+
+CHAT_EXPORT_DIR = OUTPUT_DIR / "chats"
+# POST 본문 상한(MAX_BODY_BYTES)에 base64 의 4/3 팽창을 반영한 실질 상한.
+# 내보내기가 이 값을 넘으면 "받을 수는 있지만 이 화면으로는 다시 못 넣는다" 고 말해 준다 —
+# 나중에 가져오기를 눌렀을 때 거절당하는 것보다, 내보내는 그 자리에서 아는 편이 낫다.
+IMPORT_POST_CAP = MAX_BODY_BYTES * 3 // 4 - 8192
+
+
+def r_chat_export(b):
+    """대화 하나를 zip 으로 내보낸다 — output/chats/ 에 두고 /dl 주소를 돌려준다.
+
+    본문에 실어 돌려주지 않고 **파일로 두는** 이유가 둘이다. 폰에서 무언가를 받아가는
+    길이 이미 /dl 하나뿐이고(받아가기 목록이 그것을 쓴다), 파일로 남아 있으면 브라우저가
+    받다가 끊겨도 다시 받을 수 있다. 대화 로그는 사용자가 잃으면 안 되는 자산이다.
+    """
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    name, data = talk_store.export_chat_bytes(cid)
+    with WRITE_LOCK:
+        CHAT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        vn_core.atomic_write_bytes(CHAT_EXPORT_DIR / name, data)
+    return {"name": name, "chat_id": cid,
+            "url": "/dl/" + urllib.parse.quote("chats/" + name),
+            "bytes": len(data), "mb": round(len(data) / 1_000_000, 2),
+            "reimportable": len(data) <= IMPORT_POST_CAP}
+
+
+def r_chat_import(b):
+    """zip → **새** 대화. 기존 대화는 어떤 경우에도 덮어쓰지 않는다(talk_store 가 이름을 비킨다).
+
+    두 갈래로 받는다: 폰·다른 PC 에서 고른 파일은 base64 로 본문에 실려 오고, 이미 이
+    기계의 output/chats/ 에 있는 파일은 이름만 온다. 두 번째 갈래가 있는 이유는 본문
+    상한 때문이다 — 큰 대화는 본문으로는 못 들어오지만 파일로는 들어온다.
+    """
+    raw = b.get("b64")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            data = base64.b64decode(raw.strip(), validate=True)
+        except (ValueError, binascii.Error):
+            raise VNError("파일을 읽지 못했습니다 — 다시 골라 주세요.")
+    else:
+        rel = str(b.get("name") or "").strip()
+        if not rel:
+            raise VNError("가져올 파일이 없습니다.")
+        target = vn_core.safe_path(CHAT_EXPORT_DIR, rel)
+        if target is None or not target.is_file():
+            raise VNError(f"{rel[:60]} 을(를) 찾지 못했습니다 — output/chats/ 안에 있어야 합니다.")
+        if target.stat().st_size > talk_store.IMPORT_CAP:
+            raise VNError("파일이 너무 큽니다 — 가져오지 않았습니다.")
+        data = target.read_bytes()
+    with WRITE_LOCK:
+        res = talk_store.import_chat_bytes(data, b.get("chat_id") or "")
+    log.info("대화 가져오기: %s (%d발화, 보관 %d줄)",
+             res["chat_id"], res["count"], res["archived"])
+    return res
+
+
+def r_chat_exports(b):
+    """이 기계에 남아 있는 내보내기 파일 목록 — 최근 것이 앞."""
+    out = []
+    for f in sorted(CHAT_EXPORT_DIR.glob("*.zip")) if CHAT_EXPORT_DIR.is_dir() else []:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        out.append({"name": f.name, "url": "/dl/" + urllib.parse.quote("chats/" + f.name),
+                    "bytes": st.st_size, "mb": round(st.st_size / 1_000_000, 2),
+                    "mtime": int(st.st_mtime)})
+    out.sort(key=lambda d: -d["mtime"])
+    return {"files": out[:200]}
 
 
 def r_chat_delete(b):
@@ -1058,6 +1129,8 @@ def r_logout_all(b):
 POST_ROUTES = {
     "/api/chat": r_chat, "/api/chat-history": r_chat_history,
     "/api/chats": r_chats, "/api/chat-delete": r_chat_delete,
+    "/api/chat-export": r_chat_export, "/api/chat-import": r_chat_import,
+    "/api/chat-exports": r_chat_exports,
     "/api/chat-meta": r_chat_meta, "/api/chat-trim": r_chat_trim,
     "/api/storyline": r_storyline,
     "/api/compose": r_compose, "/api/compose-input": r_compose_input,

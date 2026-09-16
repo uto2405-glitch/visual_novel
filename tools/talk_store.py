@@ -22,15 +22,20 @@
   load_log(path) / save_log(path, msgs)   파일 경로를 직접 다루는 저수준(스토리 챗로그용)
   story_chat_path() -> Path          project/story/chatlog.json
   resolve_cid(cid=None) -> str       요청값 > manifest.talk.character_id > 첫 캐릭터
+  export_chat_bytes(chat_id) -> (name, zip)   대화 하나를 zip 한 덩어리로
+  import_chat_bytes(data, want_id) -> dict    zip → **새** 갈래 (기존 갈래를 덮어쓰지 않는다)
 
 Python 3.9+ · 표준 라이브러리만.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import sys
+import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -399,3 +404,131 @@ def resolve_cid(cid: Any = None) -> str:
     chars = [c for c in mf.get("characters", []) if isinstance(c, dict)]
     return str((talk or {}).get("character_id")
                or (chars[0].get("character_id") if chars else "") or "")
+
+
+# ---------------------------------------------------------------- 내보내기 · 가져오기
+#
+# 대화 하나를 zip 한 덩어리로 들고 다닌다. 왜 필요한가: 이 로그들은 사용자가 이 저장소에서
+# 가장 아끼는 자산인데, 지금까지 백업 경로가 "F 드라이브를 통째로 복사한다" 뿐이었다.
+# 폰에서 쓰기 시작한 뒤로는 그것마저 안 된다.
+#
+# 규칙은 이 모듈의 원래 규칙 그대로다: **가져오기가 기존 대화를 덮어쓰지 않는다.** 같은
+# id 가 이미 있으면 뒤에 숫자를 붙여 새 갈래로 들어온다. 덮어쓰기는 편해 보이지만, 한 번
+# 잘못 누르면 되돌릴 수 없는 유일한 동작이다 — 그 편함은 이 파일들에 걸 만한 것이 아니다.
+EXPORT_VERSION = 1
+EXPORT_NAME_MSG = "가져올 수 있는 파일이 아닙니다 — 이 화면에서 내보낸 zip 인지 확인하세요."
+IMPORT_CAP = 40_000_000      # 압축을 푼 뒤의 상한(zip 폭탄 방어). 대화 로그 상한의 20배 넘는다.
+
+
+def _export_stem(chat_id: str, when: int) -> str:
+    """파일 이름 — 사람이 폴더에서 보고 어느 대화인지 알아볼 수 있게."""
+    stamp = time.strftime("%Y%m%d-%H%M", time.localtime(when))
+    return "chat_%s_%s" % (chat_id or "기본", stamp)
+
+
+def export_chat_bytes(chat_id: Any = None) -> tuple:
+    """대화 하나 → (파일이름, zip 바이트). 보관 기록(archive)도 같이 담는다.
+
+    보관 기록을 왜 넣는가: 거기에는 사용자가 '수정'·'다시 생성' 으로 밀어낸 말들이 들어
+    있다. 그것까지 가져와야 "이 대화를 통째로 옮겼다" 가 참이 된다.
+    """
+    cid = normalize_chat_id(chat_id)
+    path = story_chat_path_for(cid)
+    msgs = load_log(path)
+    when = int(time.time())
+    meta = {
+        "version": EXPORT_VERSION,
+        "kind": "vn-chat",
+        "chat_id": cid,
+        "title": _title_of(msgs),
+        "count": len(msgs),
+        "use_context": chat_use_context(cid),
+        "exported_at": when,
+    }
+    buf = io.BytesIO()
+    # deflate 로 압축한다 — 대화는 텍스트라 보통 1/4 아래로 줄어든다(폰의 업로드 상한에 걸리는
+    # 것이 실제 제약이라, 여기서 줄여 두는 것이 나중에 가져오기가 되느냐를 가른다).
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+        z.writestr("chat.json", json.dumps({"messages": msgs}, ensure_ascii=False))
+        arch = archive_path(path)
+        if arch.is_file():
+            try:
+                z.writestr("archive.jsonl", arch.read_bytes())
+            except OSError:
+                pass                    # 보관 기록을 못 읽어도 대화 본문은 내보낸다
+    return _export_stem(cid, when) + ".zip", buf.getvalue()
+
+
+def free_chat_id(want: str) -> str:
+    """이미 있는 갈래를 비켜 가는 id. ``want`` 가 비었거나 형식 위반이면 날짜로 만든다."""
+    base = normalize_chat_id(want) or ("imp" + time.strftime("%m%d%H%M"))
+    base = base[:36] or "imp"           # 뒤에 '-99' 를 붙여도 40자를 넘지 않게
+    if not story_chat_path_for(base).exists():
+        return base
+    for n in range(2, 100):
+        cand = "%s-%d" % (base, n)
+        if not story_chat_path_for(cand).exists():
+            return cand
+    raise vn_core.VNError("같은 이름의 대화가 너무 많습니다 — 몇 개를 정리한 뒤 다시 하세요.")
+
+
+def _zip_text(z, name: str, cap: int) -> str:
+    """zip 안의 한 파일을 상한을 지키며 읽는다. 없으면 ''."""
+    try:
+        info = z.getinfo(name)
+    except KeyError:
+        return ""
+    if info.file_size > cap:
+        raise vn_core.VNError("압축을 푼 크기가 너무 큽니다(%s) — 가져오지 않았습니다." % name)
+    with z.open(info) as fh:
+        return fh.read(cap + 1).decode("utf-8", "replace")
+
+
+def import_chat_bytes(data: bytes, want_id: Any = "") -> dict:
+    """zip → **새** 대화 갈래. 기존 갈래는 어떤 경우에도 덮어쓰지 않는다.
+
+    반환: {"chat_id", "count", "title", "archived", "renamed"}
+      renamed=True 면 원래 id 가 이미 쓰여서 다른 이름으로 들어왔다는 뜻이다(화면이 말해 준다).
+    """
+    try:
+        z = zipfile.ZipFile(io.BytesIO(bytes(data)))
+    except (zipfile.BadZipFile, ValueError):
+        raise vn_core.VNError(EXPORT_NAME_MSG)
+    with z:
+        raw = _zip_text(z, "chat.json", IMPORT_CAP)
+        if not raw:
+            raise vn_core.VNError(EXPORT_NAME_MSG)
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            raise vn_core.VNError("대화 내용을 읽지 못했습니다 — 파일이 손상된 것 같습니다.")
+        msgs = _clean(body.get("messages") if isinstance(body, dict) else None)
+        if not msgs:
+            raise vn_core.VNError("이 파일에는 대화가 들어 있지 않습니다 — 가져오지 않았습니다.")
+        meta = {}
+        try:
+            meta = json.loads(_zip_text(z, "meta.json", 200_000) or "{}")
+        except json.JSONDecodeError:
+            meta = {}
+        meta = meta if isinstance(meta, dict) else {}
+        archive = _zip_text(z, "archive.jsonl", IMPORT_CAP)
+
+    src_id = normalize_chat_id(want_id) or normalize_chat_id(meta.get("chat_id"))
+    cid = free_chat_id(src_id)
+    path = story_chat_path_for(cid)
+    save_log(path, msgs)
+    archived = 0
+    if archive.strip():
+        # 보관 기록은 append 로 들어간다 — 새 갈래라 비어 있지만, 규칙을 여기서도 지킨다.
+        lines = [l for l in archive.splitlines() if l.strip()]
+        try:
+            _append_archive(archive_path(path), [json.loads(l) for l in lines])
+            archived = len(lines)
+        except (OSError, json.JSONDecodeError):
+            archived = 0               # 보관 기록이 깨져도 대화 본문은 들어온 뒤다
+    if isinstance(meta.get("use_context"), bool):
+        set_chat_use_context(cid, meta["use_context"])
+    forget_summary(path)               # 방금 만든 파일 — 요약 표를 다시 읽게 한다
+    return {"chat_id": cid, "count": len(msgs), "title": _title_of(msgs),
+            "archived": archived, "renamed": bool(src_id) and cid != src_id}

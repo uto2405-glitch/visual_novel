@@ -994,10 +994,120 @@ function chatLabel(c) {
   return c.id ? "제목 없는 대화" : "기본 대화";
 }
 
+/* ---------------------------------------------------------------- 대화 내보내기 · 가져오기
+ *
+ * 왜 필요한가: 이 로그들은 이 저장소에서 사용자가 가장 아끼는 자산인데, 지금까지 백업하는
+ * 길이 "F 드라이브를 통째로 복사한다" 하나뿐이었다. 폰에서 쓰기 시작한 뒤로는 그것도 안 된다.
+ *
+ * 가져오기는 **절대 덮어쓰지 않는다**(서버가 이름을 비켜 준다). 덮어쓰기는 편해 보이지만
+ * 한 번 잘못 누르면 되돌릴 수 없는 유일한 동작이고, 그 편함은 이 파일들에 걸 만한 것이 아니다. */
+
+const IMPORT_CAP_BYTES = 7000000;   // 서버 본문 상한(10MB)에 base64 의 4/3 팽창을 반영한 값
+
+function bytesToB64(buf) {
+  /* 한 번에 넘기면 인자 수 상한에 걸려 큰 파일에서 터진다 — 잘라서 넘긴다. */
+  const bytes = new Uint8Array(buf);
+  const CH = 0x8000;
+  let s = "";
+  for (let i = 0; i < bytes.length; i += CH) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return btoa(s);
+}
+
+function dlLink(url, name, label) {
+  const a = el("a", "keep", label);
+  a.href = url;
+  a.setAttribute("download", name);
+  a.rel = "noopener";
+  return a;
+}
+
+async function exportChat(c, btn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "담는 중…";
+  try {
+    const r = await api("/api/chat-export", { chat_id: c.id });
+    /* 눌러서 바로 받게 하고, **동시에** 고정 자리에 링크를 남긴다. 폰 브라우저는 스크립트가
+     * 시작한 내려받기를 막는 일이 있는데, 그때 화면에 아무것도 안 남으면 사용자는 버튼이
+     * 고장 난 줄 안다. 링크가 남아 있으면 직접 누르면 된다. */
+    const a = dlLink(r.url, r.name, "받기");
+    a.style.display = "none";
+    document.body.appendChild(a);
+    try { a.click(); } catch (e) { /* 막히면 아래 링크로 받는다 */ }
+    if (a.parentNode) a.parentNode.removeChild(a);
+
+    const acts = [{ label: "확인", onClick: () => liveHide() }];
+    liveShow(r.name + " · " + (r.bytes < 1000000
+               ? (Math.round(r.bytes / 1000) + "KB")
+               : (r.mb + "MB"))
+             + (r.reimportable ? "" : " · 이 화면으로는 다시 못 넣습니다(너무 큽니다)"),
+             acts, 1);
+    const row = document.getElementById("liveActs");
+    if (row) row.insertBefore(dlLink(r.url, r.name, "다시 받기"), row.firstChild);
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function importChatFile(file) {
+  if (!file) return;
+  if (file.size > IMPORT_CAP_BYTES) {
+    addNote(file.name + " 은(는) 너무 큽니다(" + Math.round(file.size / 1000000)
+            + "MB). 이 화면으로 넣을 수 있는 상한은 7MB 입니다 — "
+            + "PC 라면 output/chats/ 에 넣고 다시 시도하세요.", true);
+    return;
+  }
+  liveShow(file.name + " 을(를) 읽는 중…", [], 0);
+  try {
+    const buf = await file.arrayBuffer();
+    const r = await api("/api/chat-import", { b64: bytesToB64(buf) });
+    await loadChats();
+    if (S.view === "list") renderList();
+    liveShow("가져왔습니다 — " + (r.title || "(제목 없음)") + " · " + r.count + "턴"
+             + (r.archived ? (" · 보관 기록 " + r.archived + "줄") : "")
+             + (r.renamed ? " · 같은 이름이 있어 새 이름으로 들어왔습니다" : ""),
+             [{ label: "열기", go: true, onClick: () => { liveHide(); openChat(r.chat_id); } },
+              { label: "확인", onClick: () => liveHide() }], 1);
+  } catch (e) {
+    liveHide();
+    addNote(String(e.message || e), true);
+  }
+}
+
+function listBar() {
+  const bar = el("div", "listbar");
+  const pick = el("input");
+  pick.type = "file";
+  pick.accept = ".zip,application/zip";
+  pick.hidden = true;
+  pick.addEventListener("change", async () => {
+    const f = pick.files && pick.files[0];
+    pick.value = "";              // 같은 파일을 두 번 고를 수 있게 비운다
+    await importChatFile(f);
+  });
+  const b = el("button", "keep", "가져오기");
+  b.type = "button";
+  b.addEventListener("click", () => pick.click());
+  bar.appendChild(b);
+  bar.appendChild(pick);
+  bar.appendChild(el("span", "note",
+    "대화를 zip 으로 내보내고 다시 가져옵니다. 가져오기는 기존 대화를 덮어쓰지 않습니다 — "
+    + "언제나 새 대화로 들어옵니다."));
+  return bar;
+}
+
+
 function renderList() {
   if (S.view !== "list") return;
   const m = stream();
   while (m.firstChild) m.removeChild(m.firstChild);
+
+  m.appendChild(listBar());
 
   const wrap = el("div", "chatlist");
 
@@ -1025,6 +1135,12 @@ function renderList() {
                                         + (c.id === S.chatId ? " · 지금 보는 중" : "")));
     open.addEventListener("click", () => openChat(c.id));
     row.appendChild(open);
+
+    const keep = el("button", "keep", "내보내기");
+    keep.type = "button";
+    keep.title = "이 대화를 zip 한 덩어리로 받습니다(보관 기록까지 들어있습니다).";
+    keep.addEventListener("click", () => exportChat(c, keep));
+    row.appendChild(keep);
 
     const del = el("button", "del", "삭제");
     del.type = "button";
