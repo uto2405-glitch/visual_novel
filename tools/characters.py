@@ -288,6 +288,22 @@ def ref_path(cid: str, rel: str) -> Path | None:
     return REFS / _require_id(cid) / name
 
 
+def resolve_ref(rel: str):
+    """``project/characters/refs/OC-001/x.png`` 같은 기록 → **실제 파일**(없으면 None).
+
+    기록된 문자열은 저장소 상대경로처럼 생겼지만, 사진은 비공개 폴더(저장소 밖)에
+    있을 수 있다. 그래서 문자열을 뿌리에 이어 붙이면 안 되고, 이 모듈이 아는 REFS 로
+    되짚어야 한다. 다른 도구(예: MakeFun 레퍼런스 업로드)도 이 함수를 쓴다 —
+    각자 이어 붙이기 시작하면 비공개 폴더를 켠 순간 그쪽만 조용히 못 찾는다.
+    """
+    text = str(rel or "").replace("\\", "/").strip()
+    parts = [x for x in text.split("/") if x]
+    if len(parts) < 2 or not is_id(parts[-2]):
+        return None
+    got = ref_path(parts[-2], parts[-1])
+    return got if got is not None and got.is_file() else None
+
+
 def _ext_of(data: bytes) -> str:
     for head, ext in _MAGIC:
         if data.startswith(head):

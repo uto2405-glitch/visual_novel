@@ -942,6 +942,27 @@ function sceneBar() {
   bar.appendChild(el("span", "note", "그림체"));
   bar.appendChild(sel);
 
+  /* 그림 엔진 — 무료(이 기계)와 유료(MakeFun)를 **누르기 전에** 고르게 한다.
+   * 엔진을 설정 화면에 숨겨 두면, 사람은 [그림 뽑기] 를 누른 **뒤에** 돈이 나갔다는 걸 안다. */
+  const eng = el("select", "styleSel");
+  eng.id = "engSel";
+  const have = ((S.state && S.state.image) || {}).engines || ["comfyui"];
+  const now = ((S.state && S.state.image) || {}).engine || "comfyui";
+  have.forEach((k) => {
+    const o = el("option", null, k === "makefun" ? "MakeFun · 유료" : "이 기계 · 무료");
+    o.value = k;
+    if (k === (S.engine || now)) o.selected = true;
+    eng.appendChild(o);
+  });
+  eng.addEventListener("change", () => {
+    S.engine = eng.value;
+    addNote(S.engine === "makefun"
+      ? "이제 [그림 뽑기] 는 MakeFun 으로 갑니다 — 유료입니다. 누를 때 한 번 더 확인합니다."
+      : "이제 [그림 뽑기] 는 이 기계의 GPU 로 굽습니다 — 돈은 들지 않습니다.");
+  });
+  bar.appendChild(el("span", "note", "엔진"));
+  bar.appendChild(eng);
+
   const all = el("button", "keep", "그림 없는 장면 전부 · 한 장씩");
   all.type = "button";
   all.id = "genAll";
@@ -1207,11 +1228,30 @@ async function approve(sid, btn) {
 async function genFor(sid, btn, want) {
   if (S.gen) return;
   const n = Math.max(1, Math.min(parseInt(want, 10) || 1, 4));
+  const engine = S.engine || "";
+  /* 무엇이 드는지, 무엇이 밖으로 나가는지 **누르기 전에** 묻는다.
+   * 돈과 사진은 되돌릴 수 없는 종류다 — 되돌릴 수 없는 것은 먼저 말한다. */
+  let sendFace = false;
+  if (engine === "makefun") {
+    let cost = {};
+    try { cost = await api("/api/gen-cost", { scene_id: sid, engine: engine }); } catch (e) { cost = {}; }
+    if (!window.confirm(
+      sid + " 을 MakeFun 으로 " + n + "장 굽습니다.\n\n"
+      + (cost.note || "유료 호출입니다 — 크레딧이 차감됩니다.") + "\n\n계속할까요?")) return;
+    if ((cost.faces || []).length) {
+      sendFace = window.confirm(
+        (cost.faces || []).map((f) => f.name || f.id).join(", ")
+        + " 의 사진을 함께 보낼까요?\n\n" + (cost.face_note || "")
+        + "\n\n[확인] 사진을 올려서 얼굴을 맞춥니다 · [취소] 사진 없이 글로만 굽습니다");
+    }
+  }
   S.gen = true;
   if (btn) btn.disabled = true;
-  liveShow(sid + " · " + n + "장 요청 — 한 장에 약 23초", [genStopBtn(sid)], 0);
+  liveShow(sid + " · " + n + "장 요청 — " + (engine === "makefun" ? "MakeFun · 유료" : "한 장에 약 23초"),
+           [genStopBtn(sid)], 0);
   try {
-    await api("/api/gen-image", { scene_id: sid, n: n });
+    await api("/api/gen-image", { scene_id: sid, n: n, engine: engine || undefined,
+                                  send_face: sendFace });
   } catch (e) {
     liveHide();
     addNote(String(e.message || e), true);

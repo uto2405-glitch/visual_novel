@@ -765,9 +765,19 @@ def _ref_to_url(ref, upload: bool, quiet: bool) -> str:
     if not upload:
         return ""
     try:
-        p = Path(text).expanduser()
+        # 고유 캐릭터의 사진은 **저장소 밖**(비공개 폴더)에 있을 수 있다. 그 자리를 아는
+        # 곳은 characters 하나뿐이라 먼저 물어본다 — 여기서 뿌리에 이어 붙이면
+        # 비공개 폴더를 켠 순간 이 경로만 조용히 사진을 못 찾는다.
+        got = None
+        try:
+            import characters                                  # noqa: PLC0415 (계층 1)
+            got = characters.resolve_ref(text)
+        except Exception:                                      # 그 모듈이 없어도 예전대로 돈다
+            got = None
+        p = got if got is not None else Path(text).expanduser()
         # 저장소 상대경로는 밖으로 나가지 못하게 걸러서 연다(매니페스트도 결국 데이터다).
-        p = p if p.is_absolute() else safe_path(ROOT, text)
+        if got is None:
+            p = p if p.is_absolute() else safe_path(ROOT, text)
         return upload_file(p, quiet=quiet)
     except (RuntimeError, OSError) as exc:
         log.warning("레퍼런스 업로드 실패 — 이 장은 빼고 생성합니다: %s (%s)", text[:80], exc)

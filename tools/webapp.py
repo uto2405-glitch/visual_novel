@@ -1212,6 +1212,42 @@ def _progress(sid: str, label: str, engine: str | None = None):
     return on_progress
 
 
+def r_gen_cost(b):
+    """이 장면을 이 엔진으로 구우면 무엇이 드는가 — 누르기 **전에** 보여 줄 사실.
+
+    **숫자를 지어내지 않는다.** MakeFun 의 장당 크레딧은 공급자가 공개하지 않았고
+    (docs/MAKEFUN_CAPABILITIES.md §1), 저장소 어디에도 근거가 없다. 근거 없는 숫자를
+    띄우면 사람은 그걸 믿고 결정한다. 그래서 '유료다' 와 '무엇이 나가는가' 만 말한다.
+    """
+    engine = str(b.get("engine") or image_gen.active_engine()).lower()
+    if engine not in image_gen.ENGINES:
+        raise VNError("알 수 없는 이미지 엔진입니다: %r" % str(b.get("engine"))[:40])
+    sc = _load_scene(b.get("scene_id")) if b.get("scene_id") else {}
+    faces = []
+    for cid in (sc.get("characters") or []):
+        if characters.exists(cid):
+            try:
+                oc = characters.get(cid)
+            except VNError:
+                continue
+            if oc.get("reference_images"):
+                faces.append({"id": cid, "name": oc.get("name", ""),
+                              "photos": len(oc.get("reference_images") or [])})
+    if engine == "makefun":
+        return {"engine": engine, "billable": True, "credits": None,
+                "faces": faces,
+                "note": ("유료 호출입니다 — 크레딧이 차감됩니다. 장당 얼마인지는 공급자가 "
+                         "공개하지 않아 이 화면은 숫자를 지어내지 않습니다(계정 화면의 "
+                         "가격표를 확인하세요)."),
+                "face_note": ("이 인물의 사진을 MakeFun 서버로 **올려서** 얼굴을 맞춥니다 — "
+                              "사진이 이 기계 밖으로 나갑니다. 끄면 사진 없이 글로만 굽습니다."
+                              if faces else "")}
+    return {"engine": engine, "billable": False, "credits": 0, "faces": faces,
+            "note": "이 기계의 GPU 로 굽습니다 — 돈은 들지 않습니다(한 장에 20~90초).",
+            "face_note": ("등록한 사진으로 얼굴을 잡습니다(PhotoMaker) — 사진은 이 기계의 "
+                          "ComfyUI 로만 갑니다." if faces else "")}
+
+
 def r_image_engine(b):
     """이미지 엔진 상태 — {engine, provider, ok, detail, checkpoints, model, billable}.
 
@@ -1421,12 +1457,19 @@ def r_gen_image(b):
                         f"({str(exc)[:60]}). 파일은 images/raw 에 있습니다.")
             gen_jobs.note(sid, note, done=done, want=want)
 
+        extra = {}
+        if engine == "makefun":
+            # **사진은 기본으로 나가지 않는다.** MakeFun 의 인물 일관성은 레퍼런스를
+            # 그쪽 저장소(R2)에 올려서 쓰는데, 그 레퍼런스가 사람의 진짜 얼굴 사진이다.
+            # 기본을 '보낸다' 로 두면 엔진을 한 번 바꾼 것만으로 얼굴이 밖으로 나간다.
+            # 화면이 그 사실을 말하고 사람이 켤 때만 보낸다.
+            extra["reference"] = bool(b.get("send_face"))
         return image_gen.generate_for_scene(
             sid, n=n, engine=engine,
             on_progress=_progress(sid, "생성", engine),
             on_each=_each,
             face_photo=scene_face_photo(sc),
-            should_stop=lambda: gen_jobs.cancelled(sid))
+            should_stop=lambda: gen_jobs.cancelled(sid), **extra)
 
     return gen_jobs.start(
         sid, work, "생성", sync=bool(b.get("sync")), count=_candidates(sc),
@@ -1743,7 +1786,7 @@ POST_ROUTES = {
     "/api/oc": r_oc_list, "/api/oc-save": r_oc_save, "/api/oc-delete": r_oc_delete,
     "/api/oc-photo": r_oc_photo, "/api/oc-photo-delete": r_oc_photo_delete,
     "/api/cast": r_cast, "/api/oc-from-chat": r_oc_from_chat,
-    "/api/compose-text": r_compose_text,
+    "/api/compose-text": r_compose_text, "/api/gen-cost": r_gen_cost,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/export-pwa": r_export_pwa,

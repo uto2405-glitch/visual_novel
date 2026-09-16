@@ -7386,6 +7386,96 @@ def w39(b: Box):
     eq(b.code("/api/compose-text", {"text": "짧다"}), 400, "너무 짧은 글로 조립을 시작했다")
 
 
+@test("webapp", "W40 MakeFun 선택 — 돈이 드는지 먼저 말하고, 얼굴 사진은 허락 없이 밖으로 나가지 않는다", web=True)
+def w40(b: Box):
+    """장면 탭에서 엔진을 고를 수 있게 되면 **두 가지가 한 번의 클릭 뒤로 숨는다**:
+    돈과 사진.
+
+    돈 — MakeFun 은 유료다. 엔진을 설정 화면에 숨겨 두면 사람은 [그림 뽑기] 를 누른
+    **뒤에** 돈이 나갔다는 걸 안다. 그래서 누르기 전에 물어볼 수 있는 자리(/api/gen-cost)를
+    두고, 거기서 **숫자를 지어내지 않는다** — 장당 크레딧은 공급자가 공개하지 않았고
+    (docs/MAKEFUN_CAPABILITIES.md §1) 근거 없는 숫자를 띄우면 사람은 그걸 믿고 결정한다.
+
+    사진 — MakeFun 의 인물 일관성은 레퍼런스를 **그쪽 저장소(R2)에 올려서** 쓴다.
+    그 레퍼런스가 사람의 진짜 얼굴 사진이다. 기본을 '보낸다' 로 두면 엔진을 한 번 바꾼
+    것만으로 얼굴이 이 기계 밖으로 나간다. 그래서 기본은 **안 보낸다** 이고, 화면이
+    묻고 사람이 켤 때만 실린다.
+
+    이 검사는 **실호출을 하지 않는다**(유료다). 라우트가 무엇을 말하고 무엇을 넘기는지만 본다.
+    """
+    code, got = b.wapi("/api/gen-cost", {"engine": "comfyui"})
+    eq(code, 200, "비용 안내 라우트가 없다")
+    eq(got.get("billable"), False, "이 기계에서 굽는데 유료라고 한다")
+    ok(str(got.get("note") or "").strip(), "무료라는 사실만 말하고 이유를 안 말한다")
+
+    code, got = b.wapi("/api/gen-cost", {"engine": "makefun"})
+    eq(code, 200, "MakeFun 비용 안내가 없다")
+    eq(got.get("billable"), True, "유료인데 유료라고 안 한다")
+    eq(got.get("credits"), None,
+       "장당 크레딧을 숫자로 말한다 — 근거가 없는 숫자다(공급자가 공개하지 않았다)")
+    note = str(got.get("note") or "")
+    ok("유료" in note, "무엇이 드는지 말하지 않는다: %r" % note[:80])
+    ok(not re.search(r"\d+\s*(크레딧|credit)", note),
+       "근거 없는 크레딧 숫자가 문구에 들어 있다: %r" % note[:120])
+
+    eq(b.code("/api/gen-cost", {"engine": "nosuchengine"}), 400, "모르는 엔진을 받아들였다")
+
+    # 얼굴 사진이 딸린 인물을 만들고, **동의 없이는 실리지 않는지** 본다
+    code, made = b.wapi("/api/oc-save", {"fields": {"name": "W40 사람"}})
+    cid = (made.get("character") or {}).get("id", "")
+    png = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4z8AAAAMBAQAY3Y2w"
+           "AAAAAElFTkSuQmCC")
+    eq(b.code("/api/oc-photo", {"id": cid, "b64": png}), 200, "사진 등록 실패")
+    code, sc = b.wapi("/api/scene-add", {"fields": {"purpose": "W40"}})
+    sid = sc.get("scene_id")
+    b.wapi("/api/set-scene", {"scene_id": sid, "fields": {"characters": [cid]}})
+
+    code, cost = b.wapi("/api/gen-cost", {"scene_id": sid, "engine": "makefun"})
+    names = [f.get("id") for f in (cost.get("faces") or [])]
+    eq(names, [cid], "이 장면에 사진 있는 인물이 있는데 안 알려 준다")
+    ok("밖으로" in str(cost.get("face_note") or ""),
+       "사진이 기계 밖으로 나간다는 사실을 말하지 않는다: %r" % str(cost.get("face_note"))[:100])
+
+    # 라우트가 makefun 에 **무엇을 넘기는가** — 실호출 대신 가짜 엔진으로 가로채서 본다.
+    #
+    # 웹으로 부르지 않는 이유: 이 검사의 웹 서버는 **다른 프로세스**라 여기서 갈아 끼운
+    # 가짜가 그쪽에 닿지 않는다. 라우트 함수는 평범한 파이썬이므로 같은 프로세스에서
+    # 직접 부른다(디스크는 서버와 같은 것을 본다).
+    wb = b.mod("webapp")
+    real = wb.image_gen.generate_for_scene
+    seen: dict = {}
+
+    def fake(sid_, **kw):
+        seen.clear()
+        seen.update(kw)
+        raise RuntimeError("여기서 멈춘다 — 유료 경로는 실호출하지 않는다")
+
+    try:
+        wb.image_gen.generate_for_scene = fake
+        for body, want, why in (
+                ({"scene_id": sid, "engine": "makefun", "sync": True}, False,
+                 "동의하지 않았는데 레퍼런스(얼굴 사진)를 보내라고 넘겼다"),
+                ({"scene_id": sid, "engine": "makefun", "sync": True, "send_face": True}, True,
+                 "동의했는데 사진을 안 보낸다")):
+            seen.clear()
+            try:
+                wb.r_gen_image(body)
+            except Exception:
+                pass                      # 가짜가 일부러 터뜨린다 — 우리가 볼 것은 넘긴 값이다
+            eq(seen.get("reference"), want, why)
+        seen.clear()
+        try:
+            wb.r_gen_image({"scene_id": sid, "engine": "comfyui", "sync": True})
+        except Exception:
+            pass
+        ok("reference" not in seen,
+           "이 기계로 구울 때까지 레퍼런스 스위치를 건드린다 — 예전 동작이 달라진다")
+    finally:
+        wb.image_gen.generate_for_scene = real
+        b.wapi("/api/scene-delete", {"scene_id": sid})
+        b.wapi("/api/oc-delete", {"id": cid})
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
