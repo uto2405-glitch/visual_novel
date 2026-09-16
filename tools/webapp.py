@@ -403,6 +403,20 @@ def _chat_timeout(wait: dict):
     return local_llm.QUEUE_TIMEOUT if wait.get("busy") else None
 
 
+def _log_mark(path) -> tuple:
+    """대화 로그의 '지금 모습' 표 — (발화 수, 크기, 수정시각).
+
+    답을 기다리는 1~2분 사이에 그 로그가 **다른 기기에서** 바뀔 수 있다. 지워지거나,
+    [수정]·[다시 생성]으로 짧아지거나. 그 뒤에 이 답을 그냥 붙이면 방금 지운 말이
+    되살아난다 — 그것도 보관 기록은 이미 떠난 반쪽으로.
+    """
+    try:
+        st = path.stat()
+        return (len(talk_store.load_log(path)), st.st_size, st.st_mtime_ns)
+    except OSError:
+        return (0, 0, 0)
+
+
 def do_chat(messages: list[dict], chat_id: str = "") -> str:
     """스토리 챗 1턴 — 프롬프트 조립은 prompt_build, 모델 선택은 vn_compose 담당.
 
@@ -422,9 +436,20 @@ def do_chat(messages: list[dict], chat_id: str = "") -> str:
     # 매번 보내면 기기마다 다른 값이 오가고, 어느 쪽이 맞는지 알 수 없게 된다.
     sys_msg = prompt_build.story_system_message(talk_store.chat_use_context(chat_id))
     window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
+    before = _log_mark(path)
     reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000,
                                  timeout=_chat_timeout(llm_queue_wait()))
     with WRITE_LOCK:
+        # **기다리는 사이에 바뀌었는가.** 검사를 모델 앞에만 두면 늦다 — 지우기·자르기는
+        # 정확히 그 1~2분 사이에 다른 기기에서 일어난다(폰에서 지우고 PC 가 답을 받는 식).
+        if talk_store.is_deleted_chat(cid):
+            raise VNError("답을 기다리는 사이 이 대화가 삭제되었습니다 — 답을 붙이지 않았습니다.")
+        after = _log_mark(path)
+        if after[0] < before[0]:
+            # 짧아졌다 = 사람이 [수정]·[다시 생성]으로 뒤를 걷어냈다. 여기서 클라이언트가
+            # 보낸 옛 목록으로 병합하면 방금 걷어낸 말이 그대로 되살아난다.
+            raise VNError("답을 기다리는 사이 이 대화가 바뀌었습니다(다른 기기에서 수정했거나 "
+                          "다시 생성했습니다) — 이 답은 붙이지 않았습니다. 다시 물어보세요.")
         # 인물 대화와 같은 규칙: 클라이언트가 보낸 목록으로 덮어쓰지 않고 저장본과 병합한다.
         # (/api/state 가 더 이상 챗로그를 싣지 않으므로, 병합이 없으면 새 탭에서 보낸
         #  첫 메시지가 지난 대화를 통째로 지웠을 것이다.)

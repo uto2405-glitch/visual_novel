@@ -1516,6 +1516,25 @@ function pasteBox() {
   return wrap;
 }
 
+/* 지금 사람이 무언가 쓰고 있는가 — 다시 그리면 그것이 사라진다.
+ *
+ * renderTalk 은 #stream 을 통째로 비우고 다시 그린다. 그런데 거기에는 사람이 입력 중인
+ * 것들이 같이 산다: 수정 중인 문장, 모델이 꺼졌을 때 다른 데서 받아 붙여넣은 JSON.
+ * 그 JSON 은 사람이 **다른 기기에서 몇 분 걸려 받아 온 것**이라, 지워지면 다시 받는 수밖에 없다.
+ *
+ * 상태 칩은 30초마다 돌고, 조립이 모델을 잡고 있으면 그 확인이 답을 못 받아 '꺼짐' 으로
+ * 보였다가 돌아오기를 반복한다 — 그때마다 다시 그렸다. 하필 모델이 바쁨 때, 하필 그 때를
+ * 위해 만든 붙여넣기 화면에서. */
+function isTyping() {
+  const nodes = document.querySelectorAll("#stream textarea, #stream input");
+  for (let i = 0; i < nodes.length; i += 1) {
+    const n = nodes[i];
+    if (n === document.activeElement) return true;
+    if (String(n.value || "").trim()) return true;
+  }
+  return false;
+}
+
 function renderTalk() {
   if (S.view !== "talk") return;
   const m = stream();
@@ -1590,7 +1609,9 @@ async function probe() {
     llm.className = "chip " + (up ? "ok" : "bad");
     const wasDown = S.llmDown;
     S.llmDown = !up;
-    if (wasDown !== S.llmDown && S.view === "talk") renderTalk();
+    /* 쓰고 있는 중이면 다시 그리지 않는다. 칩은 이미 갱신됐고(위에서), 붙여넣기
+     * 화면은 다음번 확인 때나 탭을 옮길 때 열린다 — 쓰던 글을 날리는 것보다 달다. */
+    if (wasDown !== S.llmDown && S.view === "talk" && !isTyping()) renderTalk();
   } catch (e) { llm.textContent = "글자 확인 실패"; llm.className = "chip bad"; }
   try {
     const d = await api("/api/image-engine", {});

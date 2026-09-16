@@ -113,8 +113,15 @@ def _extract_json_array(text: str):
     vals = _json_values(body)
     if not vals:
         raise ValueError("JSON 배열 없음")
-    for v in vals:                                   # ① 진짜 배열
-        if isinstance(v, list):
+    # ① 진짜 배열 — 단, **장면처럼 생긴 것이 하나라도 들어 있어야** 한다.
+    #
+    # 응답이 장면 한가운데서 잘리면 바깥 객체는 파싱에 실패하고, 안쪽의 dialogue 배열만
+    # 온전하게 남는다. 그걸 그냥 집으면 [{speaker_id, line}] 가 '장면 목록' 이 돼서,
+    # purpose·camera·image_prompt 가 전부 빈 껍데기 장면이 저장된다. 저장할 때 order 가
+    # 1..N 으로 다시 부여되므로 **구멍의 흔적조차 안 남는다.** 몇 분을 들인 장면이
+    # 조용히 사라지는 것보다는, 못 읽었다고 말하고 멈추는 편이 낫다.
+    for v in vals:
+        if isinstance(v, list) and any(_looks_like_scene(x) for x in v):
             return v
     for v in vals:                                   # ② 한 겹 포장된 배열
         if isinstance(v, dict) and not _looks_like_scene(v):
@@ -623,9 +630,63 @@ class _SceneStream:
         self.start = -1
         self.in_str = False
         self.esc = False
+        # 혼잣말 문(門). "start" 면 아직 판단 전, "think" 면 혼잣말을 흘려보내는 중,
+        # "open" 이면 진짜 답이 나오는 중이다. 아래 feed 의 주석 참고.
+        self.gate = "start"
+        self.pre = ""
+
+    # 사고 과정은 화면에 닿지 않는다 — 그 규칙이 여기서만 거짓이었다.
+    #
+    # 반환값 쪽은 strip_reasoning 이 걷어 낸다. 그런데 **스트리밍 콜백에는 날것이 그대로**
+    # 흘러온다. 그래서 모델이 혼잣말 안에서 장면 초안을 써 보면, 그 초안이 진짜 장면으로
+    # 집계돼 화면에 뜨고("3컷 나왔습니다"), [받은 것으로 마무리] 를 누르면 파일로 저장되고,
+    # [이어서 더 받기] 는 start = len(items)+1 로 계산하므로 **진짜 장면 한 컷을 건너뛴다.**
+    #
+    # 판단 기준은 '여는 태그가 있는가' 가 **아니다.** 이 모델의 템플릿은 <think> 를 프롬프트
+    # 쪽에 붙이므로, 실제로 오는 모양은 여는 태그 없이 혼잣말이 먼저 나오고 </think> 로 끝나는
+    # 것이다("음 뭐라 하지… </think> 진짜답"). 그래서 앞글자만 보고 판단한다:
+    #
+    #   첫 글자가 '[' 나 '{' 다  → 답이 바로 시작됐다. 혼잣말이 없다. 그대로 흘린다.
+    #   그 외                    → 앞은 혼잣말이다. **</think> 가 올 때까지 한 글자도 안 내보낸다.**
+    #
+    # </think> 가 끝내 안 오면 이 화면은 장면을 하나도 못 보여 준다. 그건 받아들인다 —
+    # 잃는 것은 '도착하는 대로 보기' 뿐이고, 최종 파싱은 전문을 다시 읽으므로(그쪽은
+    # strip_reasoning 을 거친다) **장면 자체는 하나도 안 잃는다.** 반대쪽 실패(초안을 진짜로
+    # 세는 것)는 파일과 이어받기 번호를 망친다. 둘 중 잃어도 되는 쪽을 고른 것이다.
+    _GATE_PEEK = 8           # 앞글자를 판단하는 데 이 정도면 충분하다(코드펜스 포함)
+    _GATE_CAP = 200_000      # 닫히지 않는 혼잣말이 메모리를 먹지 않게
+
+    def _ungate(self, piece: str):
+        """혼잣말 구간을 걷어낸 조각. 아직 판단 중이거나 혼잣말 중이면 None."""
+        if self.gate == "open":
+            return piece
+        self.pre += piece
+        if self.gate == "start":
+            head = re.sub(r"^```(?:json)?\s*", "", self.pre.lstrip())
+            if head[:1] in ("[", "{"):
+                self.gate = "open"          # 답이 바로 시작됐다 — 모아 둔 것을 그대로 넘긴다
+                out, self.pre = self.pre, ""
+                return out
+            if len(head) < self._GATE_PEEK:
+                return None                 # 아직 짧다 — 한 조각 더 본다
+            self.gate = "think"             # 앞이 JSON 이 아니다 = 혼잣말이다
+        if self.gate == "think":
+            i = self.pre.find("</think>")
+            if i < 0:
+                if len(self.pre) > self._GATE_CAP:
+                    self.pre = self.pre[-16:]   # 앞은 버리고 꼬리만(태그가 걸쳐 잘리지 않게)
+                return None
+            out = self.pre[i + len("</think>"):]
+            self.pre = ""
+            self.gate = "open"
+            return out
+        return None
 
     def feed(self, piece: str) -> None:
-        for ch in str(piece or ""):
+        piece = self._ungate(str(piece or ""))
+        if piece is None:
+            return
+        for ch in piece:
             self.buf.append(ch)
             i = len(self.buf) - 1
             if self.in_str:

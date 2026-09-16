@@ -6392,6 +6392,129 @@ def u44(b: Box):
        "줄 확인이 자기 등록보다 뒤에 있다 — 모든 호출이 자기 자신 때문에 큰 상한을 쓴다")
 
 
+@test("unit", "U45 조립 파서 — 혼잣말을 장면으로 세지 않고, 잘린 응답에서 대사를 장면으로 줍지 않는다")
+def u45(b: Box):
+    """둘 다 **가짜 장면이 진짜 파일로 저장되던** 길이다.
+
+    (1) 스트리밍 콜백에는 날것이 흘러온다. 반환값 쪽은 strip_reasoning 이 걷어 내지만
+        여기는 아니었다 — 모델이 혼잣말 안에서 장면 초안을 써 보면 그게 "3컷 나왔습니다"
+        로 집계되고, [받은 것으로 마무리] 를 누르면 파일이 되고, [이어서 더 받기] 는
+        start = len(items)+1 이라 **진짜 장면 한 컷을 건너뛴다.**
+
+        판단 기준이 '여는 태그가 있는가' 면 안 된다. 이 모델은 <think> 를 프롬프트 쪽에
+        붙이므로 실제로 오는 모양은 **여는 태그 없이** 혼잣말이 먼저 나오고 </think> 로
+        끝나는 것이다. 그래서 앞글자를 본다: '[' 나 '{' 면 답이 바로 시작된 것이고,
+        아니면 </think> 가 올 때까지 한 글자도 내보내지 않는다.
+
+    (2) 응답이 장면 한가운데서 잘리면 바깥 객체는 파싱에 실패하고 **안쪽 dialogue 배열만**
+        온전하게 남는다. 그걸 집으면 [{speaker_id, line}] 이 '장면 목록' 이 되어 purpose·
+        camera·image_prompt 가 전부 빈 껍데기 장면이 저장된다. 저장할 때 order 가 1..N 으로
+        다시 부여되므로 **구멍의 흔적조차 안 남는다.**
+    """
+    vc = b.mod("vn_compose")
+    S1 = ('{"order":1,"purpose":"진짜1","dialogue":[],"camera":"medium",'
+          '"image_prompt":"a girl"}')
+    S2 = ('{"order":2,"purpose":"진짜2","dialogue":[],"camera":"wide",'
+          '"image_prompt":"a boy"}')
+    DRAFT = ('{"order":9,"purpose":"초안","dialogue":[],"camera":"wide",'
+             '"image_prompt":"draft"}')
+
+    # (1) 조각 크기를 바꿔 가며 — 실제 SSE 는 조각 경계가 어디든 올 수 있다
+    cases = [
+        ("여는 태그 없는 혼잣말",
+         "음 뭐라 하지 " + DRAFT + " 아니고</think>[" + S1 + "," + S2 + "]",
+         ["진짜1", "진짜2"]),
+        ("<think> 로 시작", "<think>" + DRAFT + "</think>[" + S1 + "]", ["진짜1"]),
+        ("혼잣말 없음", "[" + S1 + "," + S2 + "]", ["진짜1", "진짜2"]),
+        ("코드펜스", "```json\n[" + S1 + "]", ["진짜1"]),
+        ("혼잣말만(안 닫힘)", "음 생각중 " + DRAFT + " 계속", []),
+    ]
+    for label, text, want in cases:
+        for size in (1, 7, 64, 10 ** 6):
+            got = []
+            st = vc._SceneStream(lambda o: got.append(o.get("purpose")))
+            for i in range(0, len(text), size):
+                st.feed(text[i:i + size])
+            eq(got, want, "%s (조각 %s자) 에서 장면 집계가 틀렸다" % (label, size))
+
+    # (2) 잘린 응답 — 대사 배열을 장면 목록으로 줍지 않는다
+    truncated = '[' + S1[:-18] + ', "image_prompt":"a gi'
+    try:
+        got = vc._extract_json_array(truncated)
+        ok(False, "잘린 응답에서 %r 를 장면 목록으로 집었다 — 빈 껍데기가 저장된다" % (got,))
+    except ValueError:
+        pass
+    try:
+        vc._extract_json_array('[{"speaker_id":"CHAR-001","line":"안녕"}]')
+        ok(False, "대사 배열을 장면 목록으로 집었다")
+    except ValueError:
+        pass
+
+    # 멀쩡한 세 모양은 그대로 읽는다 (실측에서 7회 중 3·2·2 로 나뉘던 모양들)
+    eq(len(vc._extract_json_array('[' + S1 + ',' + S2 + ']')), 2, "진짜 배열을 못 읽는다")
+    eq(len(vc._extract_json_array('{"scenes":[' + S1 + ']}')), 1, "포장된 배열을 못 읽는다")
+    eq(len(vc._extract_json_array(S1 + "\n" + S2)), 2, "객체 나열을 못 읽는다")
+
+
+@test("unit", "U46 답을 기다리는 사이 대화가 바뀌면 그 답을 붙이지 않는다")
+def u46(b: Box):
+    """검사가 **모델 앞에만** 있었다. 그런데 지우기·자르기는 정확히 그 1~2분 사이에
+    다른 기기에서 일어난다 — 폰에서 지우고 PC 가 답을 받는 식이다.
+
+    그러면 두 가지가 일어났다. 지운 대화가 **되살아나고**(보관 기록은 이미 떠난 반쪽으로),
+    [수정]·[다시 생성] 으로 걷어낸 말이 클라이언트가 보낸 옛 목록을 통해 **다시 붙었다.**
+    사용자는 지운 답이 되살아나 같은 질문에 두 개의 답이 어긋난 순서로 남은 것을 본다.
+
+    답 하나를 버리는 쪽을 고른다 — 다시 물어보면 되지만, 되살아난 말은 손으로 지워야 하고
+    그 사이 보관 기록은 이미 갈라져 있다.
+    """
+    import threading
+    import time as _t
+    web = b.mod("webapp")
+    ts = b.mod("talk_store")
+    vc = b.mod("vn_compose")
+    web.talk_store, web.vn_compose = ts, vc
+
+    msgs = [{"role": "user", "content": "첫 말"},
+            {"role": "assistant", "content": "답1"},
+            {"role": "user", "content": "둘째 말"}]
+    real = vc.orch_chat
+    try:
+        vc.orch_chat = lambda *a, **k: (_t.sleep(0.5), "느린 답")[1]
+
+        # (1) 기다리는 사이 삭제되면 붙이지 않는다
+        ts.save_log(ts.story_chat_path_for("u46del"), msgs)
+        th = threading.Timer(0.15, lambda: ts.delete_story_chat("u46del"))
+        th.start()
+        try:
+            web.do_chat(msgs, "u46del")
+            ok(False, "지워진 대화에 답을 붙였다 — 지운 대화가 되살아난다")
+        except Exception as e:
+            ok("삭제" in str(e), "거절 사유가 삭제라고 말하지 않는다: %s" % str(e)[:60])
+        th.join()
+
+        # (2) 기다리는 사이 짧아지면 붙이지 않는다 (옛 목록으로 되살리지 않는다)
+        ts.save_log(ts.story_chat_path_for("u46trim"), msgs)
+        th = threading.Timer(0.15,
+                             lambda: ts.truncate_log(ts.story_chat_path_for("u46trim"), 1))
+        th.start()
+        try:
+            web.do_chat(msgs, "u46trim")
+            ok(False, "잘린 대화에 옛 목록을 병합했다 — 걷어낸 말이 되살아난다")
+        except Exception as e:
+            ok("바뀌" in str(e), "거절 사유를 말하지 않는다: %s" % str(e)[:60])
+        th.join()
+        eq(len(ts.load_log(ts.story_chat_path_for("u46trim"))), 1,
+           "잘린 대화가 다시 길어졌다 — 되살아났다")
+
+        # (3) 아무 일도 없으면 평소대로 저장된다
+        ts.save_log(ts.story_chat_path_for("u46ok"), msgs)
+        eq(web.do_chat(msgs, "u46ok"), "느린 답", "평범한 경우가 막혔다")
+        eq(len(ts.load_log(ts.story_chat_path_for("u46ok"))), 4, "답이 저장되지 않았다")
+    finally:
+        vc.orch_chat = real
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
