@@ -84,7 +84,7 @@ BANNED_DOM = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
 #  meta T01 이 이 목록을 두 방향으로 감시한다: 파일 존재·적재 + optional 되돌림 금지.)
 REQUIRED_MODULES = (
     "vn_core", "advance_scene", "scene_ops", "talk_store", "prompt_build", "local_llm",
-    "works", "characters",
+    "works", "characters", "sources",
     "webapp", "vn_compose", "export_viewer", "makefun_client", "scene_lint",
     "secret_scan", "backup_project", "print_preflight", "gen_jobs",
     # 여기 없으면 '구문 검사만 받고 아무도 부르지 않는' 상태가 조용히 유지된다.
@@ -115,7 +115,7 @@ LAYER = {
     "vn_core": 0, "check_protocol": 0,
     # 1 저장소·전송 계층 — vn_core 만 본다. gen_common 은 두 이미지 클라이언트가 함께 쓰는
     #   결과형·메타·대장 조각이라 클라이언트보다 아래에 있어야 한다.
-    "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1, "works": 1, "characters": 1,
+    "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1, "works": 1, "characters": 1, "sources": 1,
     "scene_brief": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
     "gen_common": 1,
     # 2 조립·전이 계층
@@ -7754,6 +7754,102 @@ def u56(b: Box):
               '"dialogue":[{"speaker_id":"A","text":"이건 {중괄호} 와 \\"따옴표\\" 다"}],'
               '"image_prompt":"x"}')
     eq(stream("[" + tricky + "]"), [7], "대사 속 괄호·따옴표에 경계가 어긋난다")
+
+
+@test("unit", "U57 올린 소설 — cp949 도 읽고, 문장 중간에서 안 끊고, 같은 대목을 두 번 만들지 않는다")
+def u57(b: Box):
+    """이미 써 둔 소설은 대화창에 붙여 넣을 수가 없다 — 폰에서 30만 자를 붙여넣는 일도,
+    그걸 한 번에 모델에게 먹이는 일도 안 된다. 그래서 파일로 받아 **대목으로 나눠**
+    한 대목씩 장면으로 만든다.
+
+    세 가지가 조용히 틀리기 쉽다.
+
+    (1) **인코딩.** 한국어 텍스트 파일은 메모장에서 저장하면 cp949 인 경우가 많다.
+        UTF-8 로 억지로 읽으면 글자가 전부 깨진 채로 저장되고, 그 상태로 장면을 만들면
+        모델도 사람도 무슨 글인지 알 수 없다. 실제로 cp949 원고로 확인했다.
+
+    (2) **끊는 자리.** 문장 중간에서 끊으면 모델은 그 조각을 다른 이야기로 읽는다.
+        문단 → 줄 → 문장 끝 순으로 찾고, 그래도 없을 때만 글자 수로 끊는다.
+
+    (3) **진행.** 같은 대목을 두 번 만들면 장면이 겹쳐 쌓인다. 어디까지 만들었는지는
+        뒤로 가지 않는다(대화 조립의 composed_upto 와 같은 규칙이다).
+    """
+    src = b.mod("sources")
+    keep = src.DIR
+    src.DIR = b.root / "srctest"
+    try:
+        # (1) 인코딩 — cp949 · utf-8 · BOM 셋 다
+        body = ("비가 내리는 저녁이었다. 서점의 유리문에 빗방울이 흘러내렸다." * 6 + "\n\n") * 4
+        for enc, label in (("cp949", "cp949"), ("utf-8", "utf-8"), ("euc-kr", "cp949")):
+            got, name = src.decode(body.encode(enc))
+            ok("비가 내리는" in got, "%s 원고가 깨져서 읽혔다" % enc)
+            ok(name in (label, enc), "%s 를 %s 라고 읽었다" % (enc, name))
+        import codecs
+        eq(src.decode(codecs.BOM_UTF8 + body.encode("utf-8"))[1], "utf-8-sig", "BOM 을 못 알아본다")
+        eq(src.decode(body.encode("utf-8"))[1], "utf-8",
+           "BOM 이 없는데 있다고 말한다 — 사람이 자기 파일을 의심한다")
+        raises(lambda: src.decode(b""), label="빈 파일")
+        raises(lambda: src.decode(b"PK\x03\x04\x00\x00" + b"\x00" * 64), label="이진 파일")
+
+        # (2) 끊는 자리 — 문장 중간이 아니다
+        text = ("첫 문장이다. 둘째 문장이다. 셋째 문장이다.\n\n") * 120
+        chunks = src.split_chunks(text, budget=1200)
+        ok(len(chunks) >= 3, "긴 글이 안 나뉜다: %d" % len(chunks))
+        for c in chunks:
+            ok(c.strip(), "빈 대목이 생겼다")
+            ok(c.rstrip().endswith(("다.", "다", ".")),
+               "문장 중간에서 끊었다: …%r" % c[-24:])
+        eq("".join(c.replace("\n", "") for c in chunks).count("첫 문장이다"), 120,
+           "나누는 과정에서 글자가 사라지거나 늘었다")
+        # **문단 경계를 먼저 쓴다.** 문장 끝으로도 끊을 수는 있지만, 문단 한가운데서
+        # 끊으면 한 장면이 될 대목이 둘로 갈린다. 빈 줄이 있는 글에서는 모든 대목이
+        # 문단에서 끝나야 한다(문장 끝 폴백만 남아도 위 단정은 통과한다 — 실측).
+        whole = text.replace(chr(13), "").strip()
+        for c in chunks[:-1]:
+            ok((c + chr(10) * 2) in whole,
+               "문단 한가운데서 끊었다(문장 끝으로만 잘랐다): …%r" % c[-30:])
+        # 줄바꿈이 아예 없는 글도 받는다(끊을 자리가 없으면 글자 수로)
+        ok(len(src.split_chunks("가" * 5000, budget=1000)) >= 4, "한 덩어리 글을 못 나눈다")
+        eq(src.split_chunks("   "), [], "빈 글에서 대목을 만들었다")
+
+        # 짧은 꼬리는 앞에 붙인다 — 200자짜리 대목은 장면 하나도 못 만든다
+        tail = ("문단이다. " * 200) + "\n\n짧은 꼬리."
+        ok(all(len(c) > 300 for c in src.split_chunks(tail, budget=1500)),
+           "짧은 꼬리가 혼자 대목이 됐다")
+
+        # (3) 진행 — 뒤로 가지 않는다
+        # 기본 대목 예산(CHUNK_CHARS)보다 확실히 길게 — 대목이 여럿 나와야 진행을 볼 수 있다
+        # 문단마다 번호를 달아 **서로 다른 글**로 만든다. 같은 문단을 반복하면 대목 둘이
+        # 글자까지 똑같아져서 '같은 대목을 또 주는가' 를 볼 수 없다(처음에 그렇게 짰다).
+        long_text = "".join("%d번째 문단이다. 비가 내렸다. 서점 문이 열렸다.%s"
+                            % (i, chr(10) * 2) for i in range(1, 400))
+        ok(len(long_text) > src.CHUNK_CHARS * 2,
+           "시험 원고가 대목 하나에 다 들어간다(%d자) — 진행을 볼 수 없다" % len(long_text))
+        rec = src.save("u57chat", "비 오는 서점.txt", long_text.encode("cp949"))
+        eq(rec["encoding"], "cp949", "인코딩을 기록하지 않는다")
+        eq(rec["name"], "비 오는 서점.txt",
+           "보여 줄 이름을 경로 규칙으로 뭉갰다 — 자기 파일을 못 알아본다")
+        ok(rec["chunks"] >= 2, "대목 수가 기록되지 않았다")
+        first = src.next_chunk("u57chat", rec["id"])
+        eq(first["index"], 0, "처음이 0번 대목이 아니다")
+        src.mark_done("u57chat", rec["id"], 1)
+        second = src.next_chunk("u57chat", rec["id"])
+        eq(second["index"], 1, "다음 대목으로 안 넘어간다")
+        ok(second["text"] != first["text"], "같은 대목을 또 준다")
+        src.mark_done("u57chat", rec["id"], 0)          # 뒤로 밀어 본다
+        eq(src.load_state("u57chat", rec["id"])["done"], 1,
+           "진행이 뒤로 갔다 — 같은 대목을 두 번 만들게 된다")
+        eq(src.reset("u57chat", rec["id"])["done"], 0, "되돌리기가 안 된다")
+
+        # 목록·삭제
+        eq(len(src.list_for("u57chat")), 1, "올린 글 목록에 안 보인다")
+        src.delete("u57chat", rec["id"])
+        eq(src.list_for("u57chat"), [], "지웠는데 목록에 남아 있다")
+        raises(lambda: src.next_chunk("u57chat", rec["id"]), label="지운 글")
+        for bad in ("../../etc/passwd", "", "notanid"):
+            raises(lambda bad=bad: src.next_chunk("u57chat", bad), label="이상한 id %r" % bad)
+    finally:
+        src.DIR = keep
 
 
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)

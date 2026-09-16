@@ -54,6 +54,10 @@ project/characters/refs/
 # 지운 인물의 보관소에는 그 사진이 통째로 들어 있다.
 project/characters_deleted/
 
+# 사람이 올린 소설 원고 — 남의 글일 수도, 자기 글일 수도 있지만 어느 쪽이든
+# 저장소에 실릴 이유가 없다(원본은 올린 사람 손에 있다).
+project/story/sources/
+
 # 작품 보관소(works.py) — **장면은 추적하고 그림은 안 한다.**
 #
 # 장면 JSON 은 이 저장소에서 유일한 집 밖 사본이다(그림은 원래 제외된다).

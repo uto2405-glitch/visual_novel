@@ -329,6 +329,14 @@
       "description": "강을 따라 이어지는 산책로. 시간대(노을·밤)는 장면의 time 필드로 정하고 앵커에는 넣지 않는다.",
       "reference_images": [],
       "prompt_anchor": "riverside walkway along a wide river, promenade railing and low street lamps, city skyline across the water"
+    },
+    {
+      "location_id": "LOC-004",
+      "name": "동네 서점",
+      "version": 1,
+      "description": "",
+      "reference_images": [],
+      "prompt_anchor": "a small neighborhood bookstore, warm wooden shelves"
     }
   ],
   "props": []

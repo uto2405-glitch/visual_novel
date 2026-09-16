@@ -1517,6 +1517,7 @@ async function openChat(id) {
   const box = $("box");
   if (box) box.disabled = true;
   try {
+    await loadSources();
     const h = await api("/api/chat-history", { chat_id: want });
     /* 목록을 빠르게 두 번 누르면 두 요청이 겹친다. 늦게 온 응답이 지금 열린 대화를
      * 덮으면 A 의 내용이 B 이름 밑에 뜨고, 거기서 한 마디 보내면 두 대화가 합쳐진다. */
@@ -2090,8 +2091,14 @@ function renderTalk() {
   if (S.view !== "talk") return;
   const m = stream();
   while (m.firstChild) m.removeChild(m.firstChild);
-  if (isSecret(S.chatId)) m.appendChild(secretBanner());
-  else m.appendChild(ctxSwitch());
+  if (isSecret(S.chatId)) {
+    m.appendChild(secretBanner());
+    /* 시크릿 대화에는 글 올리기를 두지 않는다 — 올린 파일은 서버 디스크에 남고,
+     * 그 순간 "이 대화는 서버에 안 남는다" 는 약속이 깨진다. */
+  } else {
+    m.appendChild(ctxSwitch());
+    m.appendChild(sourceBar());
+  }
   if (S.llmDown) m.appendChild(pasteBox());
   if (!S.msgs.length) {
     addNote("이야기를 시작해 보세요. 예: \"고등학교 옥상에서 시작하는 짧은 연애물을 쓰고 싶어\"");
@@ -2106,6 +2113,144 @@ function renderTalk() {
     });
   }
   scrollEnd();
+}
+
+/* ---------------------------------------------------------------- 올린 글(소설)
+ *
+ * 이미 써 둔 소설은 대화창에 붙여 넣을 수가 없다 — 폰에서 30만 자를 붙여넣는 일도,
+ * 그걸 한 번에 모델에게 먹이는 일도 안 된다. 그래서 파일로 받아 **대목으로 나눠**
+ * 한 대목씩 장면으로 만든다.
+ *
+ * 한 번에 한 대목만 하는 이유: 사람이 결과를 보고 "이 톤이 맞나" 를 판단할 기회가
+ * 있어야 한다. 30만 자를 통째로 맡기면 10분 뒤에 마음에 안 드는 장면 40개를 받는다. */
+async function loadSources() {
+  try {
+    const d = await api("/api/sources", { chat_id: S.chatId || "" });
+    S.sources = (d && d.sources) || [];
+    S.sourceWhere = (d && d.where) || null;
+  } catch (e) {
+    S.sources = [];
+  }
+  return S.sources;
+}
+
+function sourceBar() {
+  const wrap = el("div", "srcbox");
+  const pick = el("label", "filepick");
+  pick.textContent = "소설 파일 올리기 (.txt · .md)";
+  const file = el("input");
+  file.type = "file";
+  file.accept = ".txt,.md,text/plain,text/markdown";
+  file.addEventListener("change", () => uploadSource(file));
+  pick.appendChild(file);
+  wrap.appendChild(pick);
+
+  (S.sources || []).forEach((src) => wrap.appendChild(sourceRow(src)));
+
+  if ((S.sources || []).length && S.sourceWhere && S.sourceWhere.path) {
+    const w = el("p", "note");
+    w.textContent = (S.sourceWhere.outside_repo ? "글 자리(저장소 밖): " : "글 자리: ")
+                    + S.sourceWhere.path;
+    wrap.appendChild(w);
+  }
+  return wrap;
+}
+
+function sourceRow(src) {
+  const row = el("div", "srcrow");
+  const done = Number(src.done || 0);
+  const total = Number(src.chunks || 0);
+  row.appendChild(el("p", "line", src.name + " · " + (src.chars || 0).toLocaleString()
+                                  + "자 · " + src.encoding));
+  const bar = el("p", "note", "대목 " + done + "/" + total
+                              + (done >= total ? " · 다 만들었습니다" : ""));
+  row.appendChild(bar);
+
+  const acts = el("div", "row");
+  if (done < total) {
+    const go = el("button", "go", "다음 대목 장면으로 (" + (done + 1) + "/" + total + ")");
+    go.type = "button";
+    go.title = "이 대목만 장면으로 만듭니다. 결과를 보고 이어서 다음 대목을 누르세요.";
+    go.addEventListener("click", () => composeSource(src, go));
+    acts.appendChild(go);
+  }
+  if (done > 0) {
+    const again = el("button", null, "진행 되돌리기");
+    again.type = "button";
+    again.title = "글은 그대로 두고 '어디까지 만들었는가' 만 처음으로 돌립니다.";
+    again.addEventListener("click", async () => {
+      if (!window.confirm(src.name + " 의 진행을 처음으로 돌립니다.\n"
+                          + "이미 만들어진 장면은 그대로 남습니다 — 다시 만들면 뒤에 쌓입니다.\n\n계속할까요?")) return;
+      try {
+        await api("/api/source-reset", { chat_id: S.chatId || "", id: src.id });
+        await loadSources();
+        renderTalk();
+      } catch (e) { addNote(String(e.message || e), true); }
+    });
+    acts.appendChild(again);
+  }
+  const del = el("button", "del", "글 내리기");
+  del.type = "button";
+  del.title = "올린 글을 지웁니다. 원본 파일은 사장님 기기에 그대로 있습니다.";
+  del.addEventListener("click", async () => {
+    if (!window.confirm(src.name + " 을(를) 내립니다.\n"
+                        + "원본 파일은 올린 기기에 그대로 있습니다.\n\n계속할까요?")) return;
+    try {
+      await api("/api/source-delete", { chat_id: S.chatId || "", id: src.id });
+      await loadSources();
+      renderTalk();
+    } catch (e) { addNote(String(e.message || e), true); }
+  });
+  acts.appendChild(del);
+  row.appendChild(acts);
+  return row;
+}
+
+async function uploadSource(input) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  input.value = "";
+  if (f.size > 3 * 1024 * 1024) {
+    addNote("파일이 너무 큽니다 (" + (f.size / 1048576).toFixed(1) + "MB) — 3MB 까지 받습니다.", true);
+    return;
+  }
+  liveShow(f.name + " 을(를) 읽는 중…", [], 0);
+  /* **바이트 그대로** 보낸다. 브라우저가 글자로 읽으면 cp949 로 저장된 한글 소설이
+   * 깨진 채로 올라간다 — 인코딩 판정은 서버가 한다(sources.decode). */
+  const buf = await f.arrayBuffer().catch(() => null);
+  if (!buf) { liveHide(); addNote("파일을 읽지 못했습니다.", true); return; }
+  try {
+    const r = await api("/api/source-upload",
+                        { chat_id: S.chatId || "", name: f.name, b64: bytesToB64(buf) });
+    liveHide();
+    const s = r.source || {};
+    addNote(s.name + " 을(를) 올렸습니다 — " + (s.chars || 0).toLocaleString() + "자 · "
+            + s.chunks + "개 대목으로 나눴습니다(" + s.encoding + "). "
+            + "아래에서 한 대목씩 장면으로 만드세요.");
+    await loadSources();
+    renderTalk();
+  } catch (e) {
+    liveHide();
+    addNote(String(e.message || e), true);
+  }
+}
+
+async function composeSource(src, btn) {
+  if (S.composing) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api("/api/source-compose", { chat_id: S.chatId || "", id: src.id });
+    S.shown = 0;
+    addNote(r.source_name + " · " + r.chunk + "/" + r.chunks
+            + " 대목을 장면으로 만듭니다 — 기존 장면 뒤에 이어 붙입니다.");
+    liveShow("현상을 시작했습니다…", [], 0);
+    startPolling();
+    await loadSources();
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 /* ---------------------------------------------------------------- 시크릿 대화

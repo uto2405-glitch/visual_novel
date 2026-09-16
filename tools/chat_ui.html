@@ -186,6 +186,12 @@ main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
   padding:7px 12px;font-size:13px;cursor:pointer}
 .filepick:hover{border-color:var(--jade-d);color:var(--ink)}
 .filepick input{display:none}
+/* 올린 글(소설) 상자 — 대화 화면 맨 위. 진행이 숫자로 보여야 어디까지 했는지 안다. */
+.srcbox{width:100%;display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.srcrow{border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+  display:flex;flex-direction:column;gap:6px;background:var(--panel)}
+.srcrow .line{margin:0;font-size:13px;color:var(--ink)}
+.srcrow .note{margin:0}
 .scenebar .note{font-size:12px;color:var(--sub)}
 .scenebar select{background:var(--panel);color:var(--ink);border:1px solid var(--line);
  border-radius:8px;padding:5px 8px;font:inherit;font-size:12px}

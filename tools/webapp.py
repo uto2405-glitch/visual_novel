@@ -101,6 +101,7 @@ import scene_lint  # noqa: E402
 import scene_ops  # noqa: E402
 import works        # noqa: E402  작품 전환(대화별 장면·그림)
 import characters   # noqa: E402  고유 캐릭터 서랍(모든 대화 공유)
+import sources      # noqa: E402  올린 글(소설) 보관·대목 나누기
 import talk_store  # noqa: E402
 import vn_compose  # noqa: E402
 import vn_core  # noqa: E402
@@ -1132,6 +1133,78 @@ def r_cast(b):
             "characters": [{"id": k, "name": v} for k, v in known.items()]}
 
 
+# ------------------------------------------------------------------ 올린 글
+def r_source_upload(b):
+    """소설 파일 한 개를 받아 보관하고 대목으로 나눈다.
+
+    base64 로 받는 이유는 사진과 같다 — 폰에서 고른 파일이 같은 길로 들어와야 한다.
+    """
+    raw = b.get("b64")
+    if not isinstance(raw, str) or not raw.strip():
+        raise VNError("파일이 비어 있습니다.")
+    head, _, tail = raw.strip().partition(",")
+    payload = tail if head.startswith("data:") else raw.strip()
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error):
+        raise VNError("파일을 읽지 못했습니다 — 다시 골라 주세요.")
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    with WRITE_LOCK:
+        rec = sources.save(cid, str(b.get("name") or "글"), data)
+    log.info("올린 글 %s (%d자 · %s · %d대목)", rec["name"], rec["chars"],
+             rec["encoding"], rec["chunks"])
+    return {"source": rec, "where": sources.where()}
+
+
+def r_sources(b):
+    """이 대화에 올린 글 목록 + 어디 저장되는지."""
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    return {"sources": sources.list_for(cid), "where": sources.where()}
+
+
+def r_source_delete(b):
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    with WRITE_LOCK:
+        return sources.delete(cid, str(b.get("id") or ""))
+
+
+def r_source_reset(b):
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    with WRITE_LOCK:
+        return sources.reset(cid, str(b.get("id") or ""))
+
+
+def r_source_compose(b):
+    """올린 글의 **다음 대목**을 장면으로 만든다.
+
+    한 번에 한 대목만 하는 이유가 둘이다. 모델이 한 번에 읽을 수 있는 양이 정해져 있고,
+    사람이 결과를 보고 "이 톤이 맞나" 를 판단할 기회가 있어야 한다 — 30만 자를 통째로
+    맡기면 10분 뒤에 마음에 안 드는 장면 40개를 받는다.
+
+    **어디까지 만들었는지는 시작할 때 적는다.** 저장까지 기다리면, 저장 전에 한 번 더
+    누른 사람이 같은 대목을 두 번 만든다(대화 조립이 같은 이유로 같은 규칙을 쓴다).
+    """
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    sid = str(b.get("id") or "")
+    got = sources.next_chunk(cid, sid)
+    if not got["text"]:
+        raise VNError("이 글은 마지막 대목까지 다 만들었습니다 "
+                      "(%d/%d). 처음부터 다시 하려면 [진행 되돌리기] 를 누르세요."
+                      % (got["index"], got["total"]))
+    cast = talk_store.chat_cast(cid)
+    if isinstance(cast, list) and cast:
+        characters.sync_manifest(cast)
+    want = int(b.get("max") or 0)
+    cap = (max(1, min(want, CHAT_COMPOSE_MAX)) if want
+           else max(1, min(CHAT_COMPOSE_CAP, CHAT_COMPOSE_MAX)))
+    res = vn_compose.compose_job_start(total=cap, batch=cap, branching=False,
+                                       source=got["text"], append=True, cast=cast)
+    sources.mark_done(cid, sid, got["index"] + 1)
+    res.update({"source_id": sid, "chunk": got["index"] + 1, "chunks": got["total"],
+                "source_name": got["name"]})
+    return res
+
+
 def r_scene_add(b):
     """맨 뒤에 빈 장면을 하나 만든다 — 내용은 장면 탭에서 바로 고친다."""
     fields = b.get("fields") if isinstance(b.get("fields"), dict) else {}
@@ -1913,6 +1986,9 @@ POST_ROUTES = {
     "/api/oc-photo": r_oc_photo, "/api/oc-photo-delete": r_oc_photo_delete,
     "/api/cast": r_cast, "/api/oc-from-chat": r_oc_from_chat,
     "/api/compose-text": r_compose_text, "/api/gen-cost": r_gen_cost,
+    "/api/source-upload": r_source_upload, "/api/sources": r_sources,
+    "/api/source-delete": r_source_delete, "/api/source-reset": r_source_reset,
+    "/api/source-compose": r_source_compose,
     "/api/make-video": r_make_video,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
