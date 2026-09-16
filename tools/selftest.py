@@ -5595,6 +5595,131 @@ def u32(b: Box):
     eq(ts.truncate_log(path, 99)["dropped"], 0, "남은 것보다 크게 자르라 하면 아무것도 안 해야 한다")
 
 
+@test("unit", "U35 목록 요약 캐시 — 안 바뀐 대화는 다시 읽지 않고, 바뀐 것은 읽고, 지운 것은 표에서 빠진다")
+def u35(b: Box):
+    """목록 화면은 대화마다 제목 한 줄과 개수 하나만 쓴다. 그 둘을 얻으려고 로그 전체를
+    json 으로 풀면, 대화가 50개일 때 **페이지를 열 때마다** 50개 파일을 다시 읽는다.
+    실측으로 0.8초였고 폰에서 그건 '멈춘 화면'이다.
+
+    캐시가 틀리면 더 나쁘다 — 방금 보낸 말이 목록에 안 뜨거나(안 갱신), 지운 대화가
+    계속 보인다(안 지워짐). 그래서 세 가지를 다 잠근다: 안 읽는가 · 읽는가 · 잊는가.
+    """
+    ts = b.mod("talk_store")
+    ts._SUMMARY.clear()
+
+    reads = {"n": 0}
+    real = ts.load_log
+
+    def counting(path):
+        reads["n"] += 1
+        return real(path)
+
+    made = []
+    try:
+        for i in range(5):
+            p = ts.STORY_DIR / ("chat_u35x%d.json" % i)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({"messages": [{"role": "user", "content": "첫 말 %d" % i},
+                                                  {"role": "assistant", "content": "답"}]},
+                                    ensure_ascii=False), encoding="utf-8")
+            made.append(p)
+
+        ts.load_log = counting
+        rows = ts.list_story_chats()
+        first = reads["n"]
+        ok(first >= 5, "첫 훑기가 파일을 안 읽었다(%d회) — 캐시가 아니라 빈 목록이다" % first)
+        got = {r["id"]: r for r in rows}
+        eq(got["u35x0"]["title"], "첫 말 0", "제목을 첫 사용자 발화에서 안 가져온다")
+        eq(got["u35x0"]["count"], 2, "발화 수가 틀리다")
+
+        reads["n"] = 0
+        ts.list_story_chats()
+        ts.list_story_chats()
+        eq(reads["n"], 0, "파일이 그대로인데 %d번 다시 읽었다 — 캐시가 안 걸렸다" % reads["n"])
+
+        # 한 개만 고친다 → 그 하나만 다시 읽어야 한다(나머지는 표 그대로)
+        made[0].write_text(json.dumps({"messages": [{"role": "user", "content": "바꾼 말"},
+                                                    {"role": "assistant", "content": "답"},
+                                                    {"role": "user", "content": "더"}]},
+                                      ensure_ascii=False), encoding="utf-8")
+        reads["n"] = 0
+        rows = ts.list_story_chats()
+        eq(reads["n"], 1, "바뀐 파일 하나에 %d번 읽었다 — 전부 다시 읽고 있다" % reads["n"])
+        got = {r["id"]: r for r in rows}
+        eq(got["u35x0"]["count"], 3, "고친 대화의 개수가 목록에 반영되지 않았다")
+        eq(got["u35x0"]["title"], "바꾼 말", "고친 대화의 제목이 옛것 그대로다")
+
+        # 지우면 표에서도 빠진다 — 안 그러면 삭제한 대화가 목록에 계속 보인다
+        ts.delete_story_chat("u35x1")
+        ids = {r["id"] for r in ts.list_story_chats()}
+        ok("u35x1" not in ids, "지운 대화가 목록에 남아 있다")
+        ok(str(ts.story_chat_path_for("u35x1")) not in ts._SUMMARY,
+           "지운 대화의 요약이 표에 남아 있다 — 같은 id 를 다시 쓰면 옛 제목이 나온다")
+    finally:
+        ts.load_log = real
+        for p in made:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        ts._SUMMARY.clear()
+
+
+@test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
+def j16(b: Box):
+    """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
+
+    (1) **새로고침** — 그림은 서버에서 계속 굽는다. 멈추는 건 화면의 폴링뿐이다. 그런데
+        화면이 아무 일도 없는 얼굴이면 사람은 죽은 줄 알고 같은 장면을 한 번 더 시킨다.
+        23초짜리 GPU 시간이 두 배로 든다. 그래서 서버가 /api/state 로 '지금 굽는 것'을
+        말하고, 화면은 그걸 보고 다시 붙는다.
+    (2) **두 번째 기기** — 폰과 PC 를 번갈아 쓰면 나중에 누른 쪽이 거절당한다. 예전에는
+        빨간 줄 하나 뜨고 그대로 멈춰 있었다. 거절의 흔한 이유가 "이미 돌고 있다" 이므로
+        할 일은 새로 시작이 아니라 **그 진행을 같이 보는 것**이다.
+    (3) **줄어드는 목록** — S.shown 은 올라가기만 했다. 버리기·다른 기기 저장·서버 재시작
+        으로 목록이 줄면 그 뒤 장면은 영원히 안 보였다(목록은 느는데 화면은 조용했다).
+    """
+    p = b.p("tools/chat_ui.js")
+    if not p.exists():
+        raise Gap("tools/chat_ui.js 아직 없음 — 통합 화면 미도입")
+    js = p.read_text(encoding="utf-8")
+    web = b.p("tools/webapp.py").read_text(encoding="utf-8")
+
+    # (1) 서버가 말하고, 화면이 듣는다
+    has(web, "gen_running", "/api/state 가 굽고 있는 작업을 싣지 않는다 — 새로고침하면 진행이 사라진다")
+    has(js, "gen_running", "화면이 굽고 있는 작업을 묻지 않는다")
+    has(js, "async function watchGen", "굽는 것을 지켜보는 고리가 genFor 안에 묻혀 있다 — 새로고침 뒤에 못 쓴다")
+    boot = js[js.index("async function boot("):]
+    ok("watchGen(" in boot, "boot 가 돌고 있는 그림 작업에 다시 붙지 않는다")
+
+    # 장수를 모를 때(새로고침 뒤)는 서버의 want 를 봐야 진행 막대가 맞는다
+    wg = js[js.index("async function watchGen("):]
+    wg = wg[:wg.index("function genStopBtn")]
+    has(wg, "st.want", "새로고침 뒤 요청 장수를 서버에서 읽지 않는다 — 진행 막대가 늘 0 이다")
+
+    # (2) 거절 뒤에 상태를 다시 묻는가
+    rc = js[js.index("async function runCompose("):]
+    rc = rc[:rc.index("function liveShow")]
+    ok("/api/compose-job-status" in rc,
+       "조립이 거절당했을 때 상태를 다시 묻지 않는다 — 두 번째 기기가 빨간 줄 하나 보고 멈춘다")
+    ok("startPolling()" in rc.split("catch (e)")[1],
+       "거절당한 기기가 돌고 있는 작업을 따라가지 않는다")
+
+    # (3) 줄어든 목록을 따라가는가
+    pc = js[js.index("async function pollCompose("):]
+    pc = pc[:pc.index("function showCancel")]
+    ok("S.shown > scenes.length" in pc,
+       "장면 목록이 줄어도 S.shown 이 따라가지 않는다 — 그 뒤 장면이 영원히 안 보인다")
+
+    # (4) 기본 대화는 스튜디오 스토리 탭과 같은 파일이다 — 끄기 전에 말해야 한다
+    cx = js[js.index("function ctxSwitch("):]
+    cx = cx[:cx.index("function pasteBox")]
+    ok("confirm(" in cx,
+       "기본 대화의 작품 설정을 조용히 끈다 — 스튜디오 스토리 탭의 대답까지 같이 백지가 된다")
+    ok("S.chatId" in cx.split("confirm(")[0].split("addEventListener")[-1],
+       "확인을 새 대화에도 묻는다 — 새 대화는 이 화면 전용이라 물을 이유가 없다")
+
+
 @test("js", "J14 통합 화면(/chat) — 스튜디오와 같은 강도로 잠근다(주입 API 0 · 인라인 0 · 파괴 경로 0)")
 def j14(b: Box):
     """두 번째 화면이 생겼다고 규칙이 반값이 되면 안 된다.

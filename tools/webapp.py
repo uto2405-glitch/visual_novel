@@ -338,7 +338,11 @@ def state() -> dict:
             "scenes": scenes, "storyline": storyline,
             # 스토리 챗로그는 여기 싣지 않는다 — 대화가 길어질수록 모든 탭의 새로고침이
             # 같이 무거워졌다. 스토리 탭이 필요할 때만 POST /api/chat-history 로 받아간다.
-            "chat_count": chat_count()}
+            "chat_count": chat_count(),
+            # 지금 이 서버가 굽고 있는 장면들. 새로고침하면 벌어지는 것은 브라우저의
+            # 폴링이지 작업이 아니다 — 그런데 화면이 조용해지니 사람은 작업도 죽은 줄 알고
+            # 다시 누른다(=같은 장면을 한 번 더 굽는다). 메모리 표만 읽으므로 비용은 0 이다.
+            "gen_running": gen_jobs.running()}
 
 
 _CHAT_COUNT: dict = {"key": None, "n": 0}

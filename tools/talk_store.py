@@ -134,6 +134,58 @@ def set_chat_use_context(chat_id: Any, value: bool) -> bool:
     return bool(value)
 
 
+# ---------------------------------------------------------------- 목록 요약 표
+#
+# 목록 화면은 대화마다 제목 한 줄과 개수 하나만 쓴다. 그런데 그 둘을 얻으려면 로그 전체를
+# json 으로 풀어야 한다 — 대화가 50개면 페이지를 열 때마다 50개 파일을 전부 다시 읽었다.
+#
+# 파일이 그대로면 요약도 그대로다. 그래서 (mtime_ns, size) 로 표를 만들어 두고, 바뀜 파일만
+# 다시 읽는다. 초 단위(st_mtime)가 아니라 **나노초**를 쓰는 이유는, 같은 초 안에 길이가 같은
+# 수정(한 글자 고침)이 일어나면 초 단위 키로는 변화를 못 보기 때문이다.
+_SUMMARY: dict = {}
+_SUMMARY_CAP = 400          # 표가 무한히 자라지 않게 — 넘으면 이번에 본 것만 남긴다
+
+
+def _title_of(msgs: list) -> str:
+    """목록에 적을 한 줄 — 첫 사용자 발화의 앞부분."""
+    for m in msgs:
+        if m.get("role") == "user":
+            return str(m.get("content") or "").strip().replace("\n", " ")[:40]
+    return ""
+
+
+def _summary_of(path: Path):
+    """{title, count, mtime} — 파일이 그대로면 다시 파싱하지 않는다. 읽을 수 없으면 None."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    k = str(path)
+    hit = _SUMMARY.get(k)
+    if hit is not None and hit.get("key") == key:
+        return hit
+    msgs = load_log(path)
+    card = {"key": key, "title": _title_of(msgs), "count": len(msgs),
+            "mtime": int(st.st_mtime)}
+    _SUMMARY[k] = card
+    return card
+
+
+def _forget_missing(live: set) -> None:
+    """이번 훑기에 없던 대화는 표에서 뺀다(삭제된 파일이 영원히 남지 않게)."""
+    keep = {str(p) for p in live}
+    for k in [k for k in _SUMMARY if k not in keep]:
+        _SUMMARY.pop(k, None)
+    if len(_SUMMARY) > _SUMMARY_CAP:
+        _SUMMARY.clear()
+
+
+def forget_summary(path) -> None:
+    """이 파일의 요약을 잊는다 — 삭제처럼 파일이 사라지는 경로에서 부른다."""
+    _SUMMARY.pop(str(path), None)
+
+
 def list_story_chats() -> list[dict]:
     """대화 갈래 목록 → [{id, title, count, mtime}] · 최근에 쓴 것이 앞.
 
@@ -153,22 +205,14 @@ def list_story_chats() -> list[dict]:
             continue
         seen.add(path)
         if not path.is_file():
-            if path == story_chat_path():
-                continue
             continue
-        msgs = load_log(path)
+        card = _summary_of(path)
+        if card is None:
+            continue
         cid = "" if path == story_chat_path() else path.stem[len(CHAT_PREFIX):]
-        title = ""
-        for m in msgs:
-            if m.get("role") == "user":
-                title = str(m.get("content") or "").strip().replace("\n", " ")[:40]
-                break
-        try:
-            mtime = int(path.stat().st_mtime)
-        except OSError:
-            mtime = 0
-        out.append({"id": cid, "title": title, "count": len(msgs), "mtime": mtime,
-                    "use_context": chat_use_context(cid)})
+        out.append({"id": cid, "title": card["title"], "count": card["count"],
+                    "mtime": card["mtime"], "use_context": chat_use_context(cid)})
+    _forget_missing(seen)
     out.sort(key=lambda r: r["mtime"], reverse=True)
     return out
 
@@ -206,6 +250,7 @@ def delete_story_chat(chat_id: Any) -> bool:
     if not cid:
         return False
     path = story_chat_path_for(cid)
+    forget_summary(path)          # 요약 표에서 먼저 빼다 — 지우는 중간에 목록이 열려도 유령이 안 나오게
     ok = False
     try:
         if path.is_file():

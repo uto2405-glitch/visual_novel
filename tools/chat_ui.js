@@ -450,6 +450,20 @@ async function runCompose() {
     await api("/api/compose-job", { total: total, batch: batch, branching: false });
   } catch (e) {
     addNote(String(e.message || e), true);
+    /* 거절당했다고 화면이 조용해지면 안 된다. 거절의 가장 흔한 이유가 "이미 돌고 있다" 이고,
+     * 그때 이 기기가 할 일은 새로 시작하는 것이 아니라 **그 진행을 같이 보는 것**이다.
+     * 폰과 PC 를 번갈아 쓰면 반드시 일어난다 — 예전에는 둘 중 나중에 누른 쪽이 빨간 줄
+     * 하나만 보고 영원히 멈춰 있었다. 오류 문구를 읽는 대신 상태를 다시 묻는다. */
+    try {
+      const st = await api("/api/compose-job-status", {});
+      if (st && (st.running || (st.scenes || []).length)) {
+        S.shown = 0;                 // 이 기기는 이 작업을 처음 본다 — 받아 둔 것부터 줄이게
+        addNote(st.running
+          ? "다른 곳에서 시작한 현상이 돌고 있습니다 — 여기서도 같이 보여 드립니다."
+          : "받아 둔 장면이 있습니다 — 아래에서 마무리하거나 버릴 수 있습니다.");
+        startPolling();
+      }
+    } catch (e2) { /* 상태도 못 읽으면 위의 오류 문구가 마지막 말이다 */ }
     return;
   }
   addNote("현상을 시작했습니다 — " + total + "장면, 약 " + fmtSecs(total * 32) + ". "
@@ -521,10 +535,20 @@ async function pollCompose() {
   /* 도착한 장면만큼 줄을 쌓는다 — 배치가 다 모일 때까지 기다리지 않는다.
    * 첫 보상이 118초에서 30초로 당겨지는 지점이 정확히 여기다. */
   const scenes = st.scenes || [];
+
+  /* 서버의 목록이 **줄어들 수도** 있다 — 버리기를 눌렀거나, 다른 기기에서 저장하고
+   * 새 작업이 시작됐거나, 서버가 다시 켜졌을 때. S.shown 은 올라가기만 하므로 그런 날
+   * 이후의 장면은 영원히 안 보였다(목록은 늘고 있는데 화면은 조용했다). 뒤로 갔으면 따라간다. */
+  if (S.shown > scenes.length) S.shown = scenes.length;
+
   while (S.shown < scenes.length) {
     const sc = scenes[S.shown];
     S.shown += 1;
-    addNote("▸ " + (sc.order != null ? sc.order : S.shown) + "컷 나왔습니다 — " + (sc.purpose || ""));
+    /* 멈추기를 누른 뒤에도 한 컷이 더 도착한다 — 이미 굽던 것은 끌까지 간다. 그걸
+     * 그냥 "나왔습니다" 라고만 적으면 멈추기가 안 듣는 것처럼 보인다. 어느 쪽인지 말한다. */
+    const tail = st.cancelled ? " (멈추기 전에 이미 굽던 것)" : "";
+    addNote("▸ " + (sc.order != null ? sc.order : S.shown) + "컷 나왔습니다" + tail
+            + " — " + (sc.purpose || ""));
     setBar(S.shown, st.total || 1);
   }
 
@@ -835,29 +859,38 @@ async function genFor(sid, btn, want) {
   const n = Math.max(1, Math.min(parseInt(want, 10) || 1, 4));
   setBusy(true);
   if (btn) btn.disabled = true;
-
-  liveShow(sid + " · " + n + "장 요청 — 한 장에 약 23초", [
-    { label: "그만 뽑기", onClick: async (b) => {
-        b.disabled = true; b.textContent = "이번 장까지만…";
-        try { await api("/api/gen-cancel", { scene_id: sid }); } catch (e) { /* 폴링이 본다 */ }
-      } },
-  ], 0);
-
-  let seen = 0;
+  liveShow(sid + " · " + n + "장 요청 — 한 장에 약 23초", [genStopBtn(sid)], 0);
   try {
     await api("/api/gen-image", { scene_id: sid, n: n });
+  } catch (e) {
+    liveHide();
+    addNote(String(e.message || e), true);
+    if (btn) btn.disabled = false;
+    setBusy(false);
+    return;
+  }
+  await watchGen(sid, n, btn);
+}
+
+/* 굽고 있는 장면 하나를 끝날 때까지 지켜본다.
+ *
+ * genFor 안에 묻어 두지 않고 떼어 둔 이유: 이 고리는 **버튼을 누른 지금**만이
+ * 아니라 새로고침 **뒤**에도 필요하다. 예전에는 페이지를 다시 열면 진행이
+ * 통째로 안 보였다 — 그림은 서버에서 계속 굽는데 화면은 아무 일도 없는 얼굴이라,
+ * 사람은 죽은 줄 알고 같은 장면을 한 번 더 시켰다(GPU 시간이 두 배로 든다). */
+async function watchGen(sid, n, btn) {
+  let seen = 0;
+  /* 새로고침 뒤에는 몇 장을 시켰는지 페이지가 모른다 — 그건 서버가 알고 있다(want). */
+  let total = Math.max(0, Number(n) || 0);
+  try {
     for (;;) {
       await new Promise((r) => setTimeout(r, 2200));
       const st = await api("/api/gen-status", { scene_id: sid });
       if (st) {
-        liveShow(sid + " · " + (st.message || "굽는 중…"), [
-          { label: "그만 뽑기", onClick: async (b) => {
-              b.disabled = true; b.textContent = "이번 장까지만…";
-              try { await api("/api/gen-cancel", { scene_id: sid }); } catch (e) { /* 폴링 */ }
-            } },
-        ], n ? (Number(st.done || 0) / n) : 0);
+        if (!total) total = Math.max(0, Number(st.want) || 0);
+        liveShow(sid + " · " + (st.message || "굽는 중…"), [genStopBtn(sid)],
+                 total ? (Number(st.done || 0) / total) : 0);
       }
-
       /* 한 장이 등록될 때마다 장면 목록이 늘어난다 — 그때마다 다시 그려서 바로 보이게 한다.
        * 숫자는 문구가 아니라 done 칸에서 읽는다: 문구는 엔진 폴링이 1.5초마다 갈아치운다. */
       if (st && Number(st.done || 0) > seen) {
@@ -883,6 +916,15 @@ async function genFor(sid, btn, want) {
     setBusy(false);
   }
 }
+
+/* '그만 뽑기' 버튼 한 군데서 만든다 — 세 군데에 복사해 두면 한 곳만 고치는 날이 온다. */
+function genStopBtn(sid) {
+  return { label: "그만 뽑기", onClick: async (b) => {
+    b.disabled = true; b.textContent = "이번 장까지만…";
+    try { await api("/api/gen-cancel", { scene_id: sid }); } catch (e) { /* 폴링이 본다 */ }
+  } };
+}
+
 
 function renderScenes() {
   if (S.view !== "scenes") return;
@@ -1216,6 +1258,17 @@ function ctxSwitch() {
     ? "지금 작품의 인물·장소·스토리라인을 알고 답합니다. 끄면 백지에서 시작합니다."
     : "작품과 무관한 새 이야기로 답합니다. 켜면 지금 작품을 이어서 씁니다.";
   b.addEventListener("click", async () => {
+    /* 기본 대화는 이 화면만의 것이 아니다 — 스튜디오의 스토리 탭이 같은 파일을 쓴다.
+     * 여기서 끄면 저쪽 탭의 대답도 백지가 된다. 조용히 바꾸지 않고 먼저 말한다.
+     * (따로 만든 갈래는 이 화면 전용이라 묻지 않는다.) */
+    if (!S.chatId && S.useContext) {
+      const ok = window.confirm(
+        "기본 대화는 스튜디오의 스토리 탭과 같은 기록을 씁니다.\n" +
+        "작품 설정을 끄면 그쪽 대답도 백지에서 시작합니다.\n\n" +
+        "작품을 건드리고 싶지 않으면 [새 대화] 를 만드세요 — 새 대화는 처음부터 백지입니다.\n\n" +
+        "그래도 끕니까?");
+      if (!ok) return;
+    }
     b.disabled = true;
     try {
       const d = await api("/api/chat-meta",
@@ -1431,6 +1484,17 @@ async function boot() {
       startPolling();
     }
   } catch (e) { /* 조립 이력이 없으면 그만이다 */ }
+
+  /* 그림도 마찬가지다. 버튼을 누른 탭을 닫았거나 새로고침했다고 해서 굽던 것이 멈추지는
+   * 않는다 — 멈춘 것은 화면의 폴링뿐이다. 그 사실을 다시 연결해 준다. */
+  const pend = (S.state && S.state.gen_running) || [];
+  if (pend.length) {
+    addNote(pend.length > 1
+      ? ("그림 작업 " + pend.length + "건이 아직 돌고 있습니다 — " + pend[0] + " 부터 보여 드립니다.")
+      : (pend[0] + " 그림이 아직 굽고 있습니다 — 이어서 보여 드립니다."));
+    setBusy(true);
+    watchGen(pend[0], 0, null);      // await 하지 않는다 — boot 을 막으면 화면이 안 뜼다
+  }
 
   probe();
   setInterval(probe, 30000);
