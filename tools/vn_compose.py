@@ -713,7 +713,7 @@ def compose_batch(total: int, branching: bool, start: int, end: int,
 _JOB_LOCK = threading.Lock()
 _JOB: dict = {"running": False}
 # 표시한 남은 시간을 기억한다 — 숫자가 올라가지 않게 막는 데만 쓴다(_eta_shown).
-_ETA: dict = {"shown": None, "at": 0.0}
+_ETA: dict = {"shown": None, "at": 0.0, "raw": None}
 
 
 def _job_snapshot() -> dict:
@@ -741,6 +741,7 @@ def _job_snapshot() -> dict:
 # 그래서 둘 다 고친다. 그리고 그래도 틀릴 것이므로, 마지막에 **절대 올라가지 않게** 막는다.
 _ETA_DEFAULT_SCENE = 30.0     # 장면 하나(실측 12~14 tok/s 기준)
 _ETA_DEFAULT_HEAD = 45.0      # 배치 하나의 앞머리(프롬프트 읽기 + 첫 장면)
+_ETA_MIN_SCENE = 10.0         # 장면 하나가 이보다 빨리 나오진 않는다(바닥의 바닥)
 
 
 def _eta_raw(job: dict):
@@ -803,12 +804,12 @@ def _eta_shown(job: dict):
     """
     raw = _eta_raw(job)
     if raw is None:
-        _ETA.update(shown=None, at=0.0)
+        _ETA.update(shown=None, at=0.0, raw=None)
         return None, False
     now = time.time()
     prev = _ETA.get("shown")
     if prev is None:
-        _ETA.update(shown=float(raw), at=now)
+        _ETA.update(shown=float(raw), at=now, raw=float(raw))
         return int(raw), False
     # 늦음 — 두 가지 뜻이 있다.
     #  (1) 어림이 지금 보여 주는 것보다 커졌다 — 숫자를 올리는 대신 이걸로 말한다.
@@ -817,9 +818,25 @@ def _eta_shown(job: dict):
     #      있을 때까지 정직한 것은 아니다.
     quiet = now - (float(job.get("last_at") or 0) or float(job.get("started_at") or now))
     expect = _ETA_DEFAULT_HEAD + _ETA_DEFAULT_SCENE
-    late = float(raw) > float(prev) or quiet > expect * 1.5
-    shown = min(float(prev), float(raw))
-    _ETA.update(shown=shown, at=now)
+    # 어림은 이제 시계를 따라 내려가므로, 표시값과 비교하면 거의 항상 "늦음" 이 된다
+    # (표시값은 줄어드는데 어림은 그대로니까). 비교해야 하는 것은 **어림끼리**다 —
+    # 지난번보다 어림이 커졌는가. 그것만이 "생각보다 오래 걸린다" 는 진짜 신호다.
+    raw_prev = _ETA.get("raw")
+    late = (raw_prev is not None and float(raw) > float(raw_prev) + 1.0) or quiet > expect * 1.5
+    # 도착 사이에도 시계를 따라 내린다 — 단, **바닥**을 둔다.
+    #
+    # 안 내리면 장면 하나를 기다리는 25~40초 동안 숫자가 얼어 있다(씽크북 실측).
+    # 얼어 있는 숫자는 거꾸로 가는 숫자보다야 낫지만 "멈춘 거 아닌가" 로 읽힌다.
+    # 그렇다고 끝까지 내리면 0 에 주저앉는다 — 그건 더 나쁜 거짓말이다.
+    # 바닥은 물리적 하한이다: 남은 장면 수 × 지금까지 관측된 가장 빠른 간격.
+    # 거기서 멈춰 있는 것은 정직하다 — 그보다 빠를 수가 없다는 뜻이니까.
+    left = max(0, int(job.get("total") or 0) - len(job.get("items") or []))
+    gap = float(job.get("min_gap") or 0) or _ETA_MIN_SCENE
+    floor = left * max(_ETA_MIN_SCENE, gap)
+    dt = max(0.0, now - float(_ETA.get("at") or now))
+    decayed = max(float(prev) - dt, floor)
+    shown = min(float(prev), float(raw), decayed)
+    _ETA.update(shown=shown, at=now, raw=float(raw))
     return int(shown), bool(late)
 
 
@@ -892,7 +909,7 @@ def compose_job_save(force: bool = False) -> dict:
         raise
     with _JOB_LOCK:
         _JOB.clear()
-        _ETA.update(shown=None, at=0.0)   # 지난 작업의 카운트다운을 물려받지 않는다
+        _ETA.update(shown=None, at=0.0, raw=None)   # 지난 작업의 카운트다운을 물려받지 않는다
         _JOB["running"] = False
     return res
 
@@ -948,7 +965,15 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
                 _seen.append(obj)
                 with _JOB_LOCK:
                     got = list(_JOB.get("items") or [])
-                    _JOB["last_at"] = time.time()   # 장면 간격을 재려면 마지막 도착 시각이 필요하다
+                    _t = time.time()
+                    _prev_at = float(_JOB.get("last_at") or 0)
+                    if _prev_at:
+                        # 가장 빨랐던 간격 — 남은 장면을 이보다 빨리 만들 수는 없다는
+                        # 물리적 하한이다. 표시 숫자가 그 아래로 내려가지 않게 막는 데 쓴다.
+                        _g = _t - _prev_at
+                        _old = float(_JOB.get("min_gap") or 0)
+                        _JOB["min_gap"] = min(_old, _g) if _old else _g
+                    _JOB["last_at"] = _t
                     if not got and not _JOB.get("first_at"):
                         # 첫 장면이 도착한 시각 — 이것이 있어야 '배치 앞머리 비용'과
                         # '장면당 시간'을 갈라 낼 수 있다(섮으면 톱니바퀴가 된다).

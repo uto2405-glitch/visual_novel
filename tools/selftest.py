@@ -6065,15 +6065,17 @@ def u40(b: Box):
         """도착 시각표를 재생하고 [(t, eta, late)] 를 돌려준다."""
         clock = {"t": T0}
         vc.time.time = lambda: clock["t"]
-        vc._ETA.update(shown=None, at=0.0)
+        vc._ETA.update(shown=None, at=0.0, raw=None)
         out = []
         for t in range(3, int(until) + 1, 10):
             clock["t"] = T0 + t
             done = sum(1 for a in arrivals if a <= t)
+            gaps = [arrivals[k] - arrivals[k - 1] for k in range(1, done)]
             job = {"running": True, "total": total, "batch": batch, "started_at": T0,
                    "items": [{}] * done,
                    "first_at": (T0 + arrivals[0]) if done else 0,
-                   "last_at": (T0 + arrivals[done - 1]) if done else 0}
+                   "last_at": (T0 + arrivals[done - 1]) if done else 0,
+                   "min_gap": min(gaps) if gaps else 0}
             eta, late = vc._eta_shown(job)
             out.append((t, eta, late))
         return out
@@ -6108,10 +6110,30 @@ def u40(b: Box):
         ok(any(r[2] for r in slowing),
            "어림이 커졌는데 '늦음'을 한 번도 안 알렸다 — 숫자만 막고 입을 닫은 꼴이다")
 
+        # (1c) **얼어 있지 않은가.** 올라가는 것을 막았더니 이번엔 장면 하나를 기다리는
+        #      25~40초 동안 숫자가 그대로 멈춰 있었다(씽크북 재측정). 그것도 "작업이
+        #      멈췄나" 로 읽힌다. 시계를 따라 내리되 물리적 하한(남은 장면 × 관측된 가장
+        #      빠른 간격)을 바닥으로 둔다 — 바닥에서 멈춰 있는 것은 정직하다.
+        healthy = replay([40, 75, 115, 145, 170, 190], 190)
+        longest, run = 0, 0
+        for i, r in enumerate(healthy):
+            if i and r[1] == healthy[i - 1][1]:
+                run += 10
+                longest = max(longest, run)
+            else:
+                run = 0
+        ok(longest <= 20,
+           "정상 실행인데 남은 시간이 %d초나 멈춰 있다 — 사람은 멈춘 숫자를 "
+           "'작업이 멈췄나' 로 읽는다" % longest)
+        ok(not any(r[2] for r in healthy), "정상 재측정 실행에서 '늦음'이 떠 버렸다")
+        ok(all(r[1] >= 0 for r in healthy), "남은 시간이 음수가 됐다")
         # (3) 3장 받고 멈춘 작업 — 언젠가는 '늦음'이 떠야 한다
         stalled = replay([50, 80, 90], 400)
         ok(any(r[2] for r in stalled),
            "작업이 멈췄는데 '늦음'이 한 번도 안 떴다 — 평평한 숫자가 영원히 떠 있는다")
+        ok(all(r[1] > 0 for r in stalled),
+           "멈춘 작업에서 남은 시간이 0 까지 내려앉았다 — 바닥이 없다. "
+           "0 을 보여 주고도 끝나지 않는 것은 얼어붙은 숫자보다 더 나쁜 거짓말이다")
         first_late = [r[0] for r in stalled if r[2]][0]
         ok(first_late > 90, "마지막 장면이 오자마자 '늦음'이 떴다(t=%d) — 너무 성급하다" % first_late)
 
@@ -6121,7 +6143,7 @@ def u40(b: Box):
         eq(late, False, "안 도는 작업이 늦다고 나온다")
     finally:
         vc.time.time = real_time
-        vc._ETA.update(shown=None, at=0.0)
+        vc._ETA.update(shown=None, at=0.0, raw=None)
 
 
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
