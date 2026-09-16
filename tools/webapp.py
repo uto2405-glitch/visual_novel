@@ -100,6 +100,7 @@ import scene_brief  # noqa: E402
 import scene_lint  # noqa: E402
 import scene_ops  # noqa: E402
 import works        # noqa: E402  작품 전환(대화별 장면·그림)
+import characters   # noqa: E402  고유 캐릭터 서랍(모든 대화 공유)
 import talk_store  # noqa: E402
 import vn_compose  # noqa: E402
 import vn_core  # noqa: E402
@@ -438,8 +439,28 @@ def do_chat(messages: list[dict], chat_id: str = "") -> str:
     sys_msg = prompt_build.story_system_message(talk_store.chat_use_context(chat_id))
     window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
     before = _log_mark(path)
-    reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000,
-                                 timeout=_chat_timeout(llm_queue_wait()))
+    # '고유캐릭터 생성하기' 는 대화가 아니라 **동작**이다. 평소 답변 경로로 보내면 모델은
+    # 인물을 만드는 대신 인물을 만들자고 맞장구를 친다(그리고 아무것도 남지 않는다).
+    last = ""
+    for m in reversed(window):
+        if isinstance(m, dict) and m.get("role") == "user":
+            last = str(m.get("content") or "")
+            break
+    hint = oc_trigger_hint(last)
+    if hint is not None:
+        made = make_oc_from_chat(window, cid, hint)
+        who = made["character"]
+        reply = ("고유 캐릭터를 만들었습니다 — %s %s\n"
+                 "· 그림 문장: %s\n"
+                 "· 태그: %s\n"
+                 "[고유캐릭터] 탭에서 고치거나 사진을 붙일 수 있고, 이 대화의 출연진에 "
+                 "넣어 두었습니다(장면으로 조립하면 이 인물로 나갑니다)."
+                 % (who["id"], who["name"],
+                    who["prompt_anchor"] or "(비어 있음 — 탭에서 적어 주세요)",
+                    ", ".join(who["prompt_tags"]) or "(없음)"))
+    else:
+        reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000,
+                                     timeout=_chat_timeout(llm_queue_wait()))
     with WRITE_LOCK:
         # **기다리는 사이에 바뀌었는가.** 검사를 모델 앞에만 두면 늦다 — 지우기·자르기는
         # 정확히 그 1~2분 사이에 다른 기기에서 일어난다(폰에서 지우고 PC 가 답을 받는 식).
@@ -703,8 +724,13 @@ def r_compose_chat(b):
         raise VNError("장면으로 만들 이야기가 너무 짧습니다 — 조금 더 써 보세요.")
 
     cap = max(1, min(int(b.get("max") or CHAT_COMPOSE_CAP), CHAT_COMPOSE_CAP))
+    # 출연진을 싣는다. 이게 없으면 조립은 매니페스트의 첫 인물을 모든 장면에 밀어
+    # 넣는다 — 고양이 이야기의 장면마다 이지혜가 서 있던 이유가 그것이다.
+    cast = talk_store.chat_cast(cid)
+    if isinstance(cast, list) and cast:
+        characters.sync_manifest(cast)      # 검사기 A2 가 이 인물들을 알아야 한다
     res = vn_compose.compose_job_start(total=cap, batch=cap, branching=False,
-                                       source=body, append=True)
+                                       source=body, append=True, cast=cast)
     # 어디까지 썼는지는 **시작할 때** 적어 둔다. 저장까지 기다리면, 저장 전에 사람이 대화를
     # 더 이어 썼을 때 그 새 발화까지 '이미 조립함' 으로 삼켜 버린다.
     talk_store.set_chat_composed_upto(cid, len(msgs))
@@ -815,6 +841,151 @@ def r_set_crop(b):
     """
     anchor = str(b.get("anchor", "center"))
     return scene_ops.set_crop(b.get("scene_id"), anchor)
+
+
+# ------------------------------------------------------------------ 고유 캐릭터
+def _oc_view(oc: dict) -> dict:
+    """서랍의 인물 → 화면이 쓰는 모양. **사진은 경로가 아니라 주소로 나간다.**
+
+    화면에 디스크 경로를 주면 그 경로가 다음 요청에 그대로 되돌아온다 — 그러면 경로
+    판정을 화면이 하는 셈이 된다. 주소(/ref/OC-001/…)만 주고, 실제 파일 찾기는
+    :func:`characters.ref_path` 한 곳에서만 한다.
+    """
+    cid = oc.get("character_id", "")
+    refs = [r for r in (oc.get("reference_images") or []) if isinstance(r, str)]
+    return {
+        "id": cid, "name": oc.get("name", ""), "broken": oc.get("broken", ""),
+        "profile": oc.get("profile") or {},
+        "prompt_anchor": oc.get("prompt_anchor", ""),
+        "prompt_tags": oc.get("prompt_tags") or [],
+        "notes": oc.get("notes", ""),
+        "updated": oc.get("updated", ""),
+        "photos": [{"rel": r, "url": "/ref/%s/%s" % (cid, r.rsplit("/", 1)[-1])} for r in refs],
+    }
+
+
+OC_TRIGGER = re.compile(r"고유\s*캐릭터\s*(?:를|을)?\s*(?:생성|제작|만들)\S*")
+
+
+def oc_trigger_hint(text: str):
+    """사람이 방금 쓴 말이 '고유캐릭터 생성하기' 인가 — 맞으면 **나머지 말**을 돌려준다.
+
+    나머지 말이 힌트다("고유캐릭터 생성하기 — 검은 머리 바리스타"). 그 한 줄이 인물의
+    절반을 정하는데, 트리거만 보고 버리면 사람은 같은 말을 한 번 더 쓰게 된다.
+
+    좁게 잡는다(고유 + 캐릭터 + 생성/만들). 넓게 잡으면 "캐릭터 만들기 어렵네" 같은
+    평범한 말이 인물 생성으로 새고, 그건 사람이 원한 적 없는 30초짜리 기다림이다.
+    """
+    body = str(text or "")
+    m = OC_TRIGGER.search(body)
+    if not m:
+        return None
+    # 어미까지 통째로 먹고(만들어줘·생성해줘·만들기) 남는 말만 힌트로 본다.
+    return body[m.end():].strip().lstrip("-—:·,").strip()
+
+
+def make_oc_from_chat(messages: list, chat_id: str, hint: str = "") -> dict:
+    """대화 → 고유 캐릭터 한 명을 **실제로 만든다**(서랍 저장 + 매니페스트 투영 + 출연진).
+
+    출연진에 바로 넣는 이유: 방금 이 대화에서 만든 사람이다. 넣지 않으면 조립이 여전히
+    매니페스트의 첫 인물을 세우고, 사람은 방금 만든 인물이 왜 안 나오는지 모른다.
+    """
+    draft = vn_compose.character_from_talk(messages, hint)
+    with WRITE_LOCK:
+        oc = characters.create(draft["name"], profile=draft["profile"],
+                               prompt_anchor=draft["prompt_anchor"],
+                               prompt_tags=draft["prompt_tags"],
+                               source_chat=str(chat_id or ""))
+        cid = oc["character_id"]
+        characters.sync_manifest([cid])
+        cast = talk_store.chat_cast(chat_id)
+        cast = (list(cast) if isinstance(cast, list) else []) + [cid]
+        talk_store.set_chat_cast(chat_id, cast)
+    return {"character": _oc_view(oc), "cast": cast}
+
+
+def r_oc_from_chat(b):
+    """[고유캐릭터 만들기] 버튼 — 대화창의 트리거 문구와 같은 길을 쓴다."""
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    msgs = talk_store.load_log(talk_store.story_chat_path_for(cid))[-CHAT_WINDOW:]
+    return make_oc_from_chat(msgs, cid, str(b.get("hint") or ""))
+
+
+def r_oc_list(b):
+    """서랍 전체 + 얼굴 고정이 지금 어디까지 되는가."""
+    return {"characters": [_oc_view(oc) for oc in characters.list_all()],
+            "face_lock": characters.face_lock_state()}
+
+
+def r_oc_save(b):
+    """새 인물 또는 기존 인물 고치기. id 가 있으면 고치기다."""
+    cid = str(b.get("id") or "").strip()
+    fields = b.get("fields") if isinstance(b.get("fields"), dict) else {}
+    with WRITE_LOCK:
+        if cid:
+            oc = characters.update(cid, fields)
+        else:
+            oc = characters.create(str(fields.get("name") or ""),
+                                   profile=fields.get("profile"),
+                                   prompt_anchor=str(fields.get("prompt_anchor") or ""),
+                                   prompt_tags=fields.get("prompt_tags"),
+                                   source_chat=str(b.get("chat_id") or ""),
+                                   notes=str(fields.get("notes") or ""))
+        # 매니페스트에 바로 얹는다 — 조립이 이 인물을 쓰려면 검사기 A2 가 먼저 그를 알아야 한다.
+        characters.sync_manifest([oc.get("character_id")])
+    return {"character": _oc_view(oc)}
+
+
+def r_oc_delete(b):
+    """서랍에서 내린다(보관소로). 매니페스트의 사본은 남는다 — 다른 작품의 장면을 지키려고."""
+    with WRITE_LOCK:
+        res = characters.delete(str(b.get("id") or ""))
+    log.info("고유 캐릭터 내림 %s → %s", res.get("character_id"), res.get("archived_to"))
+    return res
+
+
+def r_oc_photo(b):
+    """기기에서 고른 사진 한 장 등록 — base64 본문으로 받는다(폰에서도 같은 길)."""
+    raw = b.get("b64")
+    if not isinstance(raw, str) or not raw.strip():
+        raise VNError("사진이 비어 있습니다.")
+    head, _, tail = raw.strip().partition(",")
+    payload = tail if head.startswith("data:") else raw.strip()
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error):
+        raise VNError("사진을 읽지 못했습니다 — 다시 골라 주세요.")
+    with WRITE_LOCK:
+        res = characters.add_reference(str(b.get("id") or ""), data, str(b.get("label") or ""))
+    res["character"] = _oc_view(characters.get(res["character_id"]))
+    return res
+
+
+def r_oc_photo_delete(b):
+    with WRITE_LOCK:
+        res = characters.remove_reference(str(b.get("id") or ""), str(b.get("rel") or ""))
+    res["character"] = _oc_view(characters.get(res["character_id"]))
+    return res
+
+
+def r_cast(b):
+    """이 대화에 누가 나오는가 — 읽기(ids 없음) · 쓰기(ids 있음).
+
+    ``[]`` 도 답이다("아무도 안 나온다"). ``null`` 은 '안 정함' 으로 되돌린다.
+    """
+    cid = talk_store.normalize_chat_id(b.get("chat_id"))
+    if "ids" in b:
+        ids = b.get("ids")
+        with WRITE_LOCK:
+            talk_store.set_chat_cast(cid, None if ids is None else ids)
+            if isinstance(ids, list) and ids:
+                characters.sync_manifest(ids)     # 조립 전에 검사기가 이 인물들을 알게 한다
+    cast = talk_store.chat_cast(cid)
+    known = {oc.get("character_id"): oc.get("name", "") for oc in characters.list_all()}
+    return {"chat_id": cid, "cast": cast,
+            "names": [{"id": i, "name": known.get(i, "")} for i in (cast or [])],
+            "missing": [i for i in (cast or []) if i not in known],
+            "characters": [{"id": k, "name": v} for k, v in known.items()]}
 
 
 def r_scene_add(b):
@@ -1456,6 +1627,9 @@ POST_ROUTES = {
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/set-crop": r_set_crop, "/api/set-scene": r_set_scene,
     "/api/scene-add": r_scene_add, "/api/scene-delete": r_scene_delete,
+    "/api/oc": r_oc_list, "/api/oc-save": r_oc_save, "/api/oc-delete": r_oc_delete,
+    "/api/oc-photo": r_oc_photo, "/api/oc-photo-delete": r_oc_photo_delete,
+    "/api/cast": r_cast, "/api/oc-from-chat": r_oc_from_chat,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/export-pwa": r_export_pwa,
@@ -1876,6 +2050,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(state())
         elif path.startswith("/studio/"):
             self._serve_studio_js(urllib.parse.unquote(path[len("/studio/"):]))
+        elif path.startswith("/ref/"):
+            self._serve_ref(urllib.parse.unquote(path[len("/ref/"):]),
+                            urllib.parse.parse_qs(query))
         elif path.startswith("/img/"):
             self._serve_image(urllib.parse.unquote(path[len("/img/"):]),
                               urllib.parse.parse_qs(query))
@@ -1917,6 +2094,39 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._bytes(target.read_bytes(), "text/javascript; charset=utf-8",
                     [("ETag", tag), ("Cache-Control", cache)])
+
+    def _serve_ref(self, rel: str, qs: dict) -> None:
+        """고유 캐릭터의 참고 사진 — ``/ref/OC-001/<파일>``.
+
+        ``/img/`` 와 나눈 이유는 뿌리가 다르기 때문이다(images/ 가 아니라
+        project/characters/refs/). 경로 판정은 :func:`characters.ref_path` 한 곳에만 둔다 —
+        여기서 한 번 더 이어 붙이면 그 자리가 곧 저장소 파일 배달 창구가 된다.
+        """
+        cid, _, name = rel.replace("\\", "/").partition("/")
+        target = None
+        if characters.is_id(cid):
+            target = characters.ref_path(cid, name)
+        if target is None or not target.is_file():
+            self._json({"error": "not found"}, 404)
+            return
+        try:
+            w = int((qs.get("w") or ["0"])[0])
+        except ValueError:
+            w = 0
+        tag = etag_for(target, w)
+        cache = f"private, max-age={IMG_MAX_AGE}"
+        if (self.headers.get("If-None-Match") or "").strip() == tag:
+            self._send_304(tag, cache)
+            return
+        data, ctype = None, IMG_TYPES.get(target.suffix.lower().lstrip("."),
+                                          "application/octet-stream")
+        if w > 0:
+            got = make_thumb(target, max(32, min(w, 2048)))
+            if got:
+                data, ctype = got
+        if data is None:
+            data = target.read_bytes()
+        self._bytes(data, ctype, [("ETag", tag), ("Cache-Control", cache)])
 
     def _serve_image(self, rel: str, qs: dict) -> None:
         target = safe_path(ROOT / "images", rel)

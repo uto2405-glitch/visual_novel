@@ -84,7 +84,7 @@ BANNED_DOM = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
 #  meta T01 이 이 목록을 두 방향으로 감시한다: 파일 존재·적재 + optional 되돌림 금지.)
 REQUIRED_MODULES = (
     "vn_core", "advance_scene", "scene_ops", "talk_store", "prompt_build", "local_llm",
-    "works",
+    "works", "characters",
     "webapp", "vn_compose", "export_viewer", "makefun_client", "scene_lint",
     "secret_scan", "backup_project", "print_preflight", "gen_jobs",
     # 여기 없으면 '구문 검사만 받고 아무도 부르지 않는' 상태가 조용히 유지된다.
@@ -115,7 +115,7 @@ LAYER = {
     "vn_core": 0, "check_protocol": 0,
     # 1 저장소·전송 계층 — vn_core 만 본다. gen_common 은 두 이미지 클라이언트가 함께 쓰는
     #   결과형·메타·대장 조각이라 클라이언트보다 아래에 있어야 한다.
-    "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1, "works": 1,
+    "talk_store": 1, "scene_ops": 1, "local_llm": 1, "secret_scan": 1, "works": 1, "characters": 1,
     "scene_brief": 1, "export_viewer": 1, "print_export": 1, "backup_project": 1,
     "gen_common": 1,
     # 2 조립·전이 계층
@@ -6022,7 +6022,8 @@ def j18(b: Box):
     talk = dom("talk", "장면으로 조립", gone="글자 확인 중")
     ok(len(talk) > 2000, "대화 화면이 거의 비어 있다(%d바이트) — 스크립트가 죽었다" % len(talk))
     for probe, why in (("로컬 LLM 스튜디오", "앱 이름"), ('id="live"', "고정 진행 자리"),
-                       ('id="tabList"', "목록 탭 버튼"), ("장면으로 조립", "조립 버튼")):
+                       ('id="tabList"', "목록 탭 버튼"), ('id="tabCast"', "고유캐릭터 탭 버튼"),
+                       ("장면으로 조립", "조립 버튼")):
         ok(probe in talk, "대화 화면에 %s 가 없다" % why)
 
     lst = dom("list", 'class="chatlist"')
@@ -6034,9 +6035,27 @@ def j18(b: Box):
     # 탭마다 다른 것이 그려져야 한다 — 같은 DOM 이 나오면 해시 라우팅이 죽은 것이다
     ok(lst != talk, "목록과 대화가 같은 화면을 그린다 — 탭 전환이 동작하지 않는다")
 
-    # 스크립트가 죽으면 이 표시들은 초기값 그대로 남는다(boot 이 끝까지 못 갔다는 뜻)
-    ok("연결" in talk or "끊김" in talk or "거부" in talk,
-       "상태 칩이 갱신되지 않았다 — boot 이 끝까지 가지 못했다")
+    # 스크립트가 죽으면 이 표시들은 초기값('확인 중') 그대로 남는다(boot 이 끝까지 못 갔다는 뜻).
+    #
+    # **'확인 실패' 도 갱신이다.** 처음엔 연결/끊김/거부만 받았는데, 상태 조회 자체가
+    # 실패하면 칩은 "글자 확인 실패" 가 된다 — 화면은 멀쩡히 끝까지 갔는데 검사만
+    # 빨간불이었고, 그게 5회 중 1회씩 깜빡이던 나머지 이유였다.
+    chip = ""
+    at = talk.find('id="chipLlm"')
+    if at >= 0:
+        chip = " ".join(talk[at:at + 120].split())
+    settled = any(w in talk for w in ("연결", "끊김", "거부", "확인 실패"))
+    if not settled:
+        # 두 가지가 같은 모습이다: **화면이 안 바꿨다**(진짜 고장)와 **상태 조회가 아직
+        # 안 끝났다**(이 기계가 느리거나 모델 쪽 연결이 오래 걸린다). 둘을 가르지 않으면
+        # 이 검사는 4~6회에 한 번씩 깜빡이고, 깜빡이는 검사는 없는 검사보다 나쁘다 —
+        # 사람이 결과를 안 믿게 된다. 그래서 **조회에 걸리는 시간을 직접 잰다.**
+        t0 = time.time()
+        b.wapi("/api/talk-status", {})
+        slow = time.time() - t0
+        ok(slow > 3.0,
+           "상태 칩이 갱신되지 않았다 — 상태 조회는 %.1f초면 끝나는데 화면이 안 바꿨다. 칩: %s"
+           % (slow, chip or "(못 찾음)"))
 
 
 @test("unit", "U40 남은 시간 — 절대 올라가지 않고, 배치 경계를 넘고, 멈춘 작업을 숨기지 않는다")
@@ -6788,6 +6807,244 @@ def u50(b: Box):
         _sc["status"] = "SCENE_PLAN"
         ap_path.write_text(json.dumps(_sc, ensure_ascii=False), encoding="utf-8")
         so.delete_scene(appr, "U50 뒷정리")
+
+
+@test("unit", "U51 고유 캐릭터 서랍 — 대화를 갈아 끼워도 남고, 사진은 그림만 받고, 지워도 매니페스트에서 빠지지 않는다")
+def u51(b: Box):
+    """사람이 공들여 만든 인물은 **작품보다 오래 산다.** 작품(장면·그림)은 대화마다
+    갈아 끼우는데(works), 인물까지 같이 갈리면 고양이 이야기에서 만든 인물을 다음
+    단편에서 쓸 수가 없다. 그래서 서랍은 works 가 건드리지 않는 자리에 있다.
+
+    세 가지가 조용히 틀리기 쉬운 자리다.
+
+    (1) **사진.** 사람이 자기 기기에서 고른 파일이 그대로 서버 디스크에 앉고, 나중에
+        웹으로 다시 나간다. 확장자를 믿으면 그 경로가 임의 파일 배달로 변한다 —
+        머리 바이트로 판정해야 한다.
+
+    (2) **지우기.** 매니페스트에서까지 빼 버리면, 그 인물이 나오는 **다른 작품의 장면**이
+        통째로 A2 FAIL 이 된다. 사람은 건드린 적도 없는 작품이 왜 빨간지 알 수 없다.
+        그래서 서랍에서만 내리고 매니페스트의 사본은 남긴다.
+
+    (3) **번호.** 지운 인물의 번호를 다시 쓰면, 보관소에서 되살렸을 때 두 사람이 같은
+        id 를 갖는다 — 그때부터 어느 쪽 얼굴이 나올지는 운이다.
+    """
+    ch = b.mod("characters")
+    vc = b.mod("vn_core")
+    root = b.root / "ctest"
+    keep = (ch.DIR, ch.REFS, ch.ARCHIVE)
+    mf_path = vc.PROJECT / "manifest.json"
+    mf_keep = mf_path.read_bytes()          # 샌드박스는 공용이다 — 매니페스트는 원상 복구한다
+    ch.DIR = root / "characters"
+    ch.REFS = ch.DIR / "refs"
+    ch.ARCHIVE = root / "characters_deleted"
+    try:
+        a = ch.create("연우", profile={"age": "24", "hair": "짧은 흑발"},
+                      prompt_anchor="24-year-old Korean man, short black hair",
+                      prompt_tags=["short black hair", " Grey  hoodie ", "grey hoodie"])
+        eq(a["character_id"], "OC-001", "첫 인물의 번호가 OC-001 이 아니다")
+        eq(a["prompt_tags"], ["short black hair", "Grey hoodie"], "같은 태그가 대소문자·공백만 다르게 두 번 들어갔다")
+        b2 = ch.create("도윤")
+        eq(b2["character_id"], "OC-002", "두 번째 인물이 번호를 이어받지 않는다")
+
+        # 고칠 수 없는 칸은 거절한다 — id 가 바뀌면 그 인물을 가리키던 장면이 전부 미아가 된다
+        try:
+            ch.update("OC-001", {"character_id": "OC-099"})
+            ok(False, "id 를 고쳐 주었다 — 장면이 가리키던 인물이 사라진다")
+        except Exception as exc:
+            ok("character_id" in str(exc), "무엇이 거절됐는지 말하지 않는다: %s" % str(exc)[:60])
+        try:
+            ch.update("OC-001", {"name": "   "})
+            ok(False, "이름을 비워 주었다 — 매칭 화면에서 고를 수가 없다")
+        except Exception as exc:
+            ok("이름" in str(exc), "거절 사유가 이름이라고 말하지 않는다")
+
+        # (1) 사진 — 그림만 받는다. 확장자가 아니라 머리 바이트로 본다.
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+        r = ch.add_reference("OC-001", png, "정면")
+        ok(r["file"].startswith("project/characters/refs/OC-001/"), "사진 경로가 인물 밑이 아니다")
+        ok(r["file"].endswith(".png"), "머리 바이트로 확장자를 정하지 않았다: %s" % r["file"])
+        eq(len(ch.get("OC-001")["reference_images"]), 1, "사진이 인물 기록에 남지 않았다")
+        for bad, why in ((b"MZ\x90\x00" + b"0" * 64, "실행 파일"),
+                         (b"<?php echo 1; ?>", "스크립트"),
+                         (b"", "빈 파일")):
+            try:
+                ch.add_reference("OC-001", bad)
+                ok(False, "%s 을 사진으로 받았다 — 이 폴더는 나중에 웹으로 나간다" % why)
+            except Exception:
+                pass
+        eq(len(ch.get("OC-001")["reference_images"]), 1, "거절했는데 목록이 늘었다")
+        try:
+            ch.add_reference("OC-001", png * 200000)
+            ok(False, "8MB 넘는 사진을 받았다")
+        except Exception as exc:
+            ok("큽니다" in str(exc) or "MB" in str(exc), "크기 거절이 이유를 말하지 않는다")
+
+        # 사진 떼기 — 목록에 없는 경로는 거절한다(경로가 곧 삭제 대상이다)
+        for evil in ("../../../tools/vn_core.py", "project/characters/refs/OC-002/x.png"):
+            try:
+                ch.remove_reference("OC-001", evil)
+                ok(False, "목록에 없는 경로를 지웠다: %s" % evil)
+            except Exception:
+                pass
+        ok((vc.ROOT / "tools" / "vn_core.py").is_file(), "저장소 파일이 지워졌다")
+        # 경로를 실제 파일로 되짚는 자리 자체를 본다 — 웹이 이 함수로 사진을 돌려준다.
+        for evil in ("../../../tools/vn_core.py", "..", "OC-002/../OC-001/x.png",
+                     "C:/Windows/win.ini", "/etc/passwd"):
+            got = ch.ref_path("OC-001", evil)
+            ok(got is None or got.parent == (ch.REFS / "OC-001"),
+               "사진 경로가 서랍 밖을 가리킨다: %s → %s" % (evil, got))
+        rel = ch.get("OC-001")["reference_images"][0]
+        out = ch.remove_reference("OC-001", rel)
+        eq(out["file_gone"], True, "사진을 뗐는데 파일이 남아 있다")
+
+        # (2) 매니페스트 투영 — 얹기만 한다
+        before = json.loads(mf_keep.decode("utf-8"))
+        had = [c.get("character_id") for c in before.get("characters", [])]
+        # 결과로 본다("이번에 추가됐는가" 가 아니라). 샌드박스는 모든 테스트가 함께 쓰므로,
+        # 앞선 웹 검사가 이미 같은 번호를 얹어 둔 상태일 수 있다 — 그건 고장이 아니다.
+        ch.sync_manifest()
+        now = [c.get("character_id") for c in vc.load_manifest().get("characters", [])]
+        for cid in ("OC-001", "OC-002"):
+            ok(cid in now, "서랍의 %s 가 매니페스트에 얹히지 않았다" % cid)
+        for cid in had:
+            ok(cid in now, "원래 있던 인물 %s 가 사라졌다 — 그 작품의 장면이 A2 FAIL 이 된다" % cid)
+        stamp = mf_path.stat().st_mtime_ns
+        eq(ch.sync_manifest()["added"], [], "바뀐 게 없는데 또 얹었다")
+        eq(mf_path.stat().st_mtime_ns, stamp, "바뀐 게 없는데 매니페스트를 다시 썼다")
+        ch.update("OC-001", {"prompt_anchor": "24-year-old Korean man, buzz cut"})
+        eq(ch.sync_manifest()["updated"], ["OC-001"], "고친 인물이 매니페스트에 반영되지 않았다")
+        got = [c for c in vc.load_manifest()["characters"] if c.get("character_id") == "OC-001"][0]
+        ok("buzz cut" in got["prompt_anchor"], "매니페스트의 앵커가 옛 문장 그대로다")
+        ok("source_chat" not in got and "notes" not in got,
+           "서랍 전용 칸이 매니페스트로 새어 나갔다: %s" % sorted(got))
+
+        # (3) 지우기 — 보관하고, 매니페스트에는 남기고, 번호는 다시 쓰지 않는다
+        d = ch.delete("OC-002")
+        ok((ch.ARCHIVE / d["archived_to"] / "OC-002.json").is_file(),
+           "지운 인물이 보관되지 않았다 — 되돌릴 방법이 사라졌다")
+        eq(len(ch.list_all()), 1, "서랍에서 내려가지 않았다")
+        still = [c.get("character_id") for c in vc.load_manifest().get("characters", [])]
+        ok("OC-002" in still,
+           "매니페스트에서까지 뺐다 — 그 인물이 나오는 다른 작품의 장면이 A2 FAIL 이 된다")
+        eq(ch.create("새 사람")["character_id"], "OC-003", "지운 번호를 다시 썼다")
+
+        # 깨진 파일은 조용히 건너뛰지 않는다 — 사라진 줄 알고 같은 사람을 또 만든다
+        (ch.DIR / "OC-777.json").write_text("{ 깨진", encoding="utf-8")
+        broken = [c for c in ch.list_all() if c.get("character_id") == "OC-777"]
+        eq(len(broken), 1, "깨진 인물 파일이 목록에서 조용히 사라졌다")
+        ok(broken[0].get("broken"), "깨졌다고 표시하지 않는다")
+        last = ch.sync_manifest()["added"]
+        ok("OC-777" not in last, "깨진 파일을 매니페스트에 얹었다 — 읽지도 못한 인물이다")
+        ok("OC-003" in last, "멀쩡한 새 인물이 얹히지 않았다: %s" % last)
+
+        # 작품을 갈아 끼워도 서랍은 그대로다 — works 가 바꾸는 두 자리 밖에 있어야 한다
+        wk = b.mod("works")
+        for moved in (wk.SCENES, wk.IMAGES_RAW):
+            ok(moved not in ch.DIR.parents and ch.DIR != moved,
+               "서랍이 작품과 함께 갈리는 자리에 있다: %s" % ch.DIR)
+        ok(ch.DIR.name not in [n for n, _ in wk._PAIRS], "서랍 폴더 이름이 작품 폴더와 겹친다")
+
+        # 사진으로 얼굴을 잡을 수 있는지 **솔직하게** 말한다
+        st = ch.face_lock_state()
+        eq(st["photo_used"], False, "사진을 쓴다고 말한다 — 지금 엔진은 사진을 못 본다")
+        ok("IPAdapter" in st["note"], "무엇이 있어야 되는지 말하지 않는다")
+    finally:
+        ch.DIR, ch.REFS, ch.ARCHIVE = keep
+        mf_path.write_bytes(mf_keep)
+
+
+@test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
+def w38(b: Box):
+    """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —
+    라우트가 등록됐는가, 화면이 받는 모양이 맞는가, 사진이 실제로 돌아오는가.
+
+    사진 서빙을 특히 본다. ``/ref/`` 는 **사람이 올린 파일을 다시 내보내는 창구**라,
+    경로 한 줄이 새면 그 자리가 저장소 파일 배달로 변한다. 그리고 그건 브라우저에서
+    한 번 열어 보는 것으로는 절대 눈치챌 수 없는 종류의 구멍이다.
+    """
+    png = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4z8AAAAMBAQAY3Y2w"
+           "AAAAAElFTkSuQmCC")      # 1×1 PNG
+
+    code, got = b.wapi("/api/oc", {})
+    eq(code, 200, "서랍 목록 라우트가 없다")
+    base = len(got.get("characters") or [])
+    lock = got.get("face_lock") or {}
+    eq(lock.get("photo_used"), False, "사진으로 얼굴을 잡는다고 화면에 말하고 있다")
+
+    code, made = b.wapi("/api/oc-save", {"fields": {
+        "name": "W38 연우", "prompt_anchor": "24-year-old Korean man, short black hair",
+        "prompt_tags": ["short black hair", "grey hoodie"],
+        "profile": {"age": "24", "speech_style": "담담한 반말"}}})
+    eq(code, 200, "인물 저장이 200 이 아니다: %s" % str(made)[:120])
+    oc = made.get("character") or {}
+    cid = oc.get("id", "")
+    ok(cid.startswith("OC-"), "새 인물의 id 가 이상하다: %r" % cid)
+    eq(oc.get("photos"), [], "새 인물에 사진이 붙어 있다")
+
+    # 조립이 이 인물을 쓰려면 검사기 A2 가 먼저 그를 알아야 한다 — 저장하면서 얹혀야 한다
+    code, st = b.wapi("/api/state", None)
+    ok(any(c.get("id") == cid for c in (st.get("characters") or [])),
+       "새 인물이 매니페스트에 얹히지 않았다 — 그 인물로 만든 장면은 검사기에서 빨간불이다")
+
+    # 사진 — 올리고, 돌려받고, 뗀다
+    code, up = b.wapi("/api/oc-photo", {"id": cid, "b64": "data:image/png;base64," + png,
+                                        "label": "정면"})
+    eq(code, 200, "사진 등록이 200 이 아니다: %s" % str(up)[:120])
+    photos = (up.get("character") or {}).get("photos") or []
+    eq(len(photos), 1, "사진이 인물에 붙지 않았다")
+    url = photos[0].get("url", "")
+    ok(url.startswith("/ref/" + cid + "/"), "사진 주소가 이 인물 밑이 아니다: %r" % url)
+    code, _hd, body = b.raw(url, None, {}, 20)
+    eq(code, 200, "등록한 사진이 돌아오지 않는다")
+    ok(body.startswith(b"\x89PNG"), "돌아온 것이 그 그림이 아니다")
+
+    # 그림이 아닌 것은 애초에 못 올라간다(이 폴더는 그대로 웹으로 나간다)
+    evil = base64.b64encode(b"MZ\x90\x00" + b"0" * 64).decode("ascii")
+    eq(b.code("/api/oc-photo", {"id": cid, "b64": evil}), 400,
+       "실행 파일을 사진으로 받았다")
+
+    # 서랍 밖을 가리키는 주소는 404 다 — 200 이면 저장소 파일이 그대로 나간 것이다.
+    #
+    # **깊이를 하나로 고정하지 않는다.** 처음엔 ../ 를 세 번만 썼는데, 서랍이
+    # project/characters/refs 라 세 번은 project/ 까지밖에 못 간다 — 방어를 통째로 빼도
+    # 검사는 통과했다. 검사가 저장소 구조에 맞춰 조용히 무력해진 것이다.
+    # (전송 중에 ../ 가 정리되지 않는다는 것은 확인했다: 서버는 원문 그대로 받는다.)
+    evil_urls = ["/ref/NOT-AN-ID/x.png", "/ref/", "/ref/" + cid + "/"]
+    for depth in range(1, 9):
+        up_path = "../" * depth
+        evil_urls.append("/ref/" + cid + "/" + up_path + "tools/vn_core.py")
+        evil_urls.append("/ref/" + cid + "/" + up_path.replace("/", "%2f") + "tools%2fvn_core.py")
+    for evil_url in evil_urls:
+        code, _hd, body = b.raw(evil_url, None, {}, 20)
+        ok(code != 200 or b"vn_core" not in body,
+           "서랍 밖 파일이 나왔다: %s → %d (%d바이트)" % (evil_url, code, len(body)))
+
+    code, off = b.wapi("/api/oc-photo-delete", {"id": cid, "rel": photos[0].get("rel")})
+    eq(code, 200, "사진 떼기가 200 이 아니다")
+    eq((off.get("character") or {}).get("photos"), [], "뗐는데 목록에 남아 있다")
+
+    # 출연진 — 이 대화에 누가 나오는가
+    code, cast = b.wapi("/api/cast", {"chat_id": "w38chat"})
+    eq(code, 200, "출연진 라우트가 없다")
+    eq(cast.get("cast"), None, "새 대화인데 출연진이 이미 정해져 있다")
+    code, cast = b.wapi("/api/cast", {"chat_id": "w38chat", "ids": [cid]})
+    eq(cast.get("cast"), [cid], "출연진이 저장되지 않았다")
+    eq([n.get("name") for n in (cast.get("names") or [])], ["W38 연우"],
+       "출연진 이름이 화면으로 돌아오지 않는다")
+    # **빈 목록도 답이다** — '아무도 안 나온다'(고양이·풍경 단편)
+    code, cast = b.wapi("/api/cast", {"chat_id": "w38chat", "ids": []})
+    eq(cast.get("cast"), [], "'아무도 안 나온다' 가 '안 정함' 으로 뭉개졌다")
+    code, cast = b.wapi("/api/cast", {"chat_id": "w38chat"})
+    eq(cast.get("cast"), [], "빈 출연진이 저장되지 않았다 — 다시 읽으면 사라진다")
+
+    # 내리기 — 보관하고, 매니페스트의 사본은 남긴다
+    code, gone = b.wapi("/api/oc-delete", {"id": cid})
+    eq(code, 200, "인물 내리기가 200 이 아니다: %s" % str(gone)[:120])
+    code, got = b.wapi("/api/oc", {})
+    eq(len(got.get("characters") or []), base, "서랍에서 내려가지 않았다")
+    code, st = b.wapi("/api/state", None)
+    ok(any(c.get("id") == cid for c in (st.get("characters") or [])),
+       "매니페스트에서까지 뺐다 — 그 인물로 만든 장면이 검사기에서 빨간불이 된다")
 
 
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")

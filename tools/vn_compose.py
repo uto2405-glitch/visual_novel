@@ -222,8 +222,32 @@ def _episode_block(mf: dict) -> str:
 """
 
 
+def cast_chars(mf: dict, cast) -> list:
+    """매니페스트 인물 → **이 대화에 나오는 사람들만.**
+
+    ``cast`` 가 ``None`` 이면 예전 그대로(작품의 인물 전부). 목록이면 그 순서대로 좁힌다.
+    **빈 목록은 "아무도 안 나온다" 는 뜻이고, 그건 유효한 답이다** — 고양이 이야기,
+    풍경 단편이 그렇다. 이 구분이 없던 동안 조립은 대화 내용과 무관하게 매니페스트의
+    첫 인물을 모든 장면에 밀어 넣었고, 고양이 이야기의 장면마다 이지혜가 서 있었다.
+
+    없는 id 는 조용히 버린다 — 서랍에서 지운 인물을 가리키는 낡은 출연진 때문에 조립
+    자체가 막히면, 사람은 무엇을 고쳐야 하는지 알 수 없다(화면이 매칭에서 다시 묻는다).
+    """
+    chars = [c for c in (mf.get("characters") or []) if isinstance(c, dict)]
+    if cast is None:
+        return chars
+    by_id = {c.get("character_id"): c for c in chars}
+    out, seen = [], set()
+    for cid in (cast if isinstance(cast, list) else []):
+        key = str(cid).strip()
+        if key in by_id and key not in seen:
+            seen.add(key)
+            out.append(by_id[key])
+    return out
+
+
 def build_compose_instruction(count: int, branching: bool = False,
-                             source: str = "") -> str:
+                             source: str = "", cast=None) -> str:
     """스토리라인 → 장면 분해 지시문을 조립한다. (API 호출용·수동 복붙용 공용)
 
     branching=True 면 선택지/분기 출력 형식을 추가로 요청한다(기본은 선형 작품).
@@ -250,7 +274,7 @@ def build_compose_instruction(count: int, branching: bool = False,
     mf = vn_core.load_json_safe(MANIFEST, {})
     if not mf:
         raise VNError("project/manifest.json 이 없거나 읽을 수 없습니다. 작품 설정을 먼저 저장하세요.")
-    chars, locs = mf.get("characters", []), mf.get("locations", [])
+    chars, locs = cast_chars(mf, cast), mf.get("locations", [])
     # 말투 규칙을 함께 싣는다. 대화 탭은 이미 같은 칸(profile.speech_style)을 읽어 페르소나를
     # 만드는데 장면 구성만 그것을 몰라서, 반말로 말하는 인물이 새 장면에서 "고마워요" 라고
     # 존댓말을 썼다(실측). 같은 작품의 기존 12장과 새로 만든 3장이 말투부터 갈린다.
@@ -260,6 +284,11 @@ def build_compose_instruction(count: int, branching: bool = False,
            if str((c.get('profile') or {}).get('speech_style', '')).strip() else "")
         for c in chars)
     loc_block = "\n".join(f"- {l.get('location_id')} {l.get('name','')}: anchor=\"{l.get('prompt_anchor','')}\"" for l in locs)
+    if not chars:
+        # 사람이 "아무도 안 나온다" 고 말했는데 지시문이 조용하면, 모델은 빈 자리를
+        # 제 마음대로 채운다 — 고양이 이야기에 이름 없는 소녀가 등장한다.
+        char_block = ("- (없음) 이 이야기에는 등장인물이 없다. dialogue 는 비우고(또는 "
+                      "speaker_id 를 \"\" 로 두고), image_prompt 에 사람을 넣지 마라.")
     style = vn_core.visual_style(mf)
     shot_vocab = " / ".join(vn_core.STD_SHOTS)      # 어휘 정본은 vn_core(린터도 같은 목록을 본다)
     angle_vocab = " / ".join(vn_core.STD_ANGLES)
@@ -452,7 +481,7 @@ def prune_backups(keep: int = BACKUP_KEEP) -> list[str]:
 _EXISTS_MSG = "이미 장면이 있습니다. '기존 장면 백업 후 재구성'(--force) 으로 다시 실행하세요."
 
 
-def append_scenes_from_items(items) -> dict:
+def append_scenes_from_items(items, cast=None) -> dict:
     """장면 배열을 **기존 장면 뒤에 이어 붙인다.** 기존 장면은 한 글자도 건드리지 않는다.
 
     ``_create_scenes_from_items`` 와 갈라 둔 이유: 그쪽은 '작품 하나를 통째로 만든다' 는
@@ -472,7 +501,7 @@ def append_scenes_from_items(items) -> dict:
         raise VNError(f"한 번에 이어 붙일 수 있는 장면은 최대 {MAX_SCENES}개입니다.")
 
     mf = vn_core.load_json_safe(MANIFEST, {})
-    chars, locs = mf.get("characters", []), mf.get("locations", [])
+    chars, locs = cast_chars(mf, cast), mf.get("locations", [])
     char_ids = [c.get("character_id") for c in chars]
     loc_ids = {l.get("location_id") for l in locs}
 
@@ -790,7 +819,7 @@ class _SceneStream:
 
 
 def compose_batch(total: int, branching: bool, start: int, end: int,
-                  made: list | None = None, on_scene=None, source: str = "") -> str:
+                  made: list | None = None, on_scene=None, source: str = "", cast=None) -> str:
     """장면 구성을 **구간으로 나눠** 한 번 부른다 → 모델의 원문 응답 그대로.
 
     왜 나누는가: 장면 1개에 약 30초다(실측 12~14 tok/s). 10개를 한 번에 시키면 254초가
@@ -815,7 +844,7 @@ def compose_batch(total: int, branching: bool, start: int, end: int,
         raise VNError(f"구간 끝({end})이 전체({total})보다 큽니다.")
 
     want = end - start + 1
-    lines = [build_compose_instruction(total, branching, source), "", "[이번 요청]",
+    lines = [build_compose_instruction(total, branching, source, cast=cast), "", "[이번 요청]",
              f"전체 {total}개 장면 중 {start}번째부터 {end}번째까지, {want}개만 출력하라.",
              f"order 에는 전체 기준 번호({start}~{end})를 그대로 넣어라. 1 부터 다시 세지 마라.",
              f"{want}개보다 많이도 적게도 쓰지 마라."]
@@ -1021,6 +1050,8 @@ def compose_job_save(force: bool = False) -> dict:
             raise VNError("저장할 장면이 없습니다. 이미 저장되었을 수 있습니다.")
         total = int(_JOB.get("total") or 0)
         appending = bool(_JOB.get("append"))
+        job_cast = _JOB.get("cast")
+        job_cast = list(job_cast) if isinstance(job_cast, list) else None
         _JOB["items"] = []          # 자격을 여기서 가져간다 — 둘째 요청은 위에서 걸린다
         _JOB["message"] = "저장 중…"
     try:
@@ -1030,7 +1061,7 @@ def compose_job_save(force: bool = False) -> dict:
             # 이어 붙이기는 개수를 강제하지 않는다 — "새로 쓴 만큼" 가 이 모드의 약속이다.
             for it in items:
                 it.pop("order", None)
-            res = append_scenes_from_items(items)
+            res = append_scenes_from_items(items, cast=job_cast)
         else:
             res = compose_from_json(json.dumps(items, ensure_ascii=False), force,
                                     expected=total or len(items))
@@ -1066,7 +1097,8 @@ def compose_job_clear() -> dict:
     return compose_job_status()
 
 
-def _compose_worker(total: int, batch: int, branching: bool, source: str = "") -> None:
+def _compose_worker(total: int, batch: int, branching: bool, source: str = "",
+                    cast=None) -> None:
     """배치를 돌며 장면을 모은다. 실패해도 **이미 받은 것은 버리지 않는다.**"""
     try:
         # 이어받기: 이미 들고 있는 장면 다음부터 시작한다. 1 로 고정하면 [이어서 다시] 가
@@ -1118,7 +1150,7 @@ def _compose_worker(total: int, batch: int, branching: bool, source: str = "") -
                 raw = compose_batch(total, branching, start, end,
                                     [{"order": m.get("order"), "purpose": m.get("purpose")}
                                      for m in made],
-                                    on_scene=_arrived, source=source)
+                                    on_scene=_arrived, source=source, cast=cast)
             except _ComposeStop:              # 사람이 멈췄다 — 지금까지 받은 것은 그대로 둔다
                 with _JOB_LOCK:
                     kept = len(_JOB.get("items") or [])
@@ -1186,7 +1218,8 @@ def _compose_worker(total: int, batch: int, branching: bool, source: str = "") -
 
 
 def compose_job_start(total: int, batch: int = 3, branching: bool = False,
-                      resume: bool = False, source: str = "", append: bool = False) -> dict:
+                      resume: bool = False, source: str = "", append: bool = False,
+                      cast=None) -> dict:
     """조립을 서버에서 시작한다. 화면을 닫아도 계속 돈다.
 
     resume=True 면 **이미 받아 둔 장면을 지우지 않고 그 다음부터** 이어서 받는다.
@@ -1212,9 +1245,15 @@ def compose_job_start(total: int, batch: int = 3, branching: bool = False,
         _JOB.clear()
         _JOB.update({"running": True, "total": total, "batch": batch, "items": kept,
                      "source": str(source or ""), "append": bool(append),
+                     # 출연진은 **시작할 때 정한 것**을 끝까지 쓴다. 저장은 몇 분 뒤에
+                     # 일어나는데, 그 사이 사람이 매칭을 바꿨다고 해서 이미 받아 둔
+                     # 장면의 인물이 달라지면 대사와 얼굴이 어긋난다.
+                     "cast": (list(cast) if isinstance(cast, list) else None),
                      "message": ("이어서 받습니다…" if kept else "조립을 시작합니다…"),
                      "started_at": int(time.time())})
-    threading.Thread(target=_compose_worker, args=(total, batch, branching, str(source or "")),
+    threading.Thread(target=_compose_worker,
+                     args=(total, batch, branching, str(source or ""),
+                           (list(cast) if isinstance(cast, list) else None)),
                      daemon=True).start()
     return compose_job_status()
 
@@ -1244,6 +1283,67 @@ def compose_from_json(text: str, force: bool, expected: int | None = None) -> di
 # 다음 장면 번호를 고르는 계산기는 여기 없다 — scene_ops.create_scene 안에 하나뿐이다.
 # (예전에는 이 파일의 next_scene_slot 과 CLI 의 cmd_new 가 각자 셌고, 파일명이 아니라
 #  파일 **안의** scene_id 만 봐서 손상된 장면 파일의 번호가 다시 뽑혔다.)
+
+
+def build_character_instruction(talk: list, hint: str = "") -> str:
+    """방금 나눈 대화 → **고유 캐릭터 한 명**을 만들라는 지시문.
+
+    두 가지를 한꺼번에 받아야 한다: 사람이 읽을 기준정보(한국어)와 **그림에 들어갈 영어
+    문장**이다. 나눠 부르면 두 번 기다리고(장당 30초대), 두 번째 호출이 첫 번째의 결정을
+    다시 해석하면서 머리색이 슬쩍 달라진다.
+
+    앵커를 영어로 요구하는 이유는 체크포인트가 영어 태그로 학습됐기 때문이다 — 한국어로
+    적으면 그 줄은 그림에 거의 닿지 않고, 사람은 "얼굴이 안 잡힌다" 고만 느낀다.
+
+    **나이는 성인으로 못 박는다.** 이 저장소의 규칙이고, 모델에게 맡기면 대화의 분위기를
+    따라 미성년으로 적는 일이 생긴다 — 그 문장은 그대로 그림 프롬프트가 된다.
+    """
+    want = str(hint or "").strip()
+    return ("아래는 방금 나눈 대화다. 여기 나오는(또는 사람이 방금 말한) 인물 **한 명**을\n"
+            "고유 캐릭터로 정리하라. 다른 말 없이 JSON 객체 하나만 출력하라.\n\n"
+            + (f"[사람이 콕 집어 말한 것]\n{want[:400]}\n\n" if want else "")
+            + f"[대화]\n{chr(10).join(talk)}\n\n"
+            "[규칙]\n"
+            "1. name·profile 의 값은 한국어로 쓴다.\n"
+            "2. age 는 **반드시 성인**(20 이상)으로 적는다. 대화가 무엇을 암시하든 예외는 없다.\n"
+            "3. prompt_anchor 는 **영어 한 문장**이다. 나이·성별·머리·눈·체형·기본 복장을\n"
+            "   한 줄에 담는다. 이 문장이 모든 장면에 그대로 들어가서 얼굴을 고정한다.\n"
+            "4. prompt_tags 는 **영어 태그 3~6개**다. 머리색·머리모양·옷·상징 소품처럼\n"
+            "   그림에서 눈에 띄는 것만 적는다(감정·분위기·카메라는 쓰지 않는다).\n"
+            "5. 태그와 앵커는 서로 어긋나면 안 된다(앵커가 검은 머리면 태그도 검은 머리).\n\n"
+            '{"name":"이름(한국어)",'
+            '"profile":{"age":"24","gender_presentation":"여성/남성/…","hair":"머리(한국어)",'
+            '"eyes":"눈(한국어)","build":"체형(한국어)","wardrobe":"기본 복장(한국어)",'
+            '"signature_props":["상징 소품"],"personality":"성격(한국어 2문장)",'
+            '"speech_style":"말투(한국어 1~2문장)"},'
+            '"prompt_anchor":"24-year-old Korean woman, ...",'
+            '"prompt_tags":["black hair","..."]}')
+
+
+def character_from_talk(messages, hint: str = "") -> dict:
+    """최근 대화 → 고유 캐릭터 초안(**저장하지 않는다**).
+
+    저장을 여기서 하지 않는 이유: 이 모듈은 id 를 매기지 않는다. 서랍의 번호는
+    ``characters.create`` 한 곳에서만 붙는다(장면 번호를 ``scene_ops.create_scene`` 만
+    붙이는 것과 같은 규칙이다).
+    """
+    msgs = messages if isinstance(messages, list) else []
+    talk = [f"{'나' if m.get('role') == 'user' else '상대'}: {str(m.get('content', ''))[:300]}"
+            for m in msgs[-14:] if isinstance(m, dict) and str(m.get("content", "")).strip()]
+    if not talk:
+        raise VNError("인물을 뽑을 대화가 없습니다. 먼저 몇 마디 나눠 보세요.")
+    item = extract_json_object(local_llm.chat(
+        [{"role": "user", "content": build_character_instruction(talk, hint)}],
+        temperature=0.7, max_tokens=800))
+    if not isinstance(item, dict):
+        raise VNError("인물 초안을 읽지 못했습니다 — 다시 한 번 눌러 주세요.")
+    name = " ".join(str(item.get("name") or "").split())
+    if not name:
+        raise VNError("모델이 이름을 적지 않았습니다 — 다시 한 번 눌러 주세요.")
+    prof = item.get("profile") if isinstance(item.get("profile"), dict) else {}
+    return {"name": name, "profile": prof,
+            "prompt_anchor": " ".join(str(item.get("prompt_anchor") or "").split()),
+            "prompt_tags": item.get("prompt_tags") or []}
 
 
 def build_talk_scene_instruction(talk: list, chars: list, locs: list, who=None) -> str:

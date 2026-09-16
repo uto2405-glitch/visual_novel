@@ -114,6 +114,41 @@ def _default_use_context(chat_id: str) -> bool:
     return not chat_id
 
 
+def chat_cast(chat_id: Any):
+    """이 대화에 **누가 나오는가** — 고유 캐릭터 id 목록. 안 정했으면 ``None``.
+
+    ``None`` 과 ``[]`` 는 다른 뜻이다. 안 정했으면 예전 그대로 매니페스트의 인물을 쓰고,
+    빈 목록은 **사람이 "아무도 안 나온다" 고 말한 것**이다(고양이 이야기·풍경 단편).
+    그 둘을 같이 취급하면, 조립이 고양이 이야기에 이지혜를 밀어 넣던 그 버그로 돌아간다.
+    """
+    rec = load_chat_meta().get(normalize_chat_id(chat_id) or "")
+    raw = rec.get("cast") if isinstance(rec, dict) else None
+    if not isinstance(raw, list):
+        return None
+    return [str(x).strip() for x in raw if str(x).strip()]
+
+
+def set_chat_cast(chat_id: Any, ids: Any) -> list:
+    """출연진을 적는다. ``None`` 을 주면 '안 정한 상태'로 되돌린다."""
+    cid = normalize_chat_id(chat_id) or ""
+    meta = load_chat_meta()
+    rec = meta.get(cid) if isinstance(meta.get(cid), dict) else {}
+    if ids is None:
+        rec = {k: v for k, v in rec.items() if k != "cast"}
+        out: list = []
+    else:
+        seen, out = set(), []
+        for x in (ids if isinstance(ids, list) else []):
+            s = str(x).strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        rec = {**rec, "cast": out}
+    meta[cid] = rec
+    vn_core.atomic_write_json(chat_meta_path(), meta)
+    return out
+
+
 def chat_composed_upto(chat_id: Any) -> int:
     """이 갈래에서 **어디까지 장면으로 만들었는가**(발화 수).
 

@@ -171,6 +171,17 @@ main{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;
 .listbar .note{font-size:11px;color:var(--sub);flex:1 1 200px;min-width:0}
 /* 장면 탭 위의 도구 띄 — 그림체·일괄 굽기·장면 추가. 목록 띄와 같은 틀을 쓴다. */
 .scenebar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;padding:0 0 10px}
+/* 고유 캐릭터의 참고 사진 선반 — 폰 한 손 폭에서도 두 장이 보이게 작게 둔다. */
+.shelf{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.thumb{display:flex;flex-direction:column;gap:4px;align-items:center}
+.thumb img{width:88px;height:88px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
+.thumb button{padding:3px 8px;font-size:11px;background:none;border:1px solid var(--line);
+  color:var(--sub);border-radius:8px;cursor:pointer}
+/* 파일 고르기는 버튼처럼 보여야 한다 — 폰에서 input[type=file] 의 기본 모양은 탭하기 어렵다. */
+.filepick{flex:0 0 auto;border:1px solid var(--line);color:var(--sub);border-radius:10px;
+  padding:7px 12px;font-size:13px;cursor:pointer}
+.filepick:hover{border-color:var(--jade-d);color:var(--ink)}
+.filepick input{display:none}
 .scenebar .note{font-size:12px;color:var(--sub)}
 .scenebar select{background:var(--panel);color:var(--ink);border:1px solid var(--line);
  border-radius:8px;padding:5px 8px;font:inherit;font-size:12px}
@@ -262,6 +273,7 @@ textarea:focus{outline:none;border-color:var(--jade-d)}
   <button id="tabScenes" type="button">장면</button>
   <button id="tabGallery" type="button">갤러리</button>
   <button id="tabView" type="button">감상</button>
+  <button id="tabCast" type="button">고유캐릭터</button>
 </nav>
 
 <!--

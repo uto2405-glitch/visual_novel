@@ -1298,6 +1298,7 @@ async function loadChats() {
 
 async function openChat(id) {
   S.chatId = id || "";
+  S.ocLoaded = false;      /* 출연진은 대화마다 다르다 — 옆 대화의 것이 켜져 보이면 안 된다 */
   /* 마지막에 본 대화를 기억한다 — 이 기기에만. 예전엔 열 때마다 기본 대화로
    * 되돌아가서, 어제 쓰던 이야기를 이어가려면 매번 목록에서 다시 찾아야 했다.
    * 서버에 두지 않는 이유: 폰과 PC 가 각자 다른 대화를 보고 있을 수 있고,
@@ -1869,8 +1870,295 @@ function renderTalk() {
   scrollEnd();
 }
 
+/* ---------------------------------------------------------------- 고유 캐릭터
+ * 작품(장면·그림)은 대화마다 갈리지만 **인물은 모든 대화가 함께 쓴다.** 고양이 이야기에서
+ * 만든 인물을 다음 단편에서도 쓰려면 서랍이 작품 밖에 있어야 한다(characters.py).
+ *
+ * 이 화면이 하는 일은 셋이다: 서랍 보기·고치기, 기기의 사진 붙이기,
+ * 그리고 **이 대화에 누가 나오는지 고르기**(출연진). 셋째가 없으면 조립이 대화 내용과
+ * 무관하게 매니페스트의 첫 인물을 모든 장면에 세운다 — 고양이 이야기에 이지혜가 서 있었다. */
+/* 탭을 처음 열 때 한 번만 받아 온다 — 서랍은 자주 바뀌지 않는데, 탭을 옮길 때마다
+ * 두 번씩 부르면 폰에서 화면이 눈에 띄게 늦게 뜬다. 대화를 바꾸면 다시 받는다
+ * (출연진은 대화마다 다르므로, 안 받으면 옆 대화의 출연진이 켜져 보인다). */
+function renderCastView() {
+  renderCast();
+  if (S.ocLoaded) return;
+  S.ocLoaded = true;
+  loadCast().then(() => renderCast()).catch((e) => {
+    S.ocLoaded = false;
+    addNote(String(e.message || e), true);
+  });
+}
+
+async function loadCast() {
+  const d = await api("/api/oc", {});
+  S.oc = (d && d.characters) || [];
+  S.faceLock = (d && d.face_lock) || null;
+  const c = await api("/api/cast", { chat_id: S.chatId || "" });
+  S.cast = (c && c.cast) || null;         /* null = 안 정함, [] = 아무도 안 나옴 */
+  return S.oc;
+}
+
+function renderCast() {
+  if (S.view !== "cast") return;
+  const m = stream();
+  while (m.firstChild) m.removeChild(m.firstChild);
+
+  const bar = el("div", "scenebar");
+  const add = el("button", "keep", "+ 대화에서 만들기");
+  add.type = "button";
+  add.title = "지금 대화를 읽고 로컬 LLM 이 인물 한 명을 정리합니다(대화창에 '고유캐릭터 생성하기' 라고 써도 같습니다).";
+  add.addEventListener("click", () => makeOcFromChat());
+  bar.appendChild(add);
+  const blank = el("button", "keep", "+ 빈 인물");
+  blank.type = "button";
+  blank.addEventListener("click", () => saveOc("", { name: "새 인물" }));
+  bar.appendChild(blank);
+  m.appendChild(bar);
+
+  /* 얼굴 고정이 지금 어디까지 되는지 **먼저** 말한다. 사진을 붙여 놓고 못 쓰면서
+   * 말하지 않으면, 사람은 얼굴이 흔들릴 때마다 자기 사진을 의심한다. */
+  if (S.faceLock && S.faceLock.photo_used === false) {
+    const n = el("p", "note");
+    n.textContent = "얼굴 고정: " + (S.faceLock.note || "");
+    m.appendChild(n);
+  }
+
+  const list = (S.oc || []);
+  if (!list.length) {
+    addNote("아직 고유 캐릭터가 없습니다. 대화를 조금 나눈 뒤 [+ 대화에서 만들기] 를 눌러 보세요.");
+    return;
+  }
+  list.forEach((oc) => m.appendChild(ocCard(oc)));
+  m.scrollTop = 0;
+}
+
+function ocCard(oc) {
+  const card = el("div", "card");
+  const head = el("div", "row");
+  const inCast = Array.isArray(S.cast) && S.cast.indexOf(oc.id) >= 0;
+  const tick = el("button", inCast ? "go" : "keep", inCast ? "이 대화에 출연 중" : "이 대화에 넣기");
+  tick.type = "button";
+  tick.title = "장면으로 조립할 때 이 인물이 나옵니다.";
+  tick.addEventListener("click", () => toggleCast(oc.id, !inCast));
+  head.appendChild(el("b", null, oc.id + " " + (oc.name || "")));
+  head.appendChild(tick);
+  card.appendChild(head);
+
+  if (oc.broken) {
+    const bad = el("p", "note");
+    bad.textContent = "이 인물 파일을 읽지 못했습니다: " + oc.broken;
+    card.appendChild(bad);
+    return card;
+  }
+
+  const p = oc.profile || {};
+  const bits = [p.age, p.gender_presentation, p.hair, p.eyes, p.wardrobe].filter(Boolean);
+  if (bits.length) card.appendChild(el("p", "line", bits.join(" · ")));
+  if (oc.prompt_anchor) card.appendChild(el("p", "note", "그림 문장: " + oc.prompt_anchor));
+  if ((oc.prompt_tags || []).length) card.appendChild(el("p", "note", "태그: " + oc.prompt_tags.join(", ")));
+
+  if ((oc.photos || []).length) {
+    const shelf = el("div", "shelf");
+    oc.photos.forEach((ph) => {
+      const wrap = el("div", "thumb");
+      const img = el("img");
+      img.src = ph.url + "?w=180";
+      img.alt = oc.name + " 참고 사진";
+      img.loading = "lazy";
+      wrap.appendChild(img);
+      const x = el("button", null, "떼기");
+      x.type = "button";
+      x.addEventListener("click", () => dropPhoto(oc.id, ph.rel));
+      wrap.appendChild(x);
+      shelf.appendChild(wrap);
+    });
+    card.appendChild(shelf);
+  }
+
+  const row = el("div", "row");
+  const edit = el("button", null, "고치기");
+  edit.type = "button";
+  edit.addEventListener("click", () => {
+    if (card.querySelector(".editbox")) return;
+    card.appendChild(ocEditor(oc));
+  });
+  row.appendChild(edit);
+
+  /* 사진 고르기는 label 안에 감춘 input 으로 연다 — 폰에서도 같은 길이다. */
+  const pick = el("label", "filepick");
+  pick.textContent = "사진 붙이기";
+  const file = el("input");
+  file.type = "file";
+  file.accept = "image/*";
+  file.addEventListener("change", () => addPhoto(oc.id, file));
+  pick.appendChild(file);
+  row.appendChild(pick);
+
+  const del = el("button", "del", "서랍에서 내리기");
+  del.type = "button";
+  del.addEventListener("click", () => dropOc(oc));
+  row.appendChild(del);
+  card.appendChild(row);
+  return card;
+}
+
+function ocEditor(oc) {
+  const box = el("div", "editbox");
+  const p = oc.profile || {};
+  const rows = [
+    { key: "name", label: "이름", value: oc.name || "", lines: 1 },
+    { key: "prompt_anchor", label: "그림 문장 (영어 — 모든 장면에 그대로 들어갑니다)",
+      value: oc.prompt_anchor || "", lines: 3 },
+    { key: "prompt_tags", label: "태그 (영어, 쉼표로 구분 — 얼굴·옷을 잡는 줄)",
+      value: (oc.prompt_tags || []).join(", "), lines: 2 },
+    { key: "hair", label: "머리 (한국어)", value: p.hair || "", lines: 1 },
+    { key: "eyes", label: "눈 (한국어)", value: p.eyes || "", lines: 1 },
+    { key: "wardrobe", label: "기본 복장 (한국어)", value: p.wardrobe || "", lines: 1 },
+    { key: "speech_style", label: "말투 (한국어 — 장면 대사가 이 말투로 나옵니다)",
+      value: p.speech_style || "", lines: 2 },
+  ];
+  const inputs = {};
+  rows.forEach((r) => {
+    box.appendChild(el("p", "line", r.label));
+    const t = el("textarea");
+    t.rows = r.lines;
+    t.value = r.value;
+    inputs[r.key] = t;
+    box.appendChild(t);
+  });
+  const row = el("div", "row");
+  const save = el("button", "go", "저장");
+  save.type = "button";
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    const fields = {
+      name: inputs.name.value.trim(),
+      prompt_anchor: inputs.prompt_anchor.value.trim(),
+      prompt_tags: inputs.prompt_tags.value.split(",").map((s) => s.trim()).filter(Boolean),
+      profile: Object.assign({}, p, {
+        hair: inputs.hair.value.trim(), eyes: inputs.eyes.value.trim(),
+        wardrobe: inputs.wardrobe.value.trim(), speech_style: inputs.speech_style.value.trim(),
+      }),
+    };
+    try {
+      await saveOc(oc.id, fields);
+    } catch (e) {
+      save.disabled = false;
+    }
+  });
+  const cancel = el("button", null, "닫기");
+  cancel.type = "button";
+  cancel.addEventListener("click", () => box.remove());
+  row.appendChild(save);
+  row.appendChild(cancel);
+  box.appendChild(row);
+  return box;
+}
+
+async function saveOc(id, fields) {
+  try {
+    const r = await api("/api/oc-save", { id: id || "", fields: fields, chat_id: S.chatId || "" });
+    addNote((r.character.id || "") + " " + (r.character.name || "") + " 을(를) 저장했습니다.");
+    await loadCast();
+    showView("cast");
+  } catch (e) {
+    addNote(String(e.message || e), true);
+    throw e;
+  }
+}
+
+async function makeOcFromChat() {
+  liveShow("대화에서 인물을 정리하는 중…", [], 0);
+  try {
+    const r = await api("/api/oc-from-chat", { chat_id: S.chatId || "" });
+    liveHide();
+    addNote(r.character.id + " " + r.character.name + " 을(를) 만들어 이 대화의 출연진에 넣었습니다.");
+    await loadCast();
+    showView("cast");
+  } catch (e) {
+    liveHide();
+    addNote(String(e.message || e), true);
+  }
+}
+
+/* 기기 사진은 base64 로 실어 보낸다 — 폰·다른 PC 에서도 같은 길이다(대화 가져오기와 같은 규칙). */
+async function addPhoto(id, input) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  input.value = "";
+  if (f.size > 8 * 1024 * 1024) {
+    addNote("사진이 너무 큽니다 (" + (f.size / 1048576).toFixed(1) + "MB) — 8MB 까지 받습니다.", true);
+    return;
+  }
+  /* 못 읽으면 예외 대신 빈 값으로 돌아온다 — 읽기 실패의 결과는 "보낼 것이 없다" 하나뿐이라
+   * 여기에 두 갈래를 만들 이유가 없다. */
+  const b64 = await new Promise((res) => {
+    const rd = new FileReader();
+    rd.onload = () => res(String(rd.result || ""));
+    rd.onerror = () => res("");
+    rd.readAsDataURL(f);
+  });
+  if (!b64) {
+    addNote("사진을 읽지 못했습니다 — 다시 골라 주세요.", true);
+    return;
+  }
+  try {
+    await api("/api/oc-photo", { id: id, b64: b64, label: f.name });
+    addNote("사진을 붙였습니다. " + ((S.faceLock && S.faceLock.note) || ""));
+    await loadCast();
+    showView("cast");
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  }
+}
+
+async function dropPhoto(id, rel) {
+  try {
+    await api("/api/oc-photo-delete", { id: id, rel: rel });
+    await loadCast();
+    showView("cast");
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  }
+}
+
+async function dropOc(oc) {
+  if (!window.confirm(
+    oc.id + " " + (oc.name || "") + " 을(를) 서랍에서 내립니다.\n" +
+    "버리지 않고 project/characters_deleted/ 로 옮기므로 되돌릴 수 있습니다.\n" +
+    "이미 이 인물로 만든 장면은 그대로 남습니다.\n\n계속할까요?")) return;
+  try {
+    const r = await api("/api/oc-delete", { id: oc.id });
+    addNote(r.character_id + " 을(를) 보관소로 옮겼습니다 (" + r.archived_to + ").");
+    await loadCast();
+    showView("cast");
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  }
+}
+
+/* 출연진은 **대화마다** 다르다. 여기서 끈 인물은 그 대화의 장면에 나오지 않는다.
+ * 아무도 안 고르면(빈 목록) 사람 없는 장면이 나온다 — 고양이·풍경 단편이 그 경우다. */
+async function toggleCast(id, want) {
+  const now = Array.isArray(S.cast) ? S.cast.slice() : [];
+  const at = now.indexOf(id);
+  if (want && at < 0) now.push(id);
+  if (!want && at >= 0) now.splice(at, 1);
+  try {
+    const r = await api("/api/cast", { chat_id: S.chatId || "", ids: now });
+    S.cast = (r && r.cast) || [];
+    addNote(S.cast.length
+      ? ("이 대화의 출연진: " + (r.names || []).map((x) => x.name || x.id).join(", "))
+      : "이 대화에는 아무도 등장하지 않습니다 — 장면에 사람이 나오지 않습니다.");
+    showView("cast");
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  }
+}
+
 const VIEWS = { list: "tabList", talk: "tabTalk", scenes: "tabScenes",
-                gallery: "tabGallery", view: "tabView" };
+                gallery: "tabGallery", view: "tabView", cast: "tabCast" };
 
 /* 어느 화면을 보고 있는지를 주소창에 적어 둔다.
  *
@@ -1902,6 +2190,7 @@ function showView(v) {
   else if (v === "talk") renderTalk();
   else if (v === "scenes") renderScenes();
   else if (v === "gallery") renderGallery();
+  else if (v === "cast") renderCastView();
   else renderView();
 }
 
