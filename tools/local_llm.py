@@ -510,6 +510,18 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
         headers["Accept"] = "text/event-stream"
     req = urllib.request.Request(url + "/chat/completions", data=body,
                                  headers=headers, method="POST")
+    # 상한을 **자동으로** 고른다 — 호출부가 깜빡해도 맞게.
+    #
+    # 이것을 호출부에 맡겼다가 **세 번** 빠뜨렸다. 처음엔 조립을, 다음엔 스튜디오의
+    # 동기 조립을, 그다음엔 [프롬프트 생성]·[이 순간을 사진으로] 를. 경로마다 손으로
+    # 붙이는 규칙은 새 경로가 생길 때마다 다시 빠진다 — 그걸 세 번 확인했으면 규칙을
+    # 옆으로 옮겨야 한다. 이 함수는 누가 소켓을 들고 있는지를 이미 알고 있으므로
+    # (holding), 앞에 줄이 서 있으면 스스로 큰 상한을 쓴다. 호출부가 timeout 을 명시하면
+    # 그쪽이 이긴다(자가진단처럼 일부러 짧게 주는 곳이 있다).
+    #
+    # 반드시 _hold_begin **앞**에서 본다 — 뒤에서 보면 내 호출이 내 앞의 줄로 잡힌다.
+    if timeout is None and holding():
+        timeout = QUEUE_TIMEOUT
     hold = _hold_begin(max_tokens)
     try:
         try:

@@ -20,7 +20,13 @@ rem
 rem  Why a name (DESKTOP-06ACMT6) instead of an IP :
 rem    Windows machines find each other by name on the same LAN,
 rem    so this keeps working after the router changes addresses.
-rem    Measured: http://DESKTOP-06ACMT6:8188 answers in 0.2s.
+rem    Note the .local suffix: measured from the laptop, the bare
+rem    name does NOT resolve (NetBIOS/LLMNR is off), but the mDNS
+rem    form does -> DESKTOP-06ACMT6.local = 192.168.219.113.
+rem    Name resolution is asymmetric here, so do not "simplify"
+rem    this: desktop->laptop works with the bare name and fails
+rem    with .local; laptop->desktop is the other way round.
+rem    Measured http://DESKTOP-06ACMT6.local:8188 -> 200 in 0.25s.
 rem
 rem  -Trust <ip> lets ONE device in without the PIN (the phone).
 rem    If the phone stops being let in, its address changed --
@@ -34,7 +40,7 @@ cd /d "%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_studio.ps1" ^
   -Lan ^
   -Llm   "http://127.0.0.1:8080/v1" ^
-  -Comfy "http://DESKTOP-06ACMT6:8188" ^
+  -Comfy "http://DESKTOP-06ACMT6.local:8188" ^
   -Trust "192.168.219.103" ^
   %*
 

@@ -6282,6 +6282,116 @@ def u42(b: Box):
     eq(ll.holding(), [], "이 경로에서도 '붙잡고 있음' 이 남았다")
 
 
+@test("unit", "U43 새 대화와 지운 대화를 구별한다 — 그리고 지워도 본문을 버리지 않는다")
+def u43(b: Box):
+    """이 검사가 막는 것은 **통합 화면의 [+ 새 대화] 가 통째로 죽어 있던 사고**다.
+
+    판정 근거가 '파일이 있느냐' 였다. 그런데 '지워진 대화' 와 '아직 한 마디도 저장되지
+    않은 새 대화' 는 디스크에서 완전히 같은 모습이다 — 둘 다 파일이 없다. 그래서 새로
+    만든 갈래는 첫 발화마다 "이 대화는 삭제되었습니다. 목록에서 새 대화를 시작하세요"
+    로 거절당했다. 시키는 대로 새 대화를 또 만들면 또 같은 거절이 나오는 막다른 골목이라,
+    사용자가 요청한 '채팅 창별 문맥 관리' 가 기본 갈래 하나로만 돌아가고 있었다.
+
+    고친 방식은 추측을 사실로 바꾼 것이다: 지웠으면 **지웠다고 적는다**(묘비).
+
+    삭제 쪽도 같이 잠근다. 예전에는 본문을 그냥 unlink 하고 보관 기록만 남겼다 —
+    '내가 지운 말'은 남고 '내가 나눈 대화'만 사라지는, 거꾸로 된 보존이었다.
+    """
+    ts = b.mod("talk_store")
+    msgs = [{"role": "user", "content": "비 오는 버스"},
+            {"role": "assistant", "content": "좋아요"}]
+
+    # (1) 저장된 적 없는 새 갈래는 '지워진 것' 이 아니다
+    ok(not ts.is_deleted_chat("u43brandnew"),
+       "한 번도 저장된 적 없는 새 갈래를 '삭제됨' 으로 본다 — [+ 새 대화] 가 첫 발화에서 막힌다")
+    ok(not ts.is_deleted_chat(""), "기본 갈래를 삭제됨으로 본다")
+
+    # (2) 지우면 묘비가 선다
+    ts.save_log(ts.story_chat_path_for("u43gone"), msgs)
+    ts._append_archive(ts.archive_path(ts.story_chat_path_for("u43gone")),
+                       [{"role": "assistant", "content": "밀려난 예전 답"}])
+    ok(ts.delete_story_chat("u43gone"), "삭제가 실패했다")
+    ok(ts.is_deleted_chat("u43gone"), "지웠는데 '삭제됨' 으로 안 보인다 — 지운 대화가 되살아난다")
+    ok(not ts.story_chat_path_for("u43gone").exists(), "본문 파일이 남아 있다")
+
+    # (3) 본문과 보관 기록이 **둘 다** 남아 있다
+    kept = sorted(p.name for p in ts.STORY_DIR.glob("*u43gone*"))
+    ok(kept, "지운 대화의 흔적이 아무것도 없다 — 되돌릴 방법이 사라졌다")
+    body = "\n".join((ts.STORY_DIR / n).read_text(encoding="utf-8") for n in kept)
+    ok("비 오는 버스" in body, "본문이 보관되지 않았다 — 나눈 대화가 그냥 사라졌다: %s" % kept)
+    ok("밀려난 예전 답" in body, "보관 기록이 사라졌다: %s" % kept)
+
+    # (4) **이름이 .gitignore 에 걸리는 모양인가.** 이게 틀리면 사적 대화가 커밋된다.
+    for n in kept:
+        ok(n.endswith(ts.ARCHIVE_SUFFIX),
+           "지운 대화의 보관본 이름이 %r 다 — .gitignore 의 *%s 에 안 걸려 "
+           "`git add .` 한 번에 개인 대화가 저장소에 실린다" % (n, ts.ARCHIVE_SUFFIX))
+
+    # (5) 목록에서는 사라진다
+    ok("u43gone" not in {r["id"] for r in ts.list_story_chats()}, "지운 대화가 목록에 남아 있다")
+
+    # (6) 가져오기가 묘비 자리를 비켜 간다 (거기로 들어오면 다음 발화가 바로 거절된다)
+    ok(ts.free_chat_id("u43gone") != "u43gone",
+       "가져오기가 묘비가 선 id 를 그대로 쓴다 — 들어오자마자 '삭제되었습니다' 로 막힌다")
+
+
+@test("unit", "U44 줄 대기 상한은 호출부가 잊어도 걸린다 — 같은 사고를 세 번 겪고 옮긴 규칙")
+def u44(b: Box):
+    """같은 결함을 **세 번** 고쳤다. 조립(서버 작업) → 스튜디오의 동기 조립 →
+    [프롬프트 생성]·[이 순간을 사진으로]. 매번 '그 경로에도 timeout 을 넘긴다' 로 고쳤고,
+    매번 다음 경로에서 다시 나왔다.
+
+    경로마다 손으로 붙이는 규칙은 새 경로가 생길 때마다 빠진다. 그래서 규칙을 옮겼다:
+    **소켓을 들고 있는 함수가 스스로 판단한다.** 자기 앞에 줄이 서 있으면(holding)
+    큰 상한을 쓴다. 호출부는 아무것도 몰라도 되고, 앞으로 생길 경로도 자동으로 포함된다.
+
+    호출부가 명시하면 그쪽이 이긴다 — 일부러 짧게 주는 곳(자가진단·상태 확인)이 있다.
+    """
+    ll = b.mod("local_llm")
+    seen = {}
+
+    class _Stop:
+        def __enter__(self):
+            raise ll.VNError("여기까지면 충분하다")
+
+        def __exit__(self, *a):
+            return False
+
+    real_open, real_validate = ll._OPENER.open, ll._validate
+    try:
+        ll._validate = lambda url: None
+        ll._OPENER.open = lambda req, timeout=None: seen.update(t=timeout) or _Stop()
+
+        def call(**kw):
+            seen.clear()
+            try:
+                ll.chat([{"role": "user", "content": "x"}], **kw)
+            except Exception:
+                pass
+            return seen.get("t")
+
+        eq(call(), float(ll.TIMEOUT), "한가한데 큰 상한을 쓴다 — 꺼진 서버를 늦게 알아차린다")
+
+        k = ll._hold_begin(8192)          # 다른 호출이 모델을 붙잡고 있다
+        try:
+            eq(call(), float(ll.QUEUE_TIMEOUT),
+               "앞에 줄이 서 있는데 기본 상한을 쓴다 — 이 경로는 120초에 죽는다")
+            eq(call(timeout=30), 30.0, "호출부가 명시한 상한을 무시한다")
+        finally:
+            ll._hold_end(k)
+
+        eq(call(), float(ll.TIMEOUT), "줄이 풀렸는데 계속 큰 상한을 쓴다")
+    finally:
+        ll._OPENER.open, ll._validate = real_open, real_validate
+
+    # 판단이 _hold_begin **앞**에 있어야 한다 — 뒤면 자기 자신을 '앞의 줄' 로 센다
+    src = b.p("tools/local_llm.py").read_text(encoding="utf-8")
+    body = src[src.index("def chat("):]
+    body = body[:body.index("\ndef ", 10)]
+    ok(body.index("if timeout is None and holding()") < body.index("hold = _hold_begin("),
+       "줄 확인이 자기 등록보다 뒤에 있다 — 모든 호출이 자기 자신 때문에 큰 상한을 쓴다")
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.

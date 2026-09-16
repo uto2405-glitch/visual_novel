@@ -73,7 +73,10 @@ const S = {
   shown: 0,          // 화면에 이미 줄을 올린 장면 수
   picking: false,    // 고르기·승인 중 (굽는 중에도 골라야 하므로 busy 와 따로 둔다)
   llmDown: false,    // 모델이 꺼져 있는가 — 그러면 붙여넣기 경로를 화면에 연다
-  busy: false,
+  // 세 가지를 따로 센다 — setBusy 위의 주석 참고.
+  busy: false,       // 대화 한 턴을 기다리는 중 (보내기 잠김)
+  composing: false,  // 조립이 도는 중 ([장면으로 조립]만 잠김)
+  gen: false,        // 그림을 굽는 중 (굽기 버튼만 잠김)
 };
 
 /* 기다리는 동안 보내기 버튼을 중지로 바꾼다. 눈앉을 띄지 않고 누를 수 있는 자리가 거기뿐이다. */
@@ -85,11 +88,28 @@ function showStop(on) {
   b.dataset.mode = on ? "stop" : "send";
 }
 
+/* 잠금이 세 가지인데 깃발이 하나였다.
+ *
+ *   S.busy      — **이 화면이 대화 한 턴을 기다리는 중.** 보내기를 막는다.
+ *   S.composing — 조립 작업이 도는 중. [장면으로 조립]만 막는다.
+ *   S.gen       — 그림을 굽는 중. 굽기 버튼만 막는다.
+ *
+ * 셋을 한 깃발로 묶었더니, 조립을 시작한 화면에서 5~7분 동안 말을 걸 수 없었다.
+ * 서버는 정확히 그 상황을 위해 만들어져 있는데(줄을 세워 900초까지 기다려 주고,
+ * 화면은 "조립이 모델을 잡고 있어 답이 그 뒤에 옵니다 — 약 N분" 이라고 말할 준비가
+ * 돼 있다) 정작 그 문구는 조립을 시작하지 **않은** 기기에서만 볼 수 있었다.
+ * 새로고침해도 boot 이 다시 폴링을 켜므로 잠금이 그대로 돌아왔다.
+ *
+ * 뒤에서 도는 일이 앞에서 쓰는 일을 막지 않는다 — 그게 조립을 서버로 내린 이유다. */
 function setBusy(on) {
   S.busy = on;
   const send = $("send");
   /* 중지 모드에서는 잠그지 않는다 — 잠그면 기다리는 사람이 멈출 방법이 없다. */
   if (send && send.dataset.mode !== "stop") send.disabled = on;
+}
+
+function setComposing(on) {
+  S.composing = on;
   const run = $("runCompose");
   if (run) run.disabled = on;
 }
@@ -478,7 +498,7 @@ function pullScenes(text) {
 }
 
 async function runCompose() {
-  if (S.busy) return;
+  if (S.composing) return;
   const total = Math.max(1, Math.min(parseInt($("total").value, 10) || 6, 24));
   const batch = Math.max(1, Math.min(parseInt($("batch").value, 10) || 3, 6));
 
@@ -558,14 +578,14 @@ let pollTimer = null;
 function startPolling() {
   if (pollTimer) return;
   S.shown = 0;
-  setBusy(true);
+  setComposing(true);
   pollCompose();
   pollTimer = setInterval(pollCompose, 2500);
 }
 
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  setBusy(false);
+  setComposing(false);
 }
 
 async function pollCompose() {
@@ -900,9 +920,9 @@ async function approve(sid, btn) {
  *
  * 고르는 것은 여전히 사람이다. 자동 선택은 하지 않는다. */
 async function genFor(sid, btn, want) {
-  if (S.busy) return;
+  if (S.gen) return;
   const n = Math.max(1, Math.min(parseInt(want, 10) || 1, 4));
-  setBusy(true);
+  S.gen = true;
   if (btn) btn.disabled = true;
   liveShow(sid + " · " + n + "장 요청 — 한 장에 약 23초", [genStopBtn(sid)], 0);
   try {
@@ -911,7 +931,7 @@ async function genFor(sid, btn, want) {
     liveHide();
     addNote(String(e.message || e), true);
     if (btn) btn.disabled = false;
-    setBusy(false);
+    S.gen = false;
     return;
   }
   await watchGen(sid, n, btn);
@@ -958,7 +978,7 @@ async function watchGen(sid, n, btn) {
     await refresh();
   } finally {
     if (btn) btn.disabled = false;
-    setBusy(false);
+    S.gen = false;
   }
 }
 
@@ -1668,7 +1688,7 @@ async function boot() {
     addNote(pend.length > 1
       ? ("그림 작업 " + pend.length + "건이 아직 돌고 있습니다 — " + pend[0] + " 부터 보여 드립니다.")
       : (pend[0] + " 그림이 아직 굽고 있습니다 — 이어서 보여 드립니다."));
-    setBusy(true);
+    S.gen = true;
     watchGen(pend[0], 0, null);      // await 하지 않는다 — boot 을 막으면 화면이 안 뜼다
   }
 

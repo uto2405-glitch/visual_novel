@@ -32,6 +32,10 @@ project/story/notes.json
 # 상한(LOG_CAP)을 넘겨 이관된 대화 아카이브도 같은 사적 기록이다 (talk_store.archive_path).
 # 확장자가 .jsonl 이라 위 두 줄에 걸리지 않는다 — 이 줄이 없으면 `git add .` 한 번에 커밋된다.
 project/story/*.archive.jsonl
+# 지운 대화의 보관 기록도 같다. 이름은 chat_x.deleted.archive.jsonl 이라 위 줄에 걸리지만,
+# 예전에는 .deleted 를 뒤에 붙여 chat_x.archive.deleted.jsonl 이었고 그건 **걸리지 않았다**.
+# 그 이름으로 이미 만들어진 파일이 어딘가 남아 있을 수 있으므로 한 줄 더 막아 둔다.
+project/story/*.deleted.jsonl
 # 그 대화를 압축한 기억 요약본도 같은 사적 기록이다 (prompt_build.save_memory_summary)
 project/story/memory_*.json
 

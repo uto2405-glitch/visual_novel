@@ -413,7 +413,9 @@ def do_chat(messages: list[dict], chat_id: str = "") -> str:
     # **모델을 부르기 전에** 본다 — 1~2분 기다리게 한 뒤 거절하는 것은 거절이 아니라 낭비다.
     cid = talk_store.normalize_chat_id(chat_id)
     path = talk_store.story_chat_path_for(chat_id)
-    if cid and not path.exists() and messages:
+    # 파일이 없는 것으로 판단하지 않는다. '지워진 대화' 와 '아직 한 마디도 저장되지 않은
+    # 새 대화' 는 디스크에서 같은 모습이라, 그렇게 보면 [+ 새 대화] 가 통째로 막힌다.
+    if talk_store.is_deleted_chat(cid) and messages:
         raise VNError("이 대화는 삭제되었습니다. 목록에서 새 대화를 시작하세요.")
 
     # 이 갈래가 작품 문맥을 쓰는지는 서버에 저장된 값이 단일 출처다 — 클라이언트가

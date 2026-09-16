@@ -249,34 +249,106 @@ def truncate_log(path: Path | str, keep: int) -> dict:
     return {"kept": keep, "dropped": len(dropped)}
 
 
+def deleted_chat_ids() -> set:
+    """지워진 갈래 id 들 — **묘비(tombstone)**.
+
+    왜 파일 존재 여부로는 안 되는가: '지워진 대화' 와 '아직 한 마디도 저장되지 않은 새
+    대화' 는 디스크에서 **완전히 같은 모습**이다(파일이 없다). 예전에는 그걸로 판정해서,
+    [+ 새 대화] 로 만든 갈래가 첫 발화를 보낼 때마다 "이 대화는 삭제되었습니다" 로
+    거절당했다 — 그것도 "목록에서 새 대화를 시작하세요" 라는, 방금 한 행동을 다시 하라는
+    문구로. 새 대화 기능이 통째로 막혀 있었다.
+
+    그래서 지웠다는 **사실 자체를 적어 둔다.** 없는 것으로 추측하지 않는다.
+    """
+    meta = load_chat_meta()
+    out = set()
+    for cid, rec in meta.items():
+        if isinstance(rec, dict) and rec.get("deleted_at"):
+            out.add(str(cid))
+    return out
+
+
+def is_deleted_chat(chat_id: Any) -> bool:
+    """이 갈래가 '지워진 것' 인가. 저장된 적 없는 새 갈래는 False 다."""
+    cid = normalize_chat_id(chat_id)
+    return bool(cid) and cid in deleted_chat_ids()
+
+
+TOMBSTONE_CAP = 300     # 묘비가 무한히 쌓이지 않게 — 오래된 것부터 버린다
+
+
+def _mark_deleted(cid: str) -> None:
+    """묘비를 세운다(설정 파일 한 곳에 모아 둔다)."""
+    meta = load_chat_meta()
+    rec = meta.get(cid)
+    meta[cid] = {**(rec if isinstance(rec, dict) else {}), "deleted_at": int(time.time())}
+    stones = sorted(((int((v or {}).get("deleted_at") or 0), k) for k, v in meta.items()
+                     if isinstance(v, dict) and v.get("deleted_at")), reverse=True)
+    for _ts, k in stones[TOMBSTONE_CAP:]:
+        meta.pop(k, None)
+    vn_core.atomic_write_json(chat_meta_path(), meta)
+
+
+def deleted_archive_path(path: Path) -> Path:
+    """지운 대화의 보관 기록이 갈 자리 — ``chat_x.deleted.archive.jsonl``.
+
+    ``.deleted`` 를 **``.archive.jsonl`` 앞에** 붙이는 것이 핵심이다. 예전에는 뒤에 붙여
+    ``chat_x.archive.deleted.jsonl`` 이 됐는데, 그러면 .gitignore 의
+    ``project/story/*.archive.jsonl`` 한 줄에 **걸리지 않는다**. 대화를 하나 지운 뒤
+    ``git add .`` 한 번이면 그 사적인 말들이 저장소 이력에 박힌다 — 이 저장소가 절대
+    하지 않기로 한 그 일이다. 이름의 순서 하나가 그 규칙을 지키고 깬다.
+    """
+    p = Path(path)
+    base = p.stem + ".deleted"
+    cand = p.with_name(base + ARCHIVE_SUFFIX)
+    n = 2
+    while cand.exists() and n < 100:
+        # 같은 id 를 다시 만들어 다시 지우면 먼저 지운 기록을 덮어쓰게 된다 — 비켜 간다.
+        cand = p.with_name("%s-%d%s" % (base, n, ARCHIVE_SUFFIX))
+        n += 1
+    return cand
+
+
 def delete_story_chat(chat_id: Any) -> bool:
-    """갈래 하나를 지운다. 기본 갈래는 지우지 않는다(스튜디오가 같은 파일을 쓴다)."""
+    """갈래 하나를 지운다. 기본 갈래는 지우지 않는다(스튜디오가 같은 파일을 쓴다).
+
+    **본문도 버리지 않는다.** 예전에는 본문을 unlink 하고 보관 기록만 남겼다 — 그래서
+    '내가 지운 말'(수정·다시 생성으로 밀어낸 것)은 남고 '내가 나눈 대화'만 사라졌다.
+    이 모듈의 규칙은 대화 로그가 조용히 짧아지지 않는 것이고, 삭제도 그 규칙 안에 둔다:
+    본문을 보관 기록으로 옮긴 **뒤에만** 지운다. 옮기지 못하면 지우지 않는다.
+    """
     cid = normalize_chat_id(chat_id)
     if not cid:
         return False
     path = story_chat_path_for(cid)
-    forget_summary(path)          # 요약 표에서 먼저 빼다 — 지우는 중간에 목록이 열려도 유령이 안 나오게
+    forget_summary(path)          # 요약 표에서 먼저 뺀다 — 지우는 중간에 목록이 열려도 유령이 안 나오게
+
+    arch = archive_path(path)
     ok = False
-    try:
-        if path.is_file():
+    if path.is_file():
+        msgs = load_log(path)
+        try:
+            if msgs:
+                _append_archive(arch, msgs)      # 본문을 먼저 보관한다
             path.unlink()
             ok = True
-    except OSError:
-        pass
-    # 보관 기록은 지우지 않는다 — 이름만 바꿔 둔다. 거기에는 사용자가 '수정'·'다시 생성'
-    # 으로 밀어낸 말들이 들어 있고, 대화를 지운다는 것이 그것까지 태운다는 뜻은 아니다.
-    arch = archive_path(path)
+        except OSError:
+            return False                          # 못 옮겼으면 아무것도 지우지 않는다
+
+    # 보관 기록은 지우지 않는다 — 이름만 바꿔 둔다. 거기에는 사용자가 나눈 말과
+    # '수정'·'다시 생성' 으로 밀어낸 말이 함께 들어 있다.
     try:
         if arch.is_file():
-            arch.replace(arch.with_name(arch.stem + ".deleted.jsonl"))
+            arch.replace(deleted_archive_path(path))
             ok = True
     except OSError:
         pass
-    # 설정도 같이 지운다 — 남겨 두면 같은 id 를 다시 쓸 때 죽은 값을 물려받는다.
+
+    # 설정은 지우지 않고 **묘비로 바꾼다.** 지웠다는 사실을 남기지 않으면, 이 id 로 오는
+    # 다음 요청이 '지워진 것' 인지 '새 것' 인지 알 수 없다(그게 새 대화를 막고 있던 버그다).
     try:
-        meta = load_chat_meta()
-        if meta.pop(cid, None) is not None:
-            vn_core.atomic_write_json(chat_meta_path(), meta)
+        _mark_deleted(cid)
+        ok = True
     except OSError:
         pass
     return ok
@@ -464,11 +536,14 @@ def free_chat_id(want: str) -> str:
     """이미 있는 갈래를 비켜 가는 id. ``want`` 가 비었거나 형식 위반이면 날짜로 만든다."""
     base = normalize_chat_id(want) or ("imp" + time.strftime("%m%d%H%M"))
     base = base[:36] or "imp"           # 뒤에 '-99' 를 붙여도 40자를 넘지 않게
-    if not story_chat_path_for(base).exists():
+    # 묘비가 서 있는 id 도 피해 간다 — 거기로 가져오면 바로 다음 발화가
+    # "삭제되었습니다" 로 거절된다(파일은 있는데 묘비도 있는 상태).
+    gone = deleted_chat_ids()
+    if not story_chat_path_for(base).exists() and base not in gone:
         return base
     for n in range(2, 100):
         cand = "%s-%d" % (base, n)
-        if not story_chat_path_for(cand).exists():
+        if not story_chat_path_for(cand).exists() and cand not in gone:
             return cand
     raise vn_core.VNError("같은 이름의 대화가 너무 많습니다 — 몇 개를 정리한 뒤 다시 하세요.")
 

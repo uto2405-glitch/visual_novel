@@ -66,7 +66,10 @@ if ($packet.Length -ne 102) {
 # 서브넷 브로드캐스트(192.168.219.255)는 대개 통한다 — 둘 다 쏘면 한쪽이 막혀도 닿는다.
 $targets = @("255.255.255.255")
 foreach ($cfg in (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                  Where-Object { $_.IPAddress -notlike "127.*" -and $_.PrefixLength -ge 8 -and
+                  Where-Object { $_.IPAddress -notlike "127.*" -and
+                                 # 169.254.* 는 주소를 못 받은 어댑터가 스스로 붙이는 것이다
+                                 # (보통 블루투스). 그쪽으로 쓰는 패킷은 아무 데도 안 간다.
+                                 $_.IPAddress -notlike "169.254.*" -and $_.PrefixLength -ge 8 -and
                                  $_.PrefixLength -le 32 })) {
     try {
         $ipBytes = ([System.Net.IPAddress]::Parse($cfg.IPAddress)).GetAddressBytes()
