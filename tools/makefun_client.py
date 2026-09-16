@@ -1743,6 +1743,73 @@ SPEND_MAX_PAGES = 5       # 더 있어도 여기서 끊는다(창이 좁으니 �
 SPEND_RETRY_SEC = 3.0     # 기록이 아직 안 올라왔을 때 한 번 더 기다리는 시간
 SPEND_SAMPLE_CAP = 10     # 이만큼 쌓이면 그만 잰다 — 덤은 덤으로 끝나야 한다
 
+# ---------------------------------------------------------------- 한 번의 조사
+# 이 공급자의 응답 스키마가 명세에 비어 있어서(크레딧 필드 이름·기록이 올라오는 시각)
+# **실호출 한 번을 봐야만** 알 수 있는 것이 몇 가지 있다. 그 한 번을 위해 돈을 따로 쓰지
+# 않는다 — 사람이 어차피 구울 때 그 호출이 조사도 겸하게 한다.
+#
+#   set VN_MF_PROBE=1   (그 다음 생성 한 번만)
+#
+# 켜면 완료 뒤에 소비 기록을 1초 간격으로 훑어 **처음 보인 시각**을 재고, 응답 전문과
+# 함께 대장에 남긴다. 그 값으로 SPEND_RETRY_SEC 이 3초면 되는지가 정해진다
+# ("3초면 되나" 가 아니라 "몇 초에 뜨더라" 로).
+PROBE_ENV = "VN_MF_PROBE"
+PROBE_MAX_SEC = 30
+PROBE_STEP_SEC = 1.0
+
+
+def probe_on() -> bool:
+    return str(os.environ.get(PROBE_ENV, "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def probe_spend_timing(since_iso: str, kind: str = "", scene_id: str = "") -> dict:
+    """완료 뒤 **소비 기록이 몇 초 만에 보이는가** — 한 번만 하는 조사.
+
+    조회는 무과금이라 30번을 훑어도 돈이 들지 않는다. 이 한 번이 끝나면 다시 하지 않는다
+    (그래서 기본은 꺼져 있다).
+    """
+    t1 = now_iso()
+    started = time.monotonic()
+    seen_after, rows = None, []
+    while time.monotonic() - started < PROBE_MAX_SEC:
+        rows = consumption_since(since_iso, limit=SPEND_PAGE)
+        if rows:
+            seen_after = round(time.monotonic() - started, 1)
+            break
+        time.sleep(PROBE_STEP_SEC)
+    rec = {"kind": "spend_probe", "of": str(kind), "scene_id": str(scene_id or ""),
+           "billable": False, "ok": bool(rows),
+           "t0_before_generate": str(since_iso or ""), "t1_after_complete": t1,
+           "seconds_to_first_record": seen_after,
+           "records": len(rows), "raw": _trim(rows[:5], 1500) if rows else "",
+           "note": ("기록이 %s초 만에 보였습니다." % seen_after) if rows else
+                   ("%d초 동안 아무 기록도 안 보였습니다 — 과금 시점이 더 늦거나, "
+                    "이 호출은 과금되지 않았습니다." % PROBE_MAX_SEC)}
+    log_usage(rec)
+    log.info("소비 기록 조사: %s", rec["note"])
+    return rec
+
+
+def probe_quote(prompt: str = "고백하는 장면", n: int = 1) -> dict:
+    """견적이 **정말 무과금인지** 재 본다 — 명세가 그렇다고 적었어도 실제는 봐야 안다.
+
+    보낸 본문까지 함께 남긴다. 응답만 남기면 나중에 그 숫자가 **무엇에 대한 견적이었는지**
+    아무도 되짚지 못한다.
+    """
+    before = now_iso()
+    body = t2i_body(prompt, n=n, name="probe")
+    raw = quote(P_T2I_START, body)
+    time.sleep(PROBE_STEP_SEC * 3)      # 기록이 늦게 올라올 수도 있으니 조금 기다린다
+    after = consumption_since(before, limit=SPEND_PAGE)
+    rec = {"kind": "quote_probe", "billable": False, "ok": True,
+           "sent": _trim(body, 800), "raw": _trim(raw, 1500),
+           "numbers": [f"{k}={v}" for k, v in quote_numbers(raw)],
+           "consumed_after": len(after), "consumed_raw": _trim(after[:3], 600) if after else "",
+           "note": ("견적 뒤 소비 기록이 %d건 생겼습니다 — **무과금이 아닙니다.**" % len(after))
+                   if after else "견적 뒤 소비 기록이 없습니다 — 명세대로 무과금입니다."}
+    log_usage(rec)
+    return rec
+
 
 def consumption_since(since_iso: str, *, limit: int = SPEND_PAGE, quiet: bool = True) -> list:
     """그 시각 이후의 **소비 기록**만 → [{amount, at, raw}] (실패하면 빈 목록).
@@ -1817,6 +1884,9 @@ def record_spend(kind: str, scene_id: str, since_iso: str, detail: dict | None =
     if seen.get("n", 0) >= SPEND_SAMPLE_CAP:
         return {"kind": "spend", "of": str(kind), "skipped": "enough",
                 "spent": None, "records": 0, "ok": False}
+    if probe_on():
+        # 조사 모드에서는 **먼저 시각을 잰다**(이 안에서 기록이 보일 때까지 훑는다).
+        probe_spend_timing(since_iso, kind, scene_id)
     rows = consumption_since(since_iso)
     if not rows:
         # **과금은 보통 제출이 아니라 완료 시점에 확정된다.** 끝나자마자 재면 아직 줄이
@@ -2078,6 +2148,8 @@ def main() -> int:
                     help="크레딧 이력 조회 — 이미지 생성 과금은 없지만 **API 토큰을 쓰는 실제 호출**입니다")
     ap.add_argument("--check", action="store_true", help="토큰·설정 사전 점검")
     ap.add_argument("--online", action="store_true", help="--check 에서 조회 1회로 인증까지 확인")
+    ap.add_argument("--probe-quote", action="store_true",
+                    help="견적을 한 번 찍어 응답 형식과 무과금 여부를 확인(생성 없음·무과금)")
     ap.add_argument("--quiet", action="store_true", help="진행 표시 끄기")
     a = ap.parse_args()
     neg = not a.no_negative
@@ -2090,6 +2162,16 @@ def main() -> int:
             for line in rep["lines"]:
                 print(line)
             return 0 if rep["ok"] else 1
+
+        if a.probe_quote:
+            # 무과금 경로다(명세 기준). **그게 사실인지까지** 같이 재서 남긴다.
+            rep = probe_quote()
+            print("보낸 본문:", rep["sent"])
+            print("응답:", rep["raw"])
+            print("숫자:", ", ".join(rep["numbers"]) or "(없음)")
+            print(rep["note"])
+            print("— 위 내용은 logs/makefun_usage.jsonl 에 kind:\"quote_probe\" 로 남았습니다.")
+            return 0
 
         if a.credits:
             rep = credits(quiet=a.quiet)

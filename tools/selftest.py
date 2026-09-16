@@ -7547,6 +7547,96 @@ def m17(b: Box):
     ok(mk.now_iso().endswith("Z"), "시작 경계를 UTC 로 안 보낸다: %s" % mk.now_iso())
 
 
+@test("makefun", "M18 한 번의 조사 — 기본은 꺼져 있고, 켜면 시각과 응답 전문을 남긴다(돈은 더 안 쓴다)")
+def m18(b: Box):
+    """이 공급자는 응답 스키마를 공개하지 않아서, **실호출 한 번을 봐야만** 알 수 있는
+    것이 남는다: 크레딧이 어느 필드에 오는가, 소비 기록이 완료 뒤 몇 초에 올라오는가.
+
+    그 한 번을 위해 **돈을 따로 쓰지 않는다.** 사람이 어차피 구울 때 그 호출이 조사도
+    겸한다(VN_MF_PROBE=1). 조회 자체는 무과금이라 30번을 훑어도 크레딧이 들지 않는다.
+
+    남기는 것이 중요하다 — 응답만 남기면 나중에 그 숫자가 **무엇에 대한 견적이었는지**
+    아무도 되짚지 못한다. 그래서 보낸 본문과 시각을 함께 적는다.
+    """
+    mk = b.mod("makefun_client")
+    keep = os.environ.get(mk.PROBE_ENV)
+    try:
+        os.environ.pop(mk.PROBE_ENV, None)
+        eq(mk.probe_on(), False, "조사가 기본으로 켜져 있다 — 생성마다 30초씩 훑는다")
+        for on in ("1", "true", "ON"):
+            os.environ[mk.PROBE_ENV] = on
+            eq(mk.probe_on(), True, "%r 로 못 켠다" % on)
+        os.environ[mk.PROBE_ENV] = "0"
+        eq(mk.probe_on(), False, "0 으로 안 꺼진다")
+
+        # 시각 조사 — 기록이 늦게 올라오는 상황을 만들어 둔다
+        tries = {"n": 0}
+
+        def late(m, p_, bd):
+            if "creditsHistory" not in p_:
+                return {"data": []}
+            tries["n"] += 1
+            return {"data": [] if tries["n"] < 3 else [{"amount": -4, "createdAt": "x"}]}
+
+        n0 = _usage_len(b)
+        with patched(mk, "PROBE_STEP_SEC", 0):
+            with mf_stub(mk, late):
+                rep = mk.probe_spend_timing("2026-09-16T12:59:00Z", "text2image", "SCENE-001")
+        eq(rep["ok"], True, "늦게 올라온 기록을 못 봤다")
+        ok(rep["seconds_to_first_record"] is not None, "몇 초 만에 보였는지 안 적었다")
+        ok(rep["t0_before_generate"] and rep["t1_after_complete"],
+           "두 시각(굽기 전·완료 후)을 안 적었다 — 나중에 되짚을 수 없다")
+        ok(rep["raw"], "응답 전문을 안 남겼다 — 필드 이름을 확정하려고 하는 조사다")
+        rows = [r for r in _usage_tail(b, n0) if r.get("kind") == "spend_probe"]
+        eq(len(rows), 1, "조사 결과가 대장에 안 남았다")
+        eq(rows[0]["billable"], False, "조회가 과금이라고 적었다")
+
+        # 끝내 안 보이면 — **과금이 없었다는 뜻일 수도 있다.** 그것도 결과다
+        with patched(mk, "PROBE_STEP_SEC", 0), patched(mk, "PROBE_MAX_SEC", 0.2):
+            with mf_stub(mk, lambda m, p_, bd: {"data": []}):
+                none = mk.probe_spend_timing("2026-09-16T12:59:00Z", "text2image")
+        eq(none["ok"], False, "아무것도 못 봤는데 봤다고 한다")
+        ok("과금되지 않았" in none["note"] or "늦거나" in none["note"],
+           "못 본 것이 무슨 뜻일 수 있는지 말하지 않는다: %r" % none["note"])
+
+        # 견적 조사 — 보낸 본문까지 남기고, 무과금인지 **재서** 말한다
+        def api(m, p_, bd):
+            if p_ == mk.P_QUOTE:
+                return {"data": {"credits": 5, "generationRequestValidated": False}}
+            if "creditsHistory" in p_:
+                return {"data": []}
+            return {"data": []}
+
+        n1 = _usage_len(b)
+        with patched(mk, "PROBE_STEP_SEC", 0):
+            with mf_stub(mk, api):
+                q = mk.probe_quote("시험 장면")
+        ok(q["sent"], "보낸 본문을 안 남겼다 — 무엇에 대한 견적인지 되짚을 수 없다")
+        ok("credits=5" in q["numbers"], "견적 숫자를 안 남겼다: %s" % q["numbers"])
+        ok("무과금" in q["note"], "무과금이었는지 말하지 않는다: %r" % q["note"])
+        eq(len([r for r in _usage_tail(b, n1) if r.get("kind") == "quote_probe"]), 1,
+           "견적 조사가 대장에 안 남았다")
+
+        # 견적인데 소비가 생겼다면 — **명세와 다르다.** 그 사실을 그대로 말해야 한다
+        def api_charged(m, p_, bd):
+            if p_ == mk.P_QUOTE:
+                return {"data": {"credits": 5}}
+            if "creditsHistory" in p_:
+                return {"data": [{"amount": -5}]}
+            return {"data": []}
+
+        with patched(mk, "PROBE_STEP_SEC", 0):
+            with mf_stub(mk, api_charged):
+                bad = mk.probe_quote("시험 장면")
+        ok("무과금이 아닙니다" in bad["note"],
+           "견적에 돈이 나갔는데 명세대로라고 말한다: %r" % bad["note"])
+    finally:
+        if keep is None:
+            os.environ.pop(mk.PROBE_ENV, None)
+        else:
+            os.environ[mk.PROBE_ENV] = keep
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —
