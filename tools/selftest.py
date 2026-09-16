@@ -7225,6 +7225,87 @@ def u54(b: Box):
         ch.REFS, ch.PRIVATE_ERROR = keep
 
 
+@test("makefun", "M15 견적과 NSFW 안전장치 — 숫자는 받은 것만, 안전장치는 규칙이 아니라 구조로 켜 둔다")
+def m15(b: Box):
+    """둘 다 **명세를 읽고** 넣은 것이라 출처를 적어 둔다:
+    노트북 보존본 `scratch/makefun_spec.json` — A2E Developer API v1.0.0(openapi 3.0.0),
+    paths 206, 2026-08 수집본.
+
+    **견적**(`POST /api/v1/generation/quote`) — 명세가 "작업을 만들지도, 공급자를 부르지도,
+    크레딧을 차감하지도 않는다" 고 못박은 경로다. 그래서 굽기 전에 얼마인지 물어볼 수 있다.
+    두 가지를 지킨다:
+      * **보낼 바로 그 본문으로 묻는다.** 본문을 두 곳에서 따로 만들면 물어본 것과 보낸
+        것이 달라지고 숫자는 조용히 틀린다.
+      * **응답 필드에 이름을 붙이지 않는다.** 응답 스키마가 명세에 비어 있고(`{}`),
+        명세가 직접 "문서화되지 않은 필드를 추론하지 말라" 고 적었다. 그래서 숫자를
+        **필드명째** 돌려준다.
+
+    **안전장치**(`force_generate`) — 명세 원문: *"Force generation even if NSFW content is
+    detected. Defaults to **true for API users**, false for web users"*. 우리는 API 토큰
+    사용자다. 값을 안 보내면 그쪽 안전장치가 꺼진 채로 도는데, 이 프로젝트는 input_images 로
+    **실존 인물의 얼굴 사진**을 싣는다. 그래서 끄지 않는다고 명시해서 보낸다 —
+    부르는 쪽마다 챙기는 규칙이 아니라 `_call` 이 채워 넣는 **구조**로 둔다.
+    (이 저장소의 "ComfyUI 에 필터를 덧대지 말 것" 규칙과 충돌하지 않는다. 그건 내 기계의
+     로컬 엔진 이야기고, 이건 남의 서버가 켜 둔 것을 내가 끄지 않는다는 이야기다.)
+    """
+    mk = b.mod("makefun_client")
+
+    # --- 안전장치: 다섯 경로에만, 그리고 사람이 적어 둔 값은 건드리지 않는다
+    eq(mk.with_safety("/api/v1/userText2Image/start", {"prompt": "x"}), {"prompt": "x"},
+       "안전장치 파라미터가 없는 경로에 값을 끼워 넣었다 — 400 을 부른다")
+    for path in mk.NSFW_FORCE_PATHS:
+        got = mk.with_safety(path, {"prompt": "x"})
+        eq(got.get("force_generate"), False,
+           "%s 로 나가면서 안전장치를 끌지 말라고 말하지 않았다 — 기본이 '끔' 인 경로다" % path)
+    eq(mk.with_safety("/api/v1/userFlux2/start", {"force_generate": True})["force_generate"], True,
+       "사람이 일부러 적어 둔 값을 덮었다 — 몇 번을 적어도 안 바뀌는 칸이 된다")
+    ok(len(mk.NSFW_FORCE_PATHS) >= 5, "안전장치 경로 목록이 줄었다: %s" % (mk.NSFW_FORCE_PATHS,))
+
+    # 구조인지 확인한다 — 부르는 쪽이 아무것도 안 해도 _call 이 채워야 한다
+    seen = {}
+    with mf_stub(mk, lambda m, p_, body: seen.update({"path": p_, "body": body}) or {"data": []}):
+        try:
+            mk._call("POST", "/api/v1/userFlux2/start", {"prompt": "x"}, quiet=True)
+        except Exception:
+            pass
+    eq((seen.get("body") or {}).get("force_generate"), False,
+       "_call 을 그냥 불렀는데 안전장치 표시가 안 붙었다 — 규칙이지 구조가 아니다")
+
+    # --- 견적: 기본은 꺼져 있다(바깥 서버를 두드리는 일이다)
+    eq(mk.quote_enabled(), False, "견적이 기본으로 켜져 있다 — 이 저장소의 MakeFun 규칙은 '모의만' 이다")
+
+    # 보낼 본문 그대로 묻는가
+    asked = {}
+
+    def api(method, path, body):
+        asked[path] = body
+        if path == mk.P_QUOTE:
+            return {"data": {"credits": 6, "detail": {"perImage": 3},
+                             "generationRequestValidated": False}}
+        return {"data": [{"_id": "task_x"}]}
+
+    with mf_stub(mk, api):
+        q = mk.quote_text2image("고백하는 장면", n=2, name="SCENE-001")
+        sent = mk.t2i_body("고백하는 장면", n=2, name="SCENE-001")
+    body = asked.get(mk.P_QUOTE) or {}
+    eq(body.get("endpoint"), mk.P_T2I_START, "견적에 어느 경로를 물었는지 안 실었다")
+    eq(body.get("requestBody"), sent,
+       "견적에 보낸 본문이 실제로 보낼 본문과 다르다 — 그러면 숫자가 조용히 틀린다")
+    eq(dict(q["numbers"]), {"credits": 6, "detail.perImage": 3},
+       "견적 숫자를 필드명째 꺼내지 못했다: %s" % (q["numbers"],))
+    eq(q["validated"], False,
+       "명세가 이름을 확정해 준 유일한 필드(generationRequestValidated)를 안 올린다")
+
+    # "POST /api/v1/..." 도 받는다(명세: leading POST 는 선택)
+    with mf_stub(mk, api):
+        mk.quote("POST /api/v1/userText2Image/start", {"prompt": "x"})
+    eq((asked.get(mk.P_QUOTE) or {}).get("endpoint"), mk.P_T2I_START,
+       "'POST ' 가 붙은 경로를 그대로 보냈다")
+    for bad in ("", "userText2Image/start", None):
+        raises(lambda bad=bad: mk.quote(bad, {"x": 1}), label="이상한 경로 %r" % bad)
+    raises(lambda: mk.quote(mk.P_T2I_START, "본문아님"), label="본문이 dict 가 아닌 경우")
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —

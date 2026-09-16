@@ -44,19 +44,83 @@
 | **이미지 편집** | `userImageEdit` (`edit_type` 은 `clothing` 또는 `product`, 이미지 2장 이상) | 편집 종류가 **의상·제품 둘뿐**이다. 승인 직전 컷에서 고치고 싶은 건 대개 표정·손·구도·배경이라 대상이 어긋난다 | 편집 종류가 늘어나거나, 의상 교체를 실제로 쓰기로 결정할 때 |
 | **말하는 사진** | `talkingPhoto` (`image_url` + `prompt` + `negative_prompt`) | 산출물이 **동영상**이다. 감상본은 정지 컷 + 말풍선 구조이고 목적의 절반이 **인화**라 결과가 들어갈 자리가 없다 | 영상 산출물을 감상본·내보내기에 넣겠다는 결정 |
 | **대체 이미지 모델 7종** | Flux2 · GptImage · NanoBanana · Qwen · Kling · Wan26 · Wan27 | 모델마다 **별도 start 경로 = 별도 파라미터·응답**이다. 지금은 `image_generator.model` 한 값으로 크기·레퍼런스 상한 규칙이 정해지는데, 경로를 늘리면 그 규칙이 모델 수만큼 갈라진다 | 화풍 비교가 실제로 필요해질 때. 모델별 상한(픽셀·레퍼런스 장수) 표를 먼저 만든다 |
-| **음성 학습** | `userVoice` | 목소리를 만들어도 **재생할 자리가 없다** — 그 목소리로 말하게 하는 TTS 생성 경로가 스펙에 없다(§3) | TTS 생성 경로가 먼저 |
+| **음성 학습** | `userVoice` | TTS 경로는 **있다**(`/api/v1/video/send_tts` · §3 정정). 보류 이유는 이제 감상본이 정지 컷 구조라는 것뿐이다 | 감상본에 소리를 넣겠다는 결정 |
 
 공통 판단 기준: **감상본(정지 컷 + 대사)과 인화, 이 두 산출물에 닿지 않는 기능은 붙이지 않는다.**
 유료 경로가 늘어날수록 중복 과금·조용한 실패를 막는 관문도 같이 늘어나야 한다.
 
 ---
 
-## 3. 스펙에 생성 경로가 아예 없는 것
+## 3. 명세를 다시 읽고 고친 것 (2026-09 정정)
 
-**TTS(대사 음성 합성).** 공급자 문서에는 기능이 소개돼 있지만 **OpenAPI 명세에 `start`
-경로가 노출돼 있지 않다.** 호출할 주소가 없으므로 구현 대상이 아니다 — "음성 기능이 있다더라"는
-이야기가 다시 나오면, 문서가 아니라 **명세에 경로가 생겼는지**부터 확인한다.
-(이것 때문에 `userVoice` 음성 학습도 함께 보류다 — §2)
+이 절은 원래 "스펙에 생성 경로가 아예 없는 것" 이었다. **그 서술이 틀렸다.**
+경로를 `…/start` 로만 찾다가 이름이 다른 것들을 통째로 놓쳤다.
+
+> 출처: 노트북 보존본 `scratch/makefun_spec.json` — **A2E Developer API v1.0.0**
+> (openapi 3.0.0), paths 206, 2026-08 수집본. 아래 인용은 그 파일의 원문이다.
+> 이 저장소는 실호출을 하지 않으므로(유료), **응답 쪽은 여전히 확인되지 않았다**.
+
+**TTS(대사 음성 합성) — 경로가 있다.** `POST /api/v1/video/send_tts`.
+`tts_id` 또는 `user_voice_id` 중 하나가 필수이고, API 사용자 상한은 1000자,
+`speechRate` 는 0.5~2.0 이다. 이름이 `…/start` 가 아니라서 예전 검색에서 빠졌다.
+따라서 `userVoice`(음성 학습)도 "재생할 자리가 없다" 는 이유로는 더 이상 보류가 아니다 —
+보류 이유는 이제 **감상본이 정지 컷 구조라는 것 하나뿐**이다.
+
+**영상 — `start` 경로만 12개다.** `talkingPhoto` 하나가 아니었다.
+
+| 경로 | 비고 |
+|---|---|
+| `/api/v1/userImage2Video/start` | **컷 한 장 → 움직이는 컷.** 이 프로젝트에 가장 가까운 것 |
+| `/api/v1/soraVideo/start` · `/veoVideo/start` · `/klingVideo/start` | 외부 모델 계열 |
+| `/api/v1/grokVideo/start` · `/hailuoVideo/start` · `/minimaxH3Video/start` | |
+| `/api/v1/seedanceVideo/start` · `/seedance2Video/start` | |
+| `/api/v1/userHappyhorseVideo/start` | T2V/I2V/R2V/Video-Edit |
+| `/api/v1/talkingPhoto/start` · `/talkingVideo/start` | 말하는 사진·영상 |
+
+각 경로에 `/allRecords` · `/batchDetail` · `/{_id}` 가 붙는 같은 모양이라 폴링은
+지금 쓰는 것과 동일하다. `userKlingImage` · `userWan26Image` 는 **이미지** 경로이고
+영상은 `klingVideo` 로 따로 있다 — 이름이 비슷해 헷갈리기 쉽다.
+
+`/api/v1/userImage2Video/start` 의 요청 쪽은 명세로 확정된다:
+
+* `image_url` (필수) · `prompt` · `negative_prompt`
+* `model_type` `[GENERAL|FLF2V]` · `end_image_url` (FLF2V 에서 필수)
+* `video_time` — *"Video time in seconds (5, 10, 15, or 20 seconds)"* · min 5 · max 20 · **기본 5**
+* `number_of_images` — min 1 · max 8 · 기본 1
+* `skip_face_enhance` — 기본 **false**(= 얼굴 유사도 보정 켬)
+* `model_version` `[a2e|a2e-v2|a2e-v2-flash]` — **과금과 직결된다.** 원문:
+  *"Ultra users default to a2e-v2 and other roles default to a2e. a2e-v2 costs more per
+  second; a2e-v2-flash uses a2e pricing."* → 값을 안 보내면 **계정 등급에 따라 단가가
+  달라진다.** 비용을 예측 가능하게 하려면 명시해서 보낸다.
+* `video_length` 는 Deprecated(프레임 단위) — 쓰지 않는다.
+* `webhook_url` / `webhook_token` · `mask_face` · `minor_suspected_skip`
+
+**응답 쪽은 명세에 비어 있다.** `start` 200 은 `{"type":"object"}` · example `{}`,
+`GET /{_id}` 200 도 같다. 즉 **작업 id 가 어느 필드인지, mp4 URL 이 어느 필드인지
+명세로는 알 수 없다.** 업스케일·크레딧과 같은 상황이므로 같은 방식으로 간다:
+관용 파서(`_ID_FIELDS` · `_urls_in`)로 찾고, **모르는 형태면 조용히 실패하지 않고
+응답 일부를 담아 던진다**(§4). `avgProcessingTime` 도 알맹이가 비어 있어
+"약 N초" 를 띄우려면 실측이 필요하다.
+
+**견적 — `POST /api/v1/generation/quote` (무과금).** 원문:
+*"Returns a credit estimate without creating a task, calling a generation provider, or
+charging credits."* 요청은 `endpoint`(경로 문자열, 앞의 `POST ` 는 선택) +
+`requestBody`(**그 생성 요청에 보낼 바로 그 JSON**). 응답 스키마는 비어 있지만
+200 설명에 이름 하나가 확정돼 있다: `generationRequestValidated=false` 는
+**가격 입력만 확인했다**는 뜻이다. 명세가 직접 *"Do not infer undocumented fields"* 라고
+적었으므로, 이 저장소는 숫자를 **필드명째** 인용만 한다(`quote_numbers`).
+
+**NSFW 안전장치 — `force_generate`.** 다섯 경로가 이 파라미터를 받는다:
+`userFlux2` · `userNanoBanana` · `userGptImage` · `userWan26Image` · `userWan27Image`.
+앞의 둘은 원문이 이렇다: *"Force generation even if NSFW content is detected.
+**Defaults to true for API users**, false for web users"*. 우리는 API 토큰 사용자다 —
+**값을 안 보내면 그쪽 안전장치가 꺼진 채로 돈다.** 이 프로젝트는 `input_images` 로
+실존 인물의 얼굴 사진을 싣기 때문에 그 조합은 사고가 나면 되돌릴 수 없다.
+그래서 `makefun_client._call` 이 저 다섯 경로로 나가는 요청에 `force_generate: false` 를
+**자동으로 채운다**(`NSFW_FORCE_PATHS` · `with_safety`). 규칙이 아니라 구조로 둔 이유는,
+규칙은 새 경로를 붙이는 사람이 한 번 잊는 것으로 무력해지기 때문이다.
+지금 이 저장소가 부르는 `userText2Image/start` 에는 이 파라미터가 **없다**(명세 확인) —
+즉 지금까지 안전장치가 꺼진 채로 돈 적은 없다.
 
 ---
 

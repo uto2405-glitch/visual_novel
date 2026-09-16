@@ -97,6 +97,48 @@ P_UPSCALE_START = "/api/v1/userUpscale/start"
 P_UPSCALE_TASK = "/api/v1/userUpscale/"
 P_UPSCALE_RECORDS = "/api/v1/userUpscale/allRecords"
 P_CREDITS = "/api/v1/transactionRecord/creditsHistory"
+# 생성 전 견적. 명세(A2E Developer API v1.0.0)가 "작업을 만들지도, 공급자를 부르지도,
+# 크레딧을 차감하지도 않는다" 고 못박은 경로다 — 그래서 누르기 전에 물어볼 수 있다.
+P_QUOTE = "/api/v1/generation/quote"
+
+# ---------------------------------------------------------------- NSFW 안전장치
+# 공급자 명세에 이런 파라미터가 있다:
+#
+#   force_generate — "Force generation even if NSFW content is detected.
+#                     **Defaults to true for API users**, false for web users"
+#
+# 우리는 API 토큰 사용자다. 즉 **값을 안 보내면 그쪽 안전장치가 꺼진 채로 돈다.**
+# 그런데 이 프로젝트는 input_images 로 **실존 인물의 얼굴 사진**을 싣는다. 그 조합에서
+# 사고가 나면 되돌릴 방법이 없다.
+#
+# 이 저장소에는 "ComfyUI 에 extra safety·필터를 붙이지 말 것" 이라는 규칙이 있다. 그건
+# **내 기계의 로컬 엔진에 필터를 덧대지 말라**는 뜻이지, **남의 서버가 켜 둔 안전장치를
+# 꺼도 된다**는 뜻이 아니다. 끄지 않는 쪽이 기본이다.
+#
+# 규칙으로 두지 않고 **구조로** 둔다: 아래 경로로 나가는 POST 는 _call 이 값을 채워 넣는다.
+# 규칙은 다음 사람이 잊지만 구조는 잊지 않는다.
+#
+# 출처: 노트북 보존본 scratch/makefun_spec.json — A2E Developer API v1.0.0(openapi 3.0.0),
+#       paths 206, 2026-08 수집본. 앞의 둘은 default=true 가 명시돼 있고, 뒤의 셋은
+#       스키마에 default 가 안 적혀 있을 뿐이다(서버 기본이 false 라는 뜻이 아니다).
+NSFW_FORCE_PATHS = ("/api/v1/userFlux2/start", "/api/v1/userNanoBanana/start",
+                    "/api/v1/userGptImage/start", "/api/v1/userWan26Image/start",
+                    "/api/v1/userWan27Image/start")
+
+
+def with_safety(path: str, body):
+    """그 경로가 안전장치를 끌 수 있는 경로면 **끄지 않는다고 명시**해서 보낸다.
+
+    부르는 쪽이 이미 값을 적어 두었으면 건드리지 않는다 — 사람이 일부러 적은 값을
+    코드가 덮으면, 몇 번을 적어도 바뀌지 않는 칸이 된다(그건 그것대로 거짓말이다).
+    """
+    if path not in NSFW_FORCE_PATHS or not isinstance(body, dict):
+        return body
+    if "force_generate" in body:
+        return body
+    out = dict(body)
+    out["force_generate"] = False
+    return out
 
 # 레퍼런스 이미지(input_images) 상한 — 모델이 정한다. A2E 2장 · Seedream 5.0 Pro 10장.
 REF_MAX_A2E = 2
@@ -300,6 +342,9 @@ def _call(method: str, path: str, body: dict | None = None, timeout: int = 60,
     왜 idempotent 구분: 생성 시작(POST start)은 재시도가 이중 과금이 될 수 있으므로
     '확실히 처리되지 않은' 경우(429 거절·전송 전 실패)에만 다시 보낸다.
     """
+    # 안전장치를 끄지 않는다는 표시는 **여기서** 붙는다. 부르는 쪽마다 챙기게 하면
+    # 새 경로를 붙인 사람이 한 번 잊는 것으로 그대로 꺼진다.
+    body = with_safety(path, body)
     for attempt in range(RETRY_MAX + 1):
         try:
             return _once(method, path, body, timeout)
@@ -836,12 +881,13 @@ def scene_reference_urls(sc: dict, quiet: bool = True) -> list[str]:
 
 # --- 생성 · 폴링 · 다운로드 --------------------------------------------------
 
-def start(prompt: str, n: int = 1, name: str = "",
-          long_edge: int | None = None, negative: bool = True, quiet: bool = True,
-          input_images=None) -> list[str]:
-    """생성 시작 → task id 목록. 요청 크기가 상한에 깎이면 과금 전에 알린다.
+def t2i_body(prompt: str, n: int = 1, name: str = "",
+             long_edge: int | None = None, negative: bool = True, quiet: bool = True,
+             input_images=None) -> dict:
+    """text2image 요청 본문 한 벌.
 
-    input_images 는 캐릭터 레퍼런스 URL(모델 상한까지만 실린다 — A2E 2장).
+    **견적과 생성이 같은 본문을 써야 한다.** 견적은 "이 요청이 얼마냐" 를 묻는 것인데,
+    본문을 두 곳에서 따로 만들면 물어본 것과 보낸 것이 달라지고 숫자는 조용히 틀린다.
     """
     plan = size_plan(long_edge)
     w, h = plan["width"], plan["height"]
@@ -860,6 +906,83 @@ def start(prompt: str, n: int = 1, name: str = "",
         if _cfg().get("skip_face_enhance"):
             body["skip_face_enhance"] = True
         _say(f"  레퍼런스 {len(refs)}장 첨부", quiet)
+    return body
+
+
+def quote_enabled() -> bool:
+    """견적을 물어봐도 되는가 — **기본은 아니다.**
+
+    과금되지 않는 경로지만 그래도 **바깥 서버를 두드리는 일**이고, 이 저장소의 규칙은
+    MakeFun 에 대해 '모의만' 이다. 사람이 매니페스트에서 켜야 실제로 물어본다:
+    ``image_generator.makefun.quote: true``
+    """
+    return bool(_cfg().get("quote"))
+
+
+def quote(endpoint: str, request_body: dict, quiet: bool = True) -> dict:
+    """생성 전 견적 — 명세상 **과금되지 않는다**(작업도 안 만들고 공급자도 안 부른다).
+
+    응답 스키마가 명세에 비어 있다({"type":"object"}). 그래서 필드 이름을 단정하지 않고
+    **받은 것을 그대로** 돌려준다 — 잔액 조회와 같은 규칙이다. 화면은 :func:`quote_numbers`
+    로 뽑아 **필드명째** 보여 준다. 모르는 응답에 이름을 붙이면 그 순간부터 그 이름이
+    사실인 척한다.
+
+    명세 주의 문구도 그대로 옮긴다: 가격 관련 필드만 해석되며, 견적이 성공했다고 해서
+    생성 요청 전체가 유효하다는 뜻은 아니다.
+    """
+    path = str(endpoint or "").strip()
+    if path.upper().startswith("POST "):
+        path = path[5:].strip()
+    if not path.startswith("/"):
+        raise VNError(f"견적 대상 경로가 이상합니다: {endpoint!r}")
+    if not isinstance(request_body, dict):
+        raise VNError("견적에는 보낼 요청 본문이 그대로 필요합니다.")
+    return _call("POST", P_QUOTE, {"endpoint": path, "requestBody": request_body},
+                 idempotent=True, quiet=quiet)
+
+
+def quote_numbers(resp) -> list:
+    """견적 응답 → [(필드 이름, 값)] — **숫자인 것만, 이름을 붙이지 않고.**
+
+    어느 필드가 '장당 크레딧' 인지 이 코드는 모른다. 모르는 것을 아는 척하면 화면에
+    그럴듯한 거짓이 뜨고, 사람은 그걸 믿고 돈 쓰는 결정을 한다. 그래서 이름째 보여 준다.
+    """
+    out: list = []
+
+    def walk(node, prefix=""):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, f"{prefix}.{k}" if prefix else str(k))
+        elif isinstance(node, (int, float)) and not isinstance(node, bool):
+            out.append((prefix or "값", node))
+
+    walk(resp.get("data") if isinstance(resp, dict) and "data" in resp else resp)
+    return out[:12]
+
+
+def quote_text2image(prompt: str, n: int = 1, **kw) -> dict:
+    """'이 장면을 이 설정으로 구우면 얼마인가' — 보낼 본문 그대로 물어본다."""
+    body = t2i_body(prompt, n=n, **kw)
+    raw = quote(P_T2I_START, body)
+    inner = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else raw
+    # 명세가 이름을 확정해 준 **유일한** 필드다:
+    #   "generationRequestValidated=false means only pricing inputs were checked."
+    # 즉 견적이 나왔다고 해서 그 생성 요청이 통과한다는 보장은 아니다 — 화면이 그걸 말해야
+    # 사람이 "견적이 됐으니 되겠지" 로 읽지 않는다.
+    validated = inner.get("generationRequestValidated") if isinstance(inner, dict) else None
+    return {"endpoint": P_T2I_START, "numbers": quote_numbers(raw),
+            "validated": validated if isinstance(validated, bool) else None, "raw": raw}
+
+
+def start(prompt: str, n: int = 1, name: str = "",
+          long_edge: int | None = None, negative: bool = True, quiet: bool = True,
+          input_images=None) -> list[str]:
+    """생성 시작 → task id 목록. 요청 크기가 상한에 깎이면 과금 전에 알린다.
+
+    input_images 는 캐릭터 레퍼런스 URL(모델 상한까지만 실린다 — A2E 2장).
+    """
+    body = t2i_body(prompt, n=n, name=name, long_edge=long_edge, negative=negative,
+                    quiet=quiet, input_images=input_images)
     d = _call("POST", P_T2I_START, body, idempotent=False, quiet=quiet)
     items = d.get("data") if isinstance(d.get("data"), list) else [d.get("data")]
     ids = [it["_id"] for it in items if isinstance(it, dict) and it.get("_id")]

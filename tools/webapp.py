@@ -1234,11 +1234,27 @@ def r_gen_cost(b):
                 faces.append({"id": cid, "name": oc.get("name", ""),
                               "photos": len(oc.get("reference_images") or [])})
     if engine == "makefun":
+        # 견적(무과금 경로)이 **켜져 있고** 토큰이 있으면 실제 숫자를 물어본다.
+        # 기본은 꺼져 있다 — 과금은 안 되지만 그래도 바깥 서버를 두드리는 일이고,
+        # 이 저장소의 MakeFun 규칙은 '모의만' 이다. 사람이 매니페스트에서 켠다:
+        #   image_generator.makefun.quote: true
+        quoted, qnote = None, ""
+        if makefun_client.quote_enabled() and os.environ.get(makefun_client.TOKEN_ENV, "").strip():
+            try:
+                q = makefun_client.quote_text2image(
+                    str((sc.get("prompt") or {}).get("grok_output", "") or "장면"),
+                    n=max(1, min(int(b.get("n") or 1), 4)), name=str(sc.get("scene_id") or ""))
+                quoted = [{"field": k, "value": v} for k, v in q.get("numbers", [])]
+                if q.get("validated") is False:
+                    qnote = ("견적은 **가격 입력만** 확인한 값입니다 — 생성 요청 전체가 "
+                             "유효하다는 뜻은 아닙니다(공급자 명세 문구).")
+            except Exception as exc:          # 견적을 못 받아도 굽기 자체는 막지 않는다
+                qnote = "견적을 받지 못했습니다(%s)." % str(exc)[:80]
         return {"engine": engine, "billable": True, "credits": None,
-                "faces": faces,
+                "faces": faces, "quote": quoted, "quote_note": qnote,
                 "note": ("유료 호출입니다 — 크레딧이 차감됩니다. 장당 얼마인지는 공급자가 "
                          "공개하지 않아 이 화면은 숫자를 지어내지 않습니다(계정 화면의 "
-                         "가격표를 확인하세요)."),
+                         "가격표를 확인하세요). 견적을 켜면 굽기 전에 물어봅니다."),
                 "face_note": ("이 인물의 사진을 MakeFun 서버로 **올려서** 얼굴을 맞춥니다 — "
                               "사진이 이 기계 밖으로 나갑니다. 끄면 사진 없이 글로만 굽습니다."
                               if faces else "")}
