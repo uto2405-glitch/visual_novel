@@ -5441,6 +5441,48 @@ def l10(b: Box):
     eq(bad, [], "사적 대화 파일이 이미 git 에 추적되고 있다")
 
 
+@test("js", "J15 통합 화면 — 모델이 꺼져도 쓸 길이 있고, 이어하기는 받은 것을 지키며, 진행은 탭 밖에 산다")
+def j15(b: Box):
+    """세 가지를 코드에서 확인한다. 전부 실제로 사람이 잃을 뻔한 것들이다.
+
+    (1) **모델이 꺼졌을 때의 길** — CLAUDE.md 가 지키라고 한 유일한 경로다(붙여넣기).
+        이 화면에는 그 길이 한 줄도 없었다. 노트북을 닫으면 그림 굽기 말고는 할 게 없었다.
+    (2) **이어하기가 받은 것을 지키는가** — [이어서 다시] 가 라벨과 반대로 전부 버리고
+        1번부터 다시 했다. resume 를 싣지 않으면 그 사고가 그대로 돌아온다.
+    (3) **진행과 복구 버튼이 탭 밖에 사는가** — #stream 안에 있으면 탭 한 번에 지워지고,
+        받아 둔 장면을 되살릴 방법이 화면에서 사라진다.
+    """
+    p = b.p("tools/chat_ui.js")
+    if not p.exists():
+        raise Gap("tools/chat_ui.js 아직 없음 — 통합 화면 미도입")
+    js = p.read_text(encoding="utf-8")
+    html = b.p("tools/chat_ui.html").read_text(encoding="utf-8")
+
+    has(js, "/api/compose-input", "모델이 꺼졌을 때 지시문을 복사할 길이 없다")
+    has(js, "/api/compose-manual", "붙여넣어 장면을 만드는 길이 없다")
+    has(js, "llmDown", "모델이 꺼진 것을 화면이 알지 못한다")
+
+    ok(re.search(r"resume:\s*true", js) is not None,
+       "[이어서 다시] 가 resume 를 싣지 않는다 — 받아 둔 장면을 전부 버리고 1번부터 다시 한다")
+
+    has(html, 'id="live"', "진행 표시가 탭 밖에 없다")
+    has(js, "liveShow", "진행·복구를 고정 자리에 그리는 경로가 없다")
+    # 복구 버튼이 #stream 안에서만 만들어지면 탭 한 번에 사라진다
+    ok("liveShow" in js[js.index("function composeFailed"):js.index("function composeFailed") + 2000],
+       "조립 실패 복구 버튼이 고정 자리에 없다 — 탭을 옮기면 사라진다")
+
+    # 고르기는 굽는 중에도 되어야 한다(서버가 '고르세요' 라고 말하는 동안 잠겨 있었다).
+    # 주석에 S.busy 를 언급할 수는 있으므로 **실행되는 줄**만 본다.
+    start = js.index("async function pick(")
+    body = js[start:start + 500]
+    code = [l for l in body.splitlines()
+            if l.strip() and not l.strip().startswith(("*", "/*", "//"))]
+    ok(not any("S.busy" in l for l in code),
+       "고르기가 S.busy 로 잠겨 있다 — 굽는 동안 고를 수 없다")
+    ok(any("S.picking" in l for l in code),
+       "고르기에 자기 잠금(S.picking)이 없다 — 두 번 누르면 겹친다")
+
+
 @test("unit", "U34 생성 중단 — 장 사이에서만 멈추고, 이미 구운 장은 남고, 진행 숫자는 문구에 안 산다")
 def u34(b: Box):
     """세 가지를 잠근다.

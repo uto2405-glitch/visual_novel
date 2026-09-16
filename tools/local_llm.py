@@ -351,6 +351,11 @@ def _chunk_text(chunk) -> str:
     return ch["content"] if isinstance(ch.get("content"), str) else ""
 
 
+# 답이 중간에 끊겼을 때 본문 끝에 남기는 표시. 화면은 이것을 보고 "끊겼다" 고 말하고,
+# 조립 경로는 이것이 있으면 그 배치를 성공으로 치지 않는다.
+TRUNCATED_MARK = "\n\n[…연결이 끊겨 답이 중간에서 멈췄습니다]"
+
+
 def _read_stream(resp, on_token) -> str:
     """SSE 응답을 읽어 조각마다 on_token 을 부르고, 이어붙인 전문을 돌려준다.
 
@@ -387,6 +392,10 @@ def _read_stream(resp, on_token) -> str:
     except OSError as exc:        # 읽는 도중 끊김(타임아웃·소켓)
         if not parts:
             raise VNError(f"로컬 LLM 응답이 중간에 끊겼습니다({exc}).")
+        # 이미 본 글자는 살린다(윗주석). 다만 **잘렸다는 사실은 반드시 남긴다** —
+        # 예전에는 잘린 답이 완결된 답처럼 저장돼, 사용자는 모델이 거기서 말을 멈춘 줄
+        # 알았다. 조립 경로에서는 그 조각이 JSON 절반이라 형식 실패로만 보였다.
+        parts.append(TRUNCATED_MARK)
     if not parts and plain:
         try:                      # JSON 문자열은 줄을 넘지 못하므로 줄을 그냥 이어 붙여도 된다
             piece = _chunk_text(json.loads("".join(plain)))

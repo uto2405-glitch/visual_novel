@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
 import sys
 from pathlib import Path
 
@@ -169,13 +170,30 @@ def health(engine: str | None = None) -> dict:
     return out
 
 
+# 엔진마다 받을 수 있는 선택 인자가 다르다. 여기서 걸러 내지 않으면, 한 엔진에 기능을
+# 붙이는 순간 다른 엔진이 TypeError 로 죽는다 — 실제로 on_each/should_stop 을 ComfyUI 에
+# 붙였더니 MakeFun 을 고른 사람은 [생성] 을 누르는 즉시 터졌다. 화면에는 역추적만 떴다.
+_OPTIONAL_KW = ("on_each", "should_stop", "seed", "long_edge", "negative", "reference")
+
+
+def _supported(fn, kw: dict) -> dict:
+    """그 엔진의 함수가 실제로 받는 인자만 남긴다(모르는 것은 조용히 뺀다)."""
+    try:
+        names = set(inspect.signature(fn).parameters)
+    except (TypeError, ValueError):
+        return dict(kw)
+    return {k: v for k, v in kw.items() if k in names}
+
+
 def generate_for_scene(sid: str, n: int = 1, engine: str | None = None, on_progress=None,
                        quiet: bool = False, **kw):
-    return client(engine).generate_for_scene(sid, n=n, on_progress=on_progress, quiet=quiet, **kw)
+    fn = client(engine).generate_for_scene
+    return fn(sid, n=n, on_progress=on_progress, quiet=quiet, **_supported(fn, kw))
 
 
 def generate_to_dir(prompt: str, out_dir, engine: str | None = None, **kw):
-    return client(engine).generate_to_dir(prompt, out_dir, **kw)
+    fn = client(engine).generate_to_dir
+    return fn(prompt, out_dir, **_supported(fn, kw))
 
 
 def progress_text(engine: str | None, kind: str, elapsed, status: str = "") -> str:

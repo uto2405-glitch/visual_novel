@@ -72,6 +72,7 @@ const S = {
   job: null,         // 서버가 들고 도는 조립 작업의 마지막 상태
   shown: 0,          // 화면에 이미 줄을 올린 장면 수
   picking: false,    // 고르기·승인 중 (굽는 중에도 골라야 하므로 busy 와 따로 둔다)
+  llmDown: false,    // 모델이 꺼져 있는가 — 그러면 붙여넣기 경로를 화면에 연다
   busy: false,
 };
 
@@ -222,6 +223,14 @@ async function resendFrom(idx, newText) {
 
 /* idx 번째 답변을 다시 만든다 — 그 답변만 걸어내고 같은 질문을 다시 보낸다. */
 async function regenerate(idx) {
+  /* 마지막 답이 아니면 그 뒤의 대화가 전부 다시 만들어진다 — 수정 경로는 그 사실을
+   * 말하는데 여기만 말없이 잘랐다. 몇 개가 걸리는지 숫자로 알린다. */
+  const after = S.msgs.length - idx - 1;
+  if (after > 0) {
+    const ok = window.confirm("이 답을 다시 만들면 뒤의 대화 " + after
+                              + "개도 다시 만들어집니다. 지워지는 것이 아니라 보관됩니다. 계속할까요?");
+    if (!ok) return;
+  }
   await trimAndAsk(idx, null);
 }
 
@@ -310,6 +319,9 @@ function stripOffers(text) {
 }
 
 function renderOffers(text, after) {
+  /* 지난 제안은 걷어낸다 — 안 그러면 대화를 이어갈수록 옛 버튼이 줄줄이 남는다.
+   * 사람이 스크롤하다 예전 제안을 누르면 지금 이야기와 무관한 개수로 조립이 시작된다. */
+  Array.prototype.forEach.call(document.querySelectorAll(".offer"), (n) => n.remove());
   const offers = [];
   let m;
   OFFER_RE.lastIndex = 0;
@@ -516,6 +528,15 @@ async function pollCompose() {
     setBar(S.shown, st.total || 1);
   }
 
+  /* 서버가 재시작됐거나 다른 탭이 저장을 마치면 작업 자체가 사라진다. 그때 아무 말도
+   * 없이 멈춰 서면 사람은 아직 돌고 있다고 믿고 기다린다. */
+  if (!st.running && !(st.scenes || []).length && !st.error && S.shown > 0) {
+    stopPolling();
+    liveHide();
+    addNote("현상 작업이 더 이상 없습니다 — 다른 화면에서 저장되었거나 서버가 다시 시작됐습니다.");
+    refresh().then(() => { if (S.view === "scenes") showView("scenes"); }).catch(() => {});
+    return;
+  }
   if (st.running) {
     liveShow(st.message || ("현상 중… " + (st.done || 0) + "/" + (st.total || "?")),
              [{ label: "현상 멈추기", onClick: async (b) => {
@@ -905,7 +926,10 @@ async function openChat(id) {
   S.useContext = rec && typeof rec.use_context === "boolean"
     ? rec.use_context : !S.chatId;
   const want = S.chatId;
-  setBusy(true);
+  /* setBusy 를 쓰지 않는다 — 대화를 바꾸는 일이 남이 걸어 둔 잠금을 풀면,
+   * 답을 기다리는 중에 목록을 눌렀다는 이유로 보내기 버튼이 되살아난다. */
+  const box = $("box");
+  if (box) box.disabled = true;
   try {
     const h = await api("/api/chat-history", { chat_id: want });
     /* 목록을 빠르게 두 번 누르면 두 요청이 겹친다. 늦게 온 응답이 지금 열린 대화를
@@ -917,7 +941,7 @@ async function openChat(id) {
     S.msgs = [];
     addNote(String(e.message || e), true);
   } finally {
-    setBusy(false);
+    if (box) box.disabled = false;
   }
   if (S.chatId !== want) return;
   showView("talk");
@@ -1208,11 +1232,62 @@ function ctxSwitch() {
   return row;
 }
 
+/* 모델이 꺼져 있어도 장면은 만들 수 있다 — 저장소 규칙이 지키라고 한 유일한 경로다.
+ * 지시문을 복사해 다른 곳(폰의 다른 앱, 다른 PC)에서 답을 받아 붙여넣으면 된다.
+ * 이 길이 없으면 노트북을 닫는 순간 이 화면에서 할 수 있는 일이 그림 굽기뿐이다. */
+function pasteBox() {
+  const wrap = el("div", "editbox");
+  wrap.appendChild(el("p", "line",
+    "모델이 꺼져 있어도 장면은 만들 수 있습니다. 아래에서 지시문을 복사해 어디서든 답을 받고, "
+    + "그 JSON 을 그대로 붙여넣으세요. 모델을 부르지 않습니다."));
+  const row = el("div", "row");
+
+  const copy = el("button", null, "지시문 복사");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    const n = Math.max(1, Math.min(parseInt($("total").value, 10) || 6, 24));
+    try {
+      const d = await api("/api/compose-input", { count: n, branching: false });
+      await copyText((d && d.instruction) || "", copy);
+    } catch (e) { addNote(String(e.message || e), true); }
+  });
+  row.appendChild(copy);
+
+  const ta = el("textarea");
+  ta.placeholder = "받은 JSON 을 여기에 붙여넣으세요";
+  const save = el("button", "go", "붙여넣은 것으로 장면 만들기");
+  save.type = "button";
+  save.addEventListener("click", async () => {
+    const text = (ta.value || "").trim();
+    if (!text) return;
+    save.disabled = true;
+    try {
+      const res = await api("/api/compose-manual", { text: text, force: false });
+      const made = ((res && res.created) || []).length;
+      /* 확인 문구는 고정 자리에 둔다 — 바로 뒤 showView 가 #stream 을 비운다. */
+      liveShow("붙여넣은 것으로 장면 " + made + "개를 만들었습니다.", [
+        { label: "확인", onClick: () => liveHide() },
+      ], 1);
+      await refresh();
+      showView("scenes");
+    } catch (e) {
+      save.disabled = false;
+      addNote(String(e.message || e), true);
+    }
+  });
+  row.appendChild(save);
+
+  wrap.appendChild(ta);
+  wrap.appendChild(row);
+  return wrap;
+}
+
 function renderTalk() {
   if (S.view !== "talk") return;
   const m = stream();
   while (m.firstChild) m.removeChild(m.firstChild);
   m.appendChild(ctxSwitch());
+  if (S.llmDown) m.appendChild(pasteBox());
   if (!S.msgs.length) {
     addNote("이야기를 시작해 보세요. 예: \"고등학교 옥상에서 시작하는 짧은 연애물을 쓰고 싶어\"");
   } else {
@@ -1256,8 +1331,17 @@ async function probe() {
   try {
     const d = await api("/api/talk-status", {});
     const up = !!(d && d.up);
-    llm.textContent = up ? "글자 연결됨" : "글자 끊김";
+    const why = (d && d.reason) || "";
+    /* 키가 거부된 것과 서버가 꺼진 것은 다른 문제다. 같은 문구로 덮으면 사람은 멀쩡히
+     * 떠 있는 서버를 껐다 켜며 시간을 버린다. */
+    llm.textContent = up ? "글자 연결됨" : (why === "auth" ? "글자 키 거부됨" : "글자 끊김");
+    llm.title = up ? ((d && d.url) || "")
+                   : (why === "auth" ? "서버는 떠 있는데 API 키를 거부했습니다."
+                                     : ((d && d.error) || "연결할 수 없습니다."));
     llm.className = "chip " + (up ? "ok" : "bad");
+    const wasDown = S.llmDown;
+    S.llmDown = !up;
+    if (wasDown !== S.llmDown && S.view === "talk") renderTalk();
   } catch (e) { llm.textContent = "글자 확인 실패"; llm.className = "chip bad"; }
   try {
     const d = await api("/api/image-engine", {});
@@ -1323,7 +1407,10 @@ async function boot() {
   try {
     await refresh();
   } catch (e) {
-    addNote(String(e.message || e), true);
+    /* 시작할 때의 실패는 #stream 에 적으면 바로 뒤 showView 가 지운다 — 고정 자리에 둔다. */
+    liveShow("서버에서 상태를 못 읽었습니다: " + String(e.message || e), [
+      { label: "다시 시도", go: true, onClick: () => location.reload() },
+    ], 0);
   }
   try {
     const h = await api("/api/chat-history", { chat_id: S.chatId });

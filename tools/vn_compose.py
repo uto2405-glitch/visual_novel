@@ -856,6 +856,15 @@ def _compose_worker(total: int, batch: int, branching: bool) -> None:
                     _JOB["failed_from"], _JOB["failed_to"] = start, end
                     _JOB["message"] = ""
                 break
+            if local_llm.TRUNCATED_MARK in (raw or ""):
+                # 끊긴 응답은 성공으로 치지 않는다. 앞부분이 문법적으로 온전하면
+                # 파싱이 '성공' 해 버려서, 모자란 장면이 조용히 빈자리로 남는다.
+                with _JOB_LOCK:
+                    _JOB["error"] = ("답이 중간에서 끊겼습니다(연결). 받은 데까지는 그대로 두고 멈춥니다.")
+                    _JOB["raw"] = raw
+                    _JOB["failed_from"], _JOB["failed_to"] = start, end
+                    _JOB["message"] = ""
+                break
             try:
                 items = _extract_json_array(raw)
             except (ValueError, json.JSONDecodeError):

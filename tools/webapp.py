@@ -729,7 +729,11 @@ def r_gen_image(b):
     sc = scene_ops.assert_mutable(sid, "이미지를 다시 생성하려면")
     n = max(1, min(int(b.get("n", 1) or 1), 4))
 
-    gen_jobs.clear_cancel(sid)          # 지난 '그만' 표시가 새 작업을 즉시 멈추지 않게
+    # 지난 '그만' 표시는 지운다. 다만 **이미 굽고 있는 장면**에는 손대지 않는다 —
+    # 그러면 방금 누른 '그만' 이 [그림 뽑기] 한 번에 조용히 취소되고, 거절당한 뒤에도
+    # 원래 작업은 취소 표시를 잃은 채 끝까지 굽는다.
+    if not gen_jobs.status(sid).get("running"):
+        gen_jobs.clear_cancel(sid)
 
     def work():
         gen_jobs.note(sid, f"{label} 에 생성 요청 중…")
@@ -740,12 +744,15 @@ def r_gen_image(b):
             등록을 장마다 하는 이유: 화면이 후보를 바로 보여 주려면 assets 에 들어 있어야
             한다. register_images 는 IMAGE 에서 멈추므로(선택은 사람이) 불변식은 그대로다.
             """
+            note = f"{done}/{want}장 나왔습니다 — 고르거나 더 뽑을 수 있습니다."
             try:
                 scene_ops.register_images(sid)
-            except Exception:
-                pass                     # 등록 실패가 남은 장을 굽지 못하게 두지 않는다
-            gen_jobs.note(sid, f"{done}/{want}장 나왔습니다 — 고르거나 더 뽑을 수 있습니다.",
-                          done=done, want=want)
+            except Exception as exc:
+                # 굽는 중에 그 장면을 승인해 버리면 여기서부터 등록이 전부 막힌다.
+                # 조용히 넘기면 파일은 쌓이는데 화면에는 후보가 안 늘어난다 — 말한다.
+                note = (f"{done}/{want}장 나왔지만 목록에 넣지 못했습니다 "
+                        f"({str(exc)[:60]}). 파일은 images/raw 에 있습니다.")
+            gen_jobs.note(sid, note, done=done, want=want)
 
         return image_gen.generate_for_scene(
             sid, n=n, engine=engine,
