@@ -6953,6 +6953,81 @@ def u51(b: Box):
         mf_path.write_bytes(mf_keep)
 
 
+@test("unit", "U52 대화에 나온 장소는 그 장소로 — 목록에 없다고 첫 장소로 떨어지지 않는다")
+def u52(b: Box):
+    """실측: 비 오는 **서점** 이야기를 조립했더니 네 장면이 전부 '학교 앞 카페' 였다.
+    이유는 인물 쪽과 똑같다 — 판정자 A2 가 장면의 location_id 는 매니페스트에 있어야
+    한다고 요구하는데 그 파일은 고칠 수 없어서, 조립이 목록에 없는 장소를 만나면
+    **무조건 첫 장소로 떨어뜨렸다.** 사람이 쓴 이야기와 나온 그림이 다르다.
+
+    그래서 모델이 새 장소를 적어 주면 그것을 등록해서 쓴다. 등록은 한 곳
+    (:func:`scene_ops.ensure_location`)에서만 하고, 같은 장소를 두 번 만들지 않는다 —
+    안 그러면 한 작품에 '동네 서점' 이 네 개 생기고, 넷의 앵커가 조금씩 달라서 같은
+    서점이 장면마다 다르게 그려진다.
+    """
+    vc = b.mod("vn_core")
+    so = b.mod("scene_ops")
+    vcm = b.mod("vn_compose")
+    mf_path = vc.PROJECT / "manifest.json"
+    mf_keep = mf_path.read_bytes()          # 샌드박스는 공용이다 — 원상 복구한다
+    try:
+        first = vc.load_manifest()["locations"][0]["location_id"]
+
+        # 1) 새 장소를 등록한다
+        lid = so.ensure_location("동네 서점", "a small neighborhood bookstore, warm wooden shelves")
+        ok(lid and lid != first, "새 장소가 만들어지지 않았다: %r" % lid)
+        got = [l for l in vc.load_manifest()["locations"] if l.get("location_id") == lid][0]
+        ok("bookstore" in got["prompt_anchor"], "앵커가 저장되지 않았다")
+
+        # 2) 같은 장소를 두 번 만들지 않는다(이름으로도, 앵커로도)
+        eq(so.ensure_location("동네 서점", "a totally different anchor"), lid,
+           "같은 이름의 장소를 또 만들었다 — 한 작품에 같은 서점이 둘이 된다")
+        eq(so.ensure_location("딴 이름", "A SMALL neighborhood bookstore,  warm wooden shelves"),
+           lid, "같은 앵커의 장소를 또 만들었다")
+        n_before = len(vc.load_manifest()["locations"])
+
+        # 3) 앵커가 없으면 거절한다 — 이름만 있는 장소는 그림에 아무것도 못 준다
+        try:
+            so.ensure_location("이름뿐인 곳", "   ")
+            ok(False, "그림 문장 없는 장소를 등록했다")
+        except Exception as exc:
+            ok("anchor" in str(exc) or "그림 문장" in str(exc),
+               "거절 사유를 말하지 않는다: %s" % str(exc)[:60])
+
+        # 4) 조립 경로 — 목록에 없는 장소를 적은 원소가 **첫 장소로 떨어지지 않는다**
+        item = {"order": 1, "purpose": "비 오는 저녁", "location_id": "LOC-999",
+                "location_new": {"name": "비 오는 골목", "anchor": "a rainy narrow alley at night"},
+                "dialogue": [], "image_prompt": "x"}
+        loc_ids = {l.get("location_id") for l in vc.load_manifest()["locations"]}
+        built = vcm.build_scene(item, 1, [], loc_ids,
+                                vc.load_manifest()["locations"])
+        made = built["location_id"]
+        ok(made != first, "새 장소를 적었는데 첫 장소로 떨어졌다 — 서점 이야기가 카페에서 벌어진다")
+        got = [l for l in vc.load_manifest()["locations"] if l.get("location_id") == made][0]
+        ok("alley" in got["prompt_anchor"], "장면이 가리키는 장소의 앵커가 다르다")
+
+        # 4-b) 모델이 **id 자리에 장소를 통째로** 적어도 받는다.
+        #      실측: 저장이 "unhashable type: 'dict'" 로 터져서, 2분 40초를 들여 받은
+        #      장면 네 개가 저장 직전에 통째로 막혔다. 여기는 자유 형식을 규약으로
+        #      번역하는 자리다 — 모델의 형식 하나가 사람의 작업을 날리면 안 된다.
+        item3 = {"order": 1, "purpose": "x", "dialogue": [],
+                 "location_id": {"name": "비 오는 옥상", "anchor": "a rooftop in the rain at night"}}
+        built3 = vcm.build_scene(item3, 1, [], loc_ids, vc.load_manifest()["locations"])
+        got3 = [l for l in vc.load_manifest()["locations"]
+                if l.get("location_id") == built3["location_id"]][0]
+        ok("rooftop" in got3["prompt_anchor"],
+           "id 자리에 적힌 장소를 못 읽었다: %s" % got3.get("prompt_anchor"))
+
+        # 5) 새 장소를 **못 적었으면** 예전 그대로(첫 장소) — 장면 하나가 통째로 날아가지 않는다
+        item2 = {"order": 1, "purpose": "x", "location_id": "LOC-999", "dialogue": []}
+        eq(vcm.build_scene(item2, 1, [], loc_ids, vc.load_manifest()["locations"])["location_id"],
+           first, "장소를 못 정했는데 빈 값이 됐다 — 검사기 A2 가 FAIL 이다")
+        eq(len(vc.load_manifest()["locations"]), n_before + 2,
+           "장소가 예상보다 늘었다 — 같은 곳이 여러 개 생기고 있다")
+    finally:
+        mf_path.write_bytes(mf_keep)
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —

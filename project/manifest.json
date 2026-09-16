@@ -70,7 +70,13 @@
     "base_url": "http://192.168.219.182:8080/v1"
   },
   "workflow": {
-    "human_gates": ["story", "visual_reference", "scene_plan", "image", "delivery"],
+    "human_gates": [
+      "story",
+      "visual_reference",
+      "scene_plan",
+      "image",
+      "delivery"
+    ],
     "scene_batch_size": 1
   },
   "characters": [
@@ -85,46 +91,83 @@
         "eyes": "또렷한 갈색 눈",
         "build": "보통",
         "wardrobe": "파스텔 니트 가디건",
-        "signature_props": ["작은 별 귀걸이"],
+        "signature_props": [
+          "작은 별 귀걸이"
+        ],
         "personality": "밝고 다정하지만 속은 여리다. 좋아하는 사람 앞에서는 장난과 부끄러움이 반반이고, 서운한 건 바로 말하지 못하고 표정에 먼저 드러난다.",
         "speech_style": "편한 반말. 기쁘면 말끝을 늘이고(\"맞아~\", \"그치~\"), 부끄러우면 딴 얘기로 돌린다. 삐치면 장난스러운 존댓말(\"네, 그러시든가요\")을 쓴다."
       },
       "reference_images": [],
       "prompt_anchor": "18-year-old Korean girl, light brown semi-long hair in a half-up style, bright brown eyes, pastel knit cardigan, small star earrings",
-      "prompt_tags": ["light brown hair", "half updo", "pink cardigan", "star earrings"],
+      "prompt_tags": [
+        "light brown hair",
+        "half updo",
+        "pink cardigan",
+        "star earrings"
+      ],
       "wardrobe_default": "pastel knit cardigan",
       "wardrobe_variants": [
         {
           "variant_id": "default",
-          "tags": ["light brown hair", "half updo", "pink cardigan", "star earrings"],
+          "tags": [
+            "light brown hair",
+            "half updo",
+            "pink cardigan",
+            "star earrings"
+          ],
           "label": "기본 사복",
           "season": "봄",
           "anchor": "pastel knit cardigan over a white blouse, pleated beige skirt"
         },
         {
           "variant_id": "school",
-          "tags": ["light brown hair", "half updo", "navy school blazer", "red ribbon tie", "pleated skirt", "star earrings"],
+          "tags": [
+            "light brown hair",
+            "half updo",
+            "navy school blazer",
+            "red ribbon tie",
+            "pleated skirt",
+            "star earrings"
+          ],
           "label": "교복",
           "season": "공용",
           "anchor": "navy school blazer uniform with a red ribbon tie, pleated skirt"
         },
         {
           "variant_id": "outing",
-          "tags": ["light brown hair", "half updo", "cream trench coat", "beige dress", "star earrings"],
+          "tags": [
+            "light brown hair",
+            "half updo",
+            "cream trench coat",
+            "beige dress",
+            "star earrings"
+          ],
           "label": "외출복",
           "season": "공용",
           "anchor": "cream trench coat over a light beige one-piece dress, small shoulder bag"
         },
         {
           "variant_id": "summer_festival",
-          "tags": ["light brown hair", "half updo", "light blue floral dress", "white cardigan", "star earrings"],
+          "tags": [
+            "light brown hair",
+            "half updo",
+            "light blue floral dress",
+            "white cardigan",
+            "star earrings"
+          ],
           "label": "여름 축제",
           "season": "여름",
           "anchor": "light blue floral summer one-piece dress, thin white cardigan on the shoulders"
         },
         {
           "variant_id": "winter",
-          "tags": ["light brown hair", "half updo", "ivory wool coat", "red scarf", "star earrings"],
+          "tags": [
+            "light brown hair",
+            "half updo",
+            "ivory wool coat",
+            "red scarf",
+            "star earrings"
+          ],
           "label": "겨울",
           "season": "겨울",
           "anchor": "thick ivory wool coat, red knitted scarf and mittens"
@@ -148,40 +191,65 @@
       },
       "reference_images": [],
       "prompt_anchor": "18-year-old Korean boy, neat short black hair with a soft side-swept fringe, calm dark brown eyes, slim oval face with a gentle jawline, fair skin, tall lean build, quiet warm expression, plain white casual shirt",
-      "prompt_tags": ["black hair", "white shirt", "short sleeves"],
+      "prompt_tags": [
+        "black hair",
+        "white shirt",
+        "short sleeves"
+      ],
       "wardrobe_default": "plain white casual shirt",
       "wardrobe_variants": [
         {
           "variant_id": "default",
-          "tags": ["black hair", "white shirt", "short sleeves"],
+          "tags": [
+            "black hair",
+            "white shirt",
+            "short sleeves"
+          ],
           "label": "기본 사복",
           "season": "봄",
           "anchor": "plain white casual shirt, dark slim jeans"
         },
         {
           "variant_id": "school",
-          "tags": ["black hair", "navy school blazer", "striped tie", "white dress shirt"],
+          "tags": [
+            "black hair",
+            "navy school blazer",
+            "striped tie",
+            "white dress shirt"
+          ],
           "label": "교복",
           "season": "공용",
           "anchor": "navy school blazer uniform with a striped tie, white dress shirt"
         },
         {
           "variant_id": "outing",
-          "tags": ["black hair", "light grey open shirt", "white tee"],
+          "tags": [
+            "black hair",
+            "light grey open shirt",
+            "white tee"
+          ],
           "label": "외출복",
           "season": "공용",
           "anchor": "light grey open shirt over a white tee, canvas backpack"
         },
         {
           "variant_id": "summer_festival",
-          "tags": ["black hair", "navy linen shirt", "short sleeves"],
+          "tags": [
+            "black hair",
+            "navy linen shirt",
+            "short sleeves"
+          ],
           "label": "여름 축제",
           "season": "여름",
           "anchor": "short-sleeved navy linen shirt, light cotton trousers"
         },
         {
           "variant_id": "winter",
-          "tags": ["black hair", "charcoal wool coat", "grey knit sweater"],
+          "tags": [
+            "black hair",
+            "charcoal wool coat",
+            "grey knit sweater"
+          ],
           "label": "겨울",
           "season": "겨울",
           "anchor": "charcoal wool coat over a grey knit sweater"

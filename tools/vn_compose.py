@@ -336,6 +336,10 @@ def build_compose_instruction(count: int, branching: bool = False,
 4. dialogue 는 한국어, 장면당 1~4줄. 한 줄은 60자 이내. **위에 적힌 각 인물의 말투를 지킬 것**
    (반말인 인물에게 존댓말을 쓰지 말 것 — 기존 장면과 말투가 갈린다).
 5. location_id 는 장소 목록의 id 중 하나.
+   **목록에 이야기의 장소가 없으면** location_id 대신 아래를 적어라(지어내는 게 맞다):
+     "location_new":{{"name":"동네 서점","anchor":"a small neighborhood bookstore, warm wooden shelves"}}
+   anchor 는 **영어**로 적는다(그림에 그대로 들어간다). 같은 장소가 여러 장면에 나오면
+   **같은 이름**을 써라 — 이름이 같으면 한 장소로 묶인다.
 6. 그 장면 dialogue 에 등장하지 않는 인물의 anchor 는 image_prompt 에 넣지 말 것
    (등장 인물은 dialogue 화자로 정해진다. 말없이 함께 있는 인물은 짧은 대사를 1줄 주어라).
 
@@ -353,7 +357,7 @@ def build_compose_instruction(count: int, branching: bool = False,
 [출력 형식 — {COMPOSE_MARK}]
 다른 말 없이 JSON 배열만 출력하라. 각 원소:
 {{"order":1,"purpose":"...","action_beat":"...","emotion":"...","time":"...",
- "location_id":"LOC-001",
+ "location_id":"LOC-001",          // 또는 "location_new":{{"name":"…","anchor":"…"}}
  "camera":{{"shot":"...","angle":"...","framing":"...","focus":"..."}},
  "dialogue":[{{"speaker_id":"CHAR-001","text":"..."}}],
  "image_prompt":"..."}}"""
@@ -378,6 +382,24 @@ def norm_branch(v) -> list:
     return out
 
 
+def _new_location(raw) -> str:
+    """모델이 적어 준 새 장소({name, anchor, description}) → 등록된 LOC id(못 만들면 "").
+
+    실패해도 **조용히 넘어간다**: 장소 하나 때문에 장면 네 개가 통째로 날아가면 안 된다.
+    그 경우 예전처럼 첫 장소로 떨어지고, 사람은 장면 탭에서 고칠 수 있다.
+    """
+    if not isinstance(raw, dict):
+        return ""
+    anchor = str(raw.get("anchor") or raw.get("prompt_anchor") or "").strip()
+    if not anchor:
+        return ""
+    try:
+        return scene_ops.ensure_location(str(raw.get("name") or ""), anchor,
+                                         str(raw.get("description") or ""))
+    except Exception:
+        return ""
+
+
 def build_scene(it: dict, index: int, char_ids: list, loc_ids: set, locs: list,
                 episode=None) -> dict:
     """LLM 이 준 장면 원소 1개 → **scene_ops.create_scene 에 넘길 필드 dict**.
@@ -397,6 +419,23 @@ def build_scene(it: dict, index: int, char_ids: list, loc_ids: set, locs: list,
     """
     f: dict = {"scene_id": f"SCENE-{index:03d}", "scene_order": index, "status": "PROMPT"}
     loc = it.get("location_id")
+    fresh = it.get("location_new")
+    if isinstance(loc, dict):
+        # 모델이 **id 자리에 장소를 통째로** 적는 일이 있다(실측: 조립 저장이
+        # "unhashable type: 'dict'" 로 통째로 실패했고, 2분 40초를 들여 받은 장면 네 개가
+        # 저장 직전에 막혔다). 여기는 자유 형식을 규약으로 번역하는 자리다 — 예외가 아니라
+        # 번역으로 받는다.
+        fresh = fresh if isinstance(fresh, dict) else loc
+        loc = ""
+    elif not isinstance(loc, str):
+        loc = ""
+    if loc not in loc_ids:
+        # 목록에 없는 장소를 **첫 장소로 떨어뜨리지 않는다.** 그게 비 오는 서점 이야기를
+        # 학교 앞 카페에서 벌어지게 만들었다. 모델이 새 장소를 적어 주었으면 등록해서 쓴다.
+        made = _new_location(fresh)
+        if made:
+            loc = made
+            loc_ids.add(made)
     f["location_id"] = loc if loc in loc_ids else ((locs[0].get("location_id") or "") if locs else "")
     dialogue, speakers = [], []
     for d in (it.get("dialogue") if isinstance(it.get("dialogue"), list) else []):
@@ -1343,7 +1382,31 @@ def character_from_talk(messages, hint: str = "") -> dict:
     prof = item.get("profile") if isinstance(item.get("profile"), dict) else {}
     return {"name": name, "profile": prof,
             "prompt_anchor": " ".join(str(item.get("prompt_anchor") or "").split()),
-            "prompt_tags": item.get("prompt_tags") or []}
+            "prompt_tags": drop_nonface_tags(item.get("prompt_tags") or [])}
+
+
+# 인물 태그 줄에 섞이면 안 되는 것들 — **장소와 표정**이다.
+# 실측(첫 인물 생성): 지시문에 "감정·카메라는 쓰지 말라" 고 적었는데도 모델이
+# ``bookstore background`` 와 ``gentle expression`` 을 넣었다. 이 줄은 그 인물이 나오는
+# **모든 장면**의 프롬프트 앞에 그대로 붙으므로, 남겨 두면 공원 장면도 서점이 되고
+# 화난 장면도 부드러운 얼굴이 된다. 장소는 LOC 앵커가, 표정은 장면의 emotion 이 정한다.
+_NONFACE_TAG = re.compile(
+    r"\b(background|backdrop|scenery|indoors?|outdoors?|room|street|cafe|shop|store|"
+    r"library|park|expression|smiling|smile|angry|sad|happy|crying|blush)\b", re.I)
+
+
+def drop_nonface_tags(raw) -> list:
+    """모델이 준 인물 태그에서 장소·표정 태그를 걷어낸다(사람이 직접 적은 것은 건드리지 않는다).
+
+    사람이 탭에서 손으로 적은 태그는 이 함수를 지나지 않는다 — 사람이 일부러 적은 것을
+    코드가 지우면, 몇 번을 적어도 사라지는 칸이 된다.
+    """
+    out = []
+    for t in (raw if isinstance(raw, list) else []):
+        tag = " ".join(str(t or "").split()).strip(" ,")
+        if tag and not _NONFACE_TAG.search(tag):
+            out.append(tag)
+    return out
 
 
 def build_talk_scene_instruction(talk: list, chars: list, locs: list, who=None) -> str:

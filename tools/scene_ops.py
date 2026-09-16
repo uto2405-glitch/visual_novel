@@ -218,6 +218,47 @@ def _next_slot() -> tuple[str, int]:
     return f"SCENE-{max(nums) + 1:03d}", max(order, 0) + 1
 
 
+def ensure_location(name: str, anchor: str, description: str = "") -> str:
+    """대화에 나온 **새 장소**를 매니페스트에 등록하고 그 id 를 돌려준다(이미 있으면 그걸 준다).
+
+    왜 필요한가: 판정자 ``check_protocol`` 의 A2 는 장면의 ``location_id`` 가 매니페스트에
+    있기를 요구하고, 그 파일은 고칠 수 없다. 그래서 목록에 없는 장소는 장면이 가리킬 수가
+    없었고, 조립은 **무조건 첫 장소로 떨어뜨렸다** — 비 오는 서점 이야기가 학교 앞 카페에서
+    벌어졌다(실측). 인물에서 고친 것과 같은 종류의 문제다.
+
+    같은 장소를 두 번 만들지 않는다. 이름이나 앵커가 같으면(대소문자·공백 무시) 기존 id 를
+    준다 — 안 그러면 한 작품 안에 '동네 서점' 이 네 개 생기고, 그 넷의 앵커가 조금씩 달라서
+    같은 서점이 장면마다 다르게 그려진다.
+    """
+    nm = " ".join(str(name or "").split())
+    an = " ".join(str(anchor or "").split())
+    if not an:
+        raise VNError("새 장소의 그림 문장(anchor)이 비어 있습니다.")
+    with _LOCK:
+        mf = vn_core.load_manifest()
+        locs = mf.get("locations")
+        if not isinstance(locs, list):
+            locs = []
+        for l in locs:
+            if not isinstance(l, dict):
+                continue
+            if (nm and " ".join(str(l.get("name", "")).split()).lower() == nm.lower()) \
+               or " ".join(str(l.get("prompt_anchor", "")).split()).lower() == an.lower():
+                return str(l.get("location_id") or "")
+        top = 0
+        for l in locs:
+            m = re.fullmatch(r"LOC-(\d+)", str((l or {}).get("location_id", "")))
+            if m:
+                top = max(top, int(m.group(1)))
+        lid = "LOC-%03d" % (top + 1)
+        locs.append({"location_id": lid, "name": nm or lid, "version": 1,
+                     "description": " ".join(str(description or "").split()),
+                     "reference_images": [], "prompt_anchor": an})
+        mf["locations"] = locs
+        vn_core.atomic_write_json(vn_core.PROJECT / "manifest.json", mf)
+        return lid
+
+
 def _seed_from_manifest(sc: dict, given: set) -> None:
     """템플릿의 자리표시자 id(CHAR-001/LOC-001)를 실제 매니페스트의 첫 인물·장소로 바꾼다.
 
