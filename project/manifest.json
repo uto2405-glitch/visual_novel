@@ -255,6 +255,48 @@
           "anchor": "charcoal wool coat over a grey knit sweater"
         }
       ]
+    },
+    {
+      "character_id": "OC-001",
+      "name": "새 인물",
+      "version": 1,
+      "profile": {
+        "age": "",
+        "gender_presentation": "",
+        "hair": "",
+        "eyes": "",
+        "build": "",
+        "wardrobe": "",
+        "signature_props": [],
+        "personality": "",
+        "speech_style": ""
+      },
+      "reference_images": [],
+      "prompt_anchor": "",
+      "prompt_tags": [],
+      "wardrobe_default": "",
+      "wardrobe_variants": []
+    },
+    {
+      "character_id": "OC-002",
+      "name": "새 인물",
+      "version": 1,
+      "profile": {
+        "age": "",
+        "gender_presentation": "",
+        "hair": "",
+        "eyes": "",
+        "build": "",
+        "wardrobe": "",
+        "signature_props": [],
+        "personality": "",
+        "speech_style": ""
+      },
+      "reference_images": [],
+      "prompt_anchor": "",
+      "prompt_tags": [],
+      "wardrobe_default": "",
+      "wardrobe_variants": []
     }
   ],
   "locations": [

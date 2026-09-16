@@ -577,7 +577,32 @@ def append_scenes_from_items(items, cast=None) -> dict:
             "checker_pass": code == 0, "fixed_anchors": fixed_anchors}
 
 
-def _create_scenes_from_items(items, force: bool, expected: int | None = None) -> dict:
+def branch_warning(created_ids, wanted: bool) -> str:
+    """분기를 요청했는데 선택지가 하나도 없으면 그 사실을 문장으로.
+
+    실측(노트북 세션 · Qwen3.6-35B · 2026-09-16): ``branching=True`` 로 부른 회차에서
+    ``choices`` 0회 · ``branch`` 0회 · ``goto`` 0회 · ``affection`` 0회였다. 지시문을 통째로
+    무시한 것이다. 같은 모델이 전날(9/15)에는 정상으로 냈으니 **회차마다 갈린다.**
+
+    코드로 고칠 수 있는 문제가 아니다(모델이 그렇게 답한 것이다). 하지만 **말해 주는 것과
+    안 말해 주는 것의 차이는 크다** — 사람은 '선택지 있는 연애 시뮬' 을 눌렀는데 선형
+    작품을 받고, 화면 어디에도 그 말이 없으면 자기가 뭘 잘못 눌렀나부터 의심한다.
+    """
+    if not wanted:
+        return ""
+    for sid in (created_ids or []):
+        sc = vn_core.load_json_safe(vn_core.scene_path(sid), {})
+        if not isinstance(sc, dict):
+            continue
+        if sc.get("choices") or sc.get("branch") or sc.get("ending"):
+            return ""
+    return ("분기를 요청했지만 모델이 선택지를 하나도 만들지 않았습니다 — 선형 작품으로 "
+            "나왔습니다. 같은 요청에서도 회차마다 갈립니다(다시 시도하거나, 장면 탭에서 "
+            "직접 선택지를 넣으세요).")
+
+
+def _create_scenes_from_items(items, force: bool, expected: int | None = None,
+                              branching: bool = False) -> dict:
     """파싱된 장면 배열 → SCENE-XXX.json 생성 + 자동 검사. (API·수동 공용)
 
     원자성: 모든 장면을 먼저 메모리에서 구성·검증한 뒤 WRITE_LOCK 안에서 일괄 저장한다.
@@ -653,8 +678,15 @@ def _create_scenes_from_items(items, force: bool, expected: int | None = None) -
         result["backup"] = backup.relative_to(ROOT).as_posix()
         if pruned:
             result["pruned"] = pruned
+    notes = []
     if expected is not None and len(created) != expected:
-        result["warning"] = f"요청 {expected}개 / 생성 {len(created)}개 — 개수가 일치하지 않습니다."
+        notes.append(f"요청 {expected}개 / 생성 {len(created)}개 — 개수가 일치하지 않습니다.")
+    # 분기는 **조용히 사라지기 쉬운** 요청이라 같은 자리에서 함께 말한다.
+    bw = branch_warning(created, branching)
+    if bw:
+        notes.append(bw)
+    if notes:
+        result["warning"] = " ".join(notes)
     return result
 
 
@@ -733,7 +765,7 @@ def compose_scenes(count: int, force: bool, branching: bool = False) -> dict:
         raise VNError(f"모델이 {count}개 중 {got}개만 돌려줬습니다 — 장면을 바꾸지 않았습니다. "
                       "다시 시도하거나, [✍ 직접 입력]에서 지시문을 복사해 받은 JSON 을 "
                       "붙여넣으세요(개수를 눈으로 확인할 수 있습니다).")
-    return _create_scenes_from_items(items, force, expected=count)
+    return _create_scenes_from_items(items, force, expected=count, branching=branching)
 
 
 class _ComposeStop(Exception):
@@ -747,9 +779,15 @@ class _ComposeStop(Exception):
 class _SceneStream:
     """흐르는 글자에서 **장면 하나가 끝나는 순간**을 잡아낸다.
 
-    왜 필요한가: 배치가 다 올 때까지 기다리면 첫 보상이 100초 뒤다. 실측에서 3장면 배치가
-    95~118초인데 그 사이 화면에는 아무것도 없었다. 장면 1개는 약 30초이므로, 경계를 잡으면
-    첫 보상이 30초로 당겨진다 — 기다림이 불안에서 기대로 바뀌는 지점이 거기다.
+    왜 필요한가: 배치가 다 올 때까지 기다리면 첫 보상이 배치 전체 시간 뒤다.
+
+    실측(노트북 세션 · Qwen3.6-35B · 23 tok/s · 2026-09-16, 3회):
+        6장면 선형  전체 197초 · **첫 장면 60.3초**
+        6장면 분기  전체 177초 · **첫 장면 42.7초**
+        10장면 선형 전체 226초 · **첫 장면 56.1초**
+    즉 첫 보상은 **42~60초**다. 예전 이 자리에 적혀 있던 '30초' 는 낙관이었다 —
+    배치 앞머리(프롬프트 읽기)가 먼저 붙어서 첫 장면이 그만큼 늦게 온다.
+    그래도 177~226초를 통째로 기다리는 것과는 다르다. 숫자를 화면에 적을 거면 이 값을 쓴다.
 
     방법은 단순하다. 여는 괄호를 쌓아 두다가 **장면일 법한 객체**가 닫히면 그 조각만
     파싱해 본다. 문자열 안의 괄호와 이스케이프를 건너뛰므로 대사에 '{' 가 들어 있어도
@@ -1126,7 +1164,8 @@ def compose_job_save(force: bool = False) -> dict:
             res = append_scenes_from_items(items, cast=job_cast)
         else:
             res = compose_from_json(json.dumps(items, ensure_ascii=False), force,
-                                    expected=total or len(items))
+                                    expected=total or len(items),
+                                    branching=bool(_JOB.get("branching")))
     except Exception:
         with _JOB_LOCK:             # 실패하면 자격을 돌려준다 — 다시 누를 수 있어야 한다
             if not _JOB.get("items"):
@@ -1306,6 +1345,9 @@ def compose_job_start(total: int, batch: int = 3, branching: bool = False,
                           "먼저 저장하거나 [받은 것 버리기] 로 비운 뒤에 새로 시작하세요.")
         _JOB.clear()
         _JOB.update({"running": True, "total": total, "batch": batch, "items": kept,
+                     # 분기 요청도 들고 간다 — 저장할 때 '요청했는데 선택지가 없다' 를
+                     # 말하려면 그때까지 이 사실이 남아 있어야 한다.
+                     "branching": bool(branching),
                      "source": str(source or ""), "append": bool(append),
                      # 출연진은 **시작할 때 정한 것**을 끝까지 쓴다. 저장은 몇 분 뒤에
                      # 일어나는데, 그 사이 사람이 매칭을 바꿨다고 해서 이미 받아 둔

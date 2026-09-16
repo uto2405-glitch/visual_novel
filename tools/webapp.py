@@ -288,6 +288,51 @@ def last_viewer_export() -> dict | None:
             "mb": round(size / 1_000_000, 2)}
 
 
+# ---------------------------------------------------------------- 낡은 서버 감지
+#
+# 파이썬은 코드를 **시작할 때** 읽는다. 그래서 스튜디오를 켜 둔 채로 도구를 고치면
+# 화면(JS·HTML 은 요청마다 디스크에서 읽힌다)만 새것이 되고 **서버는 옛 코드로 남는다.**
+# 그 조합에서 새 화면이 부르는 주소가 옛 서버에는 없어서 'not found' 만 뜬다 —
+# 실측으로 그 일이 났다(고유캐릭터 탭에서 [+ 빈 인물] 이 404, 사람은 기능 버그로 읽었다).
+#
+# 고치는 쪽은 사람이 서버를 다시 켜는 것뿐이다. 그러니 **그 사실을 화면이 말해야 한다.**
+CODE_DIR = vn_core.TOOLS
+STARTED_AT = time.time()
+_CODE_STAMP: dict = {"at": 0.0, "newest": 0.0}
+
+
+def _newest_code_mtime() -> float:
+    """tools/ 안에서 가장 최근에 고쳐진 시각. 5초 캐시(상태 조회마다 훑지 않게)."""
+    now = time.monotonic()
+    if _CODE_STAMP["at"] and now - _CODE_STAMP["at"] < 5.0:
+        return _CODE_STAMP["newest"]
+    newest = 0.0
+    try:
+        for f in CODE_DIR.glob("*.py"):
+            try:
+                newest = max(newest, f.stat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        newest = 0.0
+    _CODE_STAMP.update(at=now, newest=newest)
+    return newest
+
+
+def stale_code() -> dict:
+    """이 서버가 지금 디스크에 있는 코드보다 낡았는가.
+
+    낡았다고 해서 **동작을 막지는 않는다.** 대부분의 변경은 옛 서버에서도 아무 문제가
+    없고, 굽던 그림이나 조립을 강제로 끊을 이유가 없다. 말하기만 한다.
+    """
+    newest = _newest_code_mtime()
+    old = bool(newest and newest > STARTED_AT + 1.0)
+    return {"stale": old, "started_at": int(STARTED_AT),
+            "note": ("스튜디오를 켠 뒤에 도구 코드가 바뀌었습니다 — 새 기능은 서버를 "
+                     "다시 켜야 동작합니다(지금 화면은 새것, 서버는 켤 때의 코드입니다)."
+                     if old else "")}
+
+
 def state() -> dict:
     mf = _load_json_safe(MANIFEST) if MANIFEST.exists() else None
     scenes = []
@@ -345,7 +390,10 @@ def state() -> dict:
             # 지금 이 서버가 굽고 있는 장면들. 새로고침하면 벌어지는 것은 브라우저의
             # 폴링이지 작업이 아니다 — 그런데 화면이 조용해지니 사람은 작업도 죽은 줄 알고
             # 다시 누른다(=같은 장면을 한 번 더 굽는다). 메모리 표만 읽으므로 비용은 0 이다.
-            "gen_running": gen_jobs.running()}
+            "gen_running": gen_jobs.running(),
+            # 서버가 켜진 뒤 코드가 바뀌었는가 — 화면이 이걸 보고 사람에게 알린다.
+            # (없으면 '새 화면 + 옛 서버' 조합이 기능 버그처럼 보인다.)
+            "code": stale_code()}
 
 
 _CHAT_COUNT: dict = {"key": None, "n": 0}

@@ -55,6 +55,13 @@ async function api(path, body, signal) {
   if (r.status === 401 && d && d.auth_required) {
     throw new Error("PIN 인증이 필요합니다 — 스튜디오 탭에서 인증한 뒤 돌아오세요.");
   }
+  if (r.status === 404 && path.indexOf("/api/") === 0) {
+    /* 이 주소를 서버가 모른다 = 대개 **서버가 옛 코드로 떠 있다**는 뜻이다.
+     * 화면(JS)은 요청마다 디스크에서 읽히지만 파이썬은 켤 때 읽은 코드로 계속 돈다.
+     * 'not found' 만 띄우면 사람은 기능이 고장 난 줄 안다 — 실제로 그렇게 읽혔다. */
+    throw new Error("서버가 이 기능을 모릅니다(" + path + ") — 스튜디오를 켠 뒤에 "
+                    + "코드가 바뀐 경우입니다. 스튜디오를 다시 켜 주세요.");
+  }
   if (!r.ok) throw new Error((d && d.error) || ("오류 " + r.status));
   return d;
 }
@@ -2068,6 +2075,16 @@ function isTyping() {
   return false;
 }
 
+/* 서버가 낡았으면 **모든 화면 위에** 한 줄로 알린다. 한 번 알리고 마는 것으로는 부족하다 —
+ * 사람은 그 사이 다른 탭을 돌아다니고, 그때마다 '왜 안 되지' 를 다시 만난다. */
+function staleBar() {
+  const c = (S.state && S.state.code) || {};
+  if (!c.stale || !c.note) return null;
+  const b = el("div", "secretbar");
+  b.textContent = c.note;
+  return b;
+}
+
 function renderTalk() {
   /* 시크릿 띠는 renderTalk 안에서 매번 다시 단다 — 탭을 옮기면 화면이 통째로 비워진다. */
   if (S.view !== "talk") return;
@@ -2524,6 +2541,13 @@ function showView(v) {
   else if (v === "gallery") renderGallery();
   else if (v === "cast") renderCastView();
   else renderView();
+  /* 낡은 서버 안내는 **어느 탭에서나** 맨 위에 있어야 한다. 화면을 그리는 쪽이 매번
+   * #stream 을 비우므로, 그린 **뒤에** 다시 얹는다(한 번 알리고 마는 것으로는 부족하다). */
+  const bar = staleBar();
+  if (bar) {
+    const m = stream();
+    if (m) m.insertBefore(bar, m.firstChild);
+  }
 }
 
 /* ---------------------------------------------------------------- 상태 칩 */

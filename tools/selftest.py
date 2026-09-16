@@ -8079,6 +8079,58 @@ def j19(b: Box):
            "%s 결과를 진행 자리에 띄운다 — 내려받기 링크가 폴링에 덮여 사라진다" % who)
 
 
+@test("webapp", "W41 서버가 옛 코드로 떠 있으면 그렇다고 말한다 — 새 화면 + 옛 서버가 기능 버그로 보이지 않게", web=True)
+def w41(b: Box):
+    """파이썬은 코드를 **켤 때** 읽는다. 그런데 화면(JS·HTML)은 요청마다 디스크에서 읽힌다.
+    그래서 스튜디오를 켜 둔 채 도구를 고치면 **화면만 새것이 되고 서버는 옛 코드로 남는다.**
+
+    실측으로 그 일이 났다: 고유캐릭터 탭에서 [+ 빈 인물] 을 눌렀더니 'not found' 가 떴다.
+    코드는 멀쩡했고 서버가 세 시간 전 프로세스였을 뿐이다 — 사람이 보기에는 기능 버그였고,
+    화면 어디에도 '서버를 다시 켜라' 는 말이 없었다.
+
+    고치는 쪽은 사람이 서버를 다시 켜는 것뿐이다. 그러니 **그 사실을 화면이 말해야 한다.**
+    막지는 않는다 — 대부분의 변경은 옛 서버에서도 문제가 없고, 굽던 그림이나 조립을
+    강제로 끊을 이유가 없다.
+    """
+    code, st = b.wapi("/api/state", None)
+    eq(code, 200, "상태를 못 읽는다")
+    info = st.get("code") or {}
+    ok(isinstance(info.get("stale"), bool), "낡음 여부가 참·거짓으로 오지 않는다: %r" % info)
+    eq(info.get("stale"), False, "방금 켠 서버인데 낡았다고 한다")
+    eq(info.get("note"), "", "낡지 않았는데 안내 문구가 있다")
+
+    # **서버가 켜진 뒤** 도구를 고친 상황을 만든다
+    target = b.root / "tools" / "scene_lint.py"
+    keep = target.stat().st_mtime
+    try:
+        future = time.time() + 120          # 시계 오차에 안 걸리게 넉넉히 앞으로
+        os.utime(target, (future, future))
+        # 5초 캐시가 있다 — 그 안에서는 옛 판정이 나온다(그건 옳은 동작이다).
+        got = {}
+        for _ in range(14):
+            time.sleep(0.6)
+            _c, s2 = b.wapi("/api/state", None)
+            got = s2.get("code") or {}
+            if got.get("stale"):
+                break
+        eq(got.get("stale"), True,
+           "서버가 켜진 뒤 코드가 바뀌었는데 모른다 — 새 화면이 부르는 기능이 "
+           "'not found' 로만 보인다")
+        note = str(got.get("note") or "")
+        ok("다시 켜" in note, "무엇을 해야 하는지 말하지 않는다: %r" % note[:80])
+    finally:
+        os.utime(target, (keep, keep))
+
+    # 없는 주소를 부르면 **그 이유가 대개 이것**이라고 말해 준다(화면 쪽)
+    js = (b.root / "tools" / "chat_ui.js").read_text(encoding="utf-8")
+    at = js.find("r.status === 404")
+    ok(at > 0, "화면이 404 를 따로 다루지 않는다")
+    ok("다시 켜" in js[at:at + 600],
+       "404 에 '서버를 다시 켜라' 안내가 없다 — 'not found' 만 보면 기능 버그로 읽는다")
+    ok("function staleBar(" in js and "staleBar()" in js,
+       "낡음 안내를 화면에 띄우는 자리가 없다")
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
