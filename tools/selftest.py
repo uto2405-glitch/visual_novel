@@ -6146,6 +6146,142 @@ def u40(b: Box):
         vc._ETA.update(shown=None, at=0.0, raw=None)
 
 
+@test("unit", "U41 모델을 붙잡고 있는 것을 붙잡는 곳에서 센다 — 경로가 늘어도 빠지지 않게")
+def u41(b: Box):
+    """U39 가 잠근 '줄 서 있을 때의 상한' 에는 구멍이 하나 있었다. 서버가 '지금 바쁘다' 를
+    판단하는 근거가 **서버 조립 작업(_JOB) 하나뿐**이었는데, 스튜디오 첫 화면의
+    [스토리라인 → 장면 구성](동기 ``/api/compose`` → ``compose_scenes``)은 그 작업을
+    거치지 않고 여기서 바로 몇 분을 붙잡는다. 그 경로로 조립하는 동안 대화는 고친 뒤에도
+    예전처럼 120초에 죽었다.
+
+    경로마다 '나 바쁘다' 표시를 붙이는 방법도 있었지만, 그러면 **새 경로가 생길 때마다
+    빠뜨린다**(이번이 정확히 그 사고다). 그래서 소켓을 들고 있는 한 군데(local_llm.chat)
+    에서 센다. 앞으로 어떤 경로가 생겨도 자동으로 포함된다.
+
+    놓는 것도 같이 잠근다 — 실패해서 빠져나가는 길에서 표시가 남으면, 그 뒤 모든 대화가
+    영원히 '줄 서 있음' 으로 판단돼 죽은 서버를 15분씩 기다린다.
+    """
+    web = b.mod("webapp")
+    # **webapp 이 실제로 잡고 있는 그 모듈**을 본다. b.mod("local_llm") 은 box_ 접두사로
+    # 따로 적재되어 전역 표가 둘로 갈라진다 — 그러면 배선을 시험하는 것이 아니라 서로
+    # 모르는 두 사본을 시험하게 된다(실제로 이 검사가 처음에 그렇게 틀렸다).
+    ll = web.local_llm
+
+    eq(ll.holding(), [], "시작부터 누가 붙잡고 있다고 나온다")
+    eq(web.llm_queue_wait().get("busy"), False, "한가한데 바쁘다고 한다")
+
+    k = ll._hold_begin(8192)
+    try:
+        held = ll.holding()
+        eq(len(held), 1, "붙잡고 있는데 목록이 비어 있다")
+        ok(held[0]["elapsed"] >= 0, "경과 시간이 음수다")
+        eq(held[0]["max_tokens"], 8192, "요청 크기가 안 실렸다")
+        eq(web.llm_queue_wait().get("busy"), True,
+           "누가 모델을 붙잡고 있는데 '한가하다' 고 한다 — 뒤에 온 대화가 120초에 죽는다")
+        eq(web._chat_timeout(web.llm_queue_wait()), ll.QUEUE_TIMEOUT,
+           "줄이 있는데 상한을 안 푼다")
+    finally:
+        # 여기서 실패해도 표시를 남기지 않는다 — 남으면 뒤따르는 검사가 오염된다
+        ll._hold_end(k)
+    eq(ll.holding(), [], "놓았는데 표시가 남아 있다")
+
+    # 실패로 빠져나가도 반드시 놓는다 (남으면 이후 모든 대화가 영원히 '줄 서 있음' 이 된다)
+    class _Boom:
+        def __enter__(self):
+            raise OSError("연결 실패")
+
+        def __exit__(self, *a):
+            return False
+
+    real_open, real_validate = ll._OPENER.open, ll._validate
+    try:
+        ll._validate = lambda url: None
+        ll._OPENER.open = lambda req, timeout=None: _Boom()
+        try:
+            ll.chat([{"role": "user", "content": "x"}])
+        except Exception:
+            pass
+    finally:
+        ll._OPENER.open, ll._validate = real_open, real_validate
+    eq(ll.holding(), [],
+       "호출이 실패한 뒤에도 '붙잡고 있음' 이 남았다 — 다음 대화가 전부 줄을 선다")
+
+    # 동기 조립 경로도 같은 통로를 지나는가 (여기가 원래 빠져 있던 자리다)
+    vsrc = b.p("tools/vn_compose.py").read_text(encoding="utf-8")
+    body = vsrc[vsrc.index("def orch_chat("):]
+    body = body[:body.index("\ndef ", 10)]
+    ok("local_llm.chat(" in body,
+       "동기 조립(orch_chat)이 local_llm.chat 을 지나지 않는다 — 붙잡기 계산에서 빠진다")
+    wsrc = b.p("tools/webapp.py").read_text(encoding="utf-8")
+    qw = wsrc[wsrc.index("def llm_queue_wait("):]
+    qw = qw[:qw.index("\ndef ", 10)]
+    ok("local_llm.holding()" in qw,
+       "바쁨 판정이 서버 작업 하나만 본다 — 스튜디오의 동기 조립 중에는 여전히 120초에 죽는다")
+
+
+@test("unit", "U42 닫히지 않은 혼잣말 — 생각하다 잘린 답이 화면에 그대로 뜨지 않는다")
+def u42(b: Box):
+    """'모델의 사고 과정이 화면에 닿지 않는다' 는 규칙에 구멍이 있었다. 거르는 규칙이
+    ``<think>…</think>`` 와 앞이 잘린 ``</think>`` 두 모양만 알고 있어서, **닫는 태그가
+    아예 없는** 경우는 한 글자도 안 걸러졌다.
+
+    이건 드문 일이 아니다. 인물 대화는 ``max_tokens`` 가 320 이라 모델이 생각을 그 안에
+    못 끝내면 답이 ``<think>음 뭐라고 하지…`` 에서 잘린 채로 온다 — 그러면 인물의 첫마디
+    자리에 모델의 혼잣말이 통째로 뜬다.
+
+    그리고 걸러 놓고 **빈 문자열을 조용히 돌려주는 것**도 막는다. 그러면 부르는 쪽이 빈
+    대사를 로그에 저장하고, 사람은 무엇이 잘못됐는지 알 길이 없다.
+    """
+    ll = b.mod("webapp").local_llm      # U41 과 같은 이유 — 사본이 아니라 진짜 배선을 본다
+    cases = [
+        ("<think>abc</think>Hello", "Hello", "닫힌 혼잣말"),
+        ("</think>Hello", "Hello", "앞이 잘린 혼잣말"),
+        ("<think>음 뭐라고 하지 계속 생각중", "", "닫히지 않은 혼잣말"),
+        ("<think>a</think>Hi<think>또 생각", "Hi", "답 뒤에 또 생각이 붙은 경우"),
+        ("Hello", "Hello", "혼잣말 없음"),
+        ("", "", "빈 문자열"),
+    ]
+    for src, want, why in cases:
+        eq(ll.strip_reasoning(src), want, "%s 를 잘못 걸렀다: %r" % (why, src))
+
+    # 비었을 때의 안내가 두 사고를 구분하는가 — 같은 문구면 사람은 서버를 껐다 켠다
+    thinking = ll._no_text_msg("<think>어...")
+    blank = ll._no_text_msg("")
+    ok(thinking != blank, "'생각만 하다 잘림' 과 '빈 응답' 이 같은 문구다")
+    ok("생각" in thinking, "혼잣말 때문이라는 말이 안내에 없다: %r" % thinking)
+
+    # chat() 이 빈 본문을 조용히 돌려주지 않는다
+    class _Resp:
+        def __init__(self, payload):
+            self._p = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(self._p).encode("utf-8")
+
+    payload = {"choices": [{"message": {"content": "<think>생각만 하다 잘림"}}]}
+    real_open, real_validate = ll._OPENER.open, ll._validate
+    try:
+        ll._validate = lambda url: None
+        ll._OPENER.open = lambda req, timeout=None: _Resp(payload)
+        got = None
+        try:
+            got = ll.chat([{"role": "user", "content": "x"}])
+        except Exception as e:
+            got = e
+        ok(not isinstance(got, str),
+           "생각만 담긴 응답에서 %r 를 돌려줬다 — 빈 대사가 로그에 저장된다" % got)
+        ok("생각" in str(got), "무엇 때문에 비었는지 말하지 않는다: %r" % str(got)[:80])
+    finally:
+        ll._OPENER.open, ll._validate = real_open, real_validate
+    eq(ll.holding(), [], "이 경로에서도 '붙잡고 있음' 이 남았다")
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.

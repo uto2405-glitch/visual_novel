@@ -35,6 +35,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -58,6 +60,7 @@ TALK_WINDOW = 16   # 서버가 모델에 넘기는 최근 대화 수 — 창 밖
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
 # 사고 과정 태그 — 답이 아니라 모델이 혼잣말한 흔적이다.
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S)
+_THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
 
 
@@ -71,6 +74,12 @@ def strip_reasoning(text: str) -> str:
 Hello! How can I help'`` 를 받았다. 그대로 두면 인물의 첫마디가
     ``</think>`` 로 시작하고, 장면 JSON 앞에는 혼잣말이 붙는다.
 
+    **닫는 태그가 아예 없는 경우도 있다.** 인물 대화는 max_tokens 가 320 이라, 모델이
+    생각을 그 안에 못 끝내면 답이 ``<think>음 뭐라고 하지…`` 에서 잘린 채로 온다. 예전에는
+    그 경우 한 글자도 안 걸러져서 혼잣말이 통째로 화면에 떴다 — 정확히 '사고 과정이
+    화면에 닿지 않는다' 가 지키려던 것이 무너지는 자리다. 여는 태그 뒤는 전부 혼잣말이므로
+    거기서 자른다(보통 앞이 비어 있어 결과가 빈 문자열이 되고, 부르는 쪽이 그걸로 판단한다).
+
     거르는 자리를 여기로 정한 이유: 네 기능(스토리 챗·장면 구성·이미지 프롬프트·인물 대화)이
     모두 :func:`chat` 하나를 지난다. 화면마다 따로 지우면 새로 붙는 화면이 반드시 빠뜨리고,
     프롬프트를 만드는 층(prompt_build·vn_compose)에 두면 '무엇을 시킬까' 와 '무엇을 받았나' 가
@@ -81,7 +90,28 @@ Hello! How can I help'`` 를 받았다. 그대로 두면 인물의 첫마디가
     i = out.find(_THINK_CLOSE)          # 여는 태그가 프롬프트 쪽에 있던 경우
     if i >= 0:
         out = out[i + len(_THINK_CLOSE):]
+    j = out.find(_THINK_OPEN)           # 닫히지 않은 혼잣말 — 여기부터 끝까지 전부 그것이다
+    if j >= 0:
+        out = out[:j]
     return out.strip()
+
+
+def _only_thinking(raw: str) -> bool:
+    """걸러낸 뒤 아무것도 안 남았는데, 원문에는 혼잣말 흔적이 있었나."""
+    s = str(raw or "")
+    return _THINK_OPEN in s or _THINK_CLOSE in s
+
+
+def _no_text_msg(raw: str) -> str:
+    """본문이 비었을 때의 안내 — '생각만 하다 잘렸다' 와 '빈 응답' 은 다른 사고다.
+
+    같은 문구로 덮으면 사람은 서버를 껐다 켜며 시간을 버린다. 실제로는 한 번 더 보내면
+    되는 경우가 대부분이라, 그 말을 해 준다.
+    """
+    if _only_thinking(raw):
+        return ("모델이 생각만 하다가 길이 제한에 걸려 답을 못 냈습니다 — 혼잣말은 화면에 "
+                "싣지 않습니다. 같은 말을 한 번 더 보내거나 조금 더 짧게 물어보세요.")
+    return "로컬 LLM 응답에 텍스트가 없습니다."
 
 
 def serve_script() -> Path:
@@ -414,6 +444,48 @@ def _read_stream(resp, on_token) -> str:
     return "".join(parts).strip()
 
 
+# ---------------------------------------------------------------- 지금 모델을 붙잡고 있는가
+#
+# llama-server 는 --parallel 1 로 돌고, 줄 선 요청에는 **응답 헤더조차 주지 않는다.**
+# 그래서 뒤에 선 호출은 앞 호출이 끝날 때까지 통째로 기다리고, 평소의 120초 상한이
+# '조각 사이의 침묵' 이 아니라 '큐 대기' 에 그대로 걸려 죽는다.
+#
+# 누가 붙잡고 있는지를 아는 가장 확실한 자리는 **소켓을 들고 있는 이 함수** 다.
+# 예전에는 webapp 이 "서버 조립 작업이 도는가"(vn_compose 의 _JOB) 하나만 봤는데,
+# 스튜디오의 [스토리라인 → 장면 구성] 은 그 작업을 안 거치고 여기서 바로 몇 분을
+# 붙잡는다 — 그 경로로 조립하는 동안 대화는 여전히 120초에 죽었다. 경로마다 표시를
+# 붙이는 대신 붙잡는 곳 한 군데서 센다. 새 경로가 생겨도 자동으로 포함된다.
+_HOLD: dict = {}
+_HOLD_LOCK = threading.Lock()
+_HOLD_SEQ = [0]
+
+
+def _hold_begin(max_tokens: int) -> int:
+    with _HOLD_LOCK:
+        _HOLD_SEQ[0] += 1
+        key = _HOLD_SEQ[0]
+        _HOLD[key] = {"at": time.time(), "max_tokens": int(max_tokens or 0)}
+        return key
+
+
+def _hold_end(key: int) -> None:
+    with _HOLD_LOCK:
+        _HOLD.pop(key, None)
+
+
+def holding() -> list:
+    """**이 프로세스가 지금 모델을 붙잡고 있는 호출들** → [{elapsed, max_tokens}].
+
+    부르는 쪽이 자기 호출을 시작하기 **전에** 물으므로, 여기 담기는 것은 언제나 남의
+    호출이다(=내 앞에 줄이 있는가). 메모리 표만 읽어 비용은 0 이다.
+    """
+    now = time.time()
+    with _HOLD_LOCK:
+        return [{"elapsed": max(0.0, now - float(v.get("at") or now)),
+                 "max_tokens": int(v.get("max_tokens") or 0)}
+                for v in _HOLD.values()]
+
+
 def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
          on_token=None, timeout: float | None = None) -> str:
     """대화 메시지 → 응답 텍스트. 실패는 RuntimeError(사유 포함).
@@ -424,6 +496,9 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
 
     timeout 을 주면 그 값을 쓴다(기본 :data:`TIMEOUT`). 앞에 긴 작업이 줄 서 있는 것을
     아는 호출부가 :data:`QUEUE_TIMEOUT` 을 넘긴다 — 그 사정을 모르는 기본값은 그대로 둔다.
+
+    이 호출이 모델을 붙잡고 있는 동안 :func:`holding` 에 남는다. 뒤에 오는 요청이
+    "내 앞에 줄이 있는가" 를 그것으로 판단한다(:mod:`webapp` 의 ``llm_queue_wait``).
     """
     url = base_url()
     _validate(url)
@@ -435,33 +510,43 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
         headers["Accept"] = "text/event-stream"
     req = urllib.request.Request(url + "/chat/completions", data=body,
                                  headers=headers, method="POST")
+    hold = _hold_begin(max_tokens)
     try:
-        with _OPENER.open(req, timeout=float(timeout or TIMEOUT)) as r:
-            if stream:
-                # 조각은 그대로 흘려 보내고(콜백은 실시간 표시용) **반환값만** 정리한다 —
-                # 저장·파싱되는 것은 반환값이다.
-                content = strip_reasoning(_read_stream(r, on_token))
-                if not content:
-                    raise VNError("로컬 LLM 응답에 텍스트가 없습니다.")
-                return content
-            raw = r.read()
-    except urllib.error.HTTPError as e:
-        # 401/403 은 '서버가 이상하다' 가 아니라 '키가 다르다' 다 — 두 문장을 섞으면
-        # 사용자는 멀쩡히 떠 있는 서버를 껐다 켜며 시간을 버린다.
-        if e.code in (401, 403):
-            raise VNError(_auth_error(url, e.code))
-        raise VNError(f"로컬 LLM HTTP {e.code}({url}) — 서버/모델 상태를 확인하세요.")
-    except urllib.error.URLError as e:
-        raise VNError(f"로컬 LLM({url}) 에 연결할 수 없습니다. {serve_hint()}"
-                      f" (원인: {_short_reason(e.reason)})")
-    try:
-        data = json.loads(raw.decode("utf-8"))
-        content = data["choices"][0]["message"]["content"]
-    except (ValueError, KeyError, IndexError, TypeError, UnicodeDecodeError):
-        raise VNError("로컬 LLM 응답 형식이 예상과 다릅니다.")
-    if not isinstance(content, str):
-        raise VNError("로컬 LLM 응답에 텍스트가 없습니다.")
-    return strip_reasoning(content)
+        try:
+            with _OPENER.open(req, timeout=float(timeout or TIMEOUT)) as r:
+                if stream:
+                    # 조각은 그대로 흘려 보내고(콜백은 실시간 표시용) **반환값만** 정리한다 —
+                    # 저장·파싱되는 것은 반환값이다.
+                    got = _read_stream(r, on_token)
+                    content = strip_reasoning(got)
+                    if not content:
+                        raise VNError(_no_text_msg(got))
+                    return content
+                raw = r.read()
+        except urllib.error.HTTPError as e:
+            # 401/403 은 '서버가 이상하다' 가 아니라 '키가 다르다' 다 — 두 문장을 섞으면
+            # 사용자는 멀쩡히 떠 있는 서버를 껐다 켜며 시간을 버린다.
+            if e.code in (401, 403):
+                raise VNError(_auth_error(url, e.code))
+            raise VNError(f"로컬 LLM HTTP {e.code}({url}) — 서버/모델 상태를 확인하세요.")
+        except urllib.error.URLError as e:
+            raise VNError(f"로컬 LLM({url}) 에 연결할 수 없습니다. {serve_hint()}"
+                          f" (원인: {_short_reason(e.reason)})")
+        try:
+            data = json.loads(raw.decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError, UnicodeDecodeError):
+            raise VNError("로컬 LLM 응답 형식이 예상과 다릅니다.")
+        if not isinstance(content, str):
+            raise VNError("로컬 LLM 응답에 텍스트가 없습니다.")
+        clean = strip_reasoning(content)
+        if not clean:
+            # 걸러 놓고 빈 문자열을 돌려주면 부르는 쪽이 빈 대사를 저장한다.
+            # 무엇 때문에 비었는지(혼잣말인지 빈 응답인지)를 말하고 멈춘다.
+            raise VNError(_no_text_msg(content))
+        return clean
+    finally:
+        _hold_end(hold)
 
 
 def main() -> int:

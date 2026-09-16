@@ -379,11 +379,23 @@ def llm_queue_wait() -> dict:
     푸는 판단도 여기서 한다 — local_llm 의 기본값은 손대지 않는다(그걸 키우면 진짜로
     꺼진 서버를 알아차리는 데도 15분이 걸린다).
     """
+    # 두 가지를 본다.
+    #  (1) 서버 조립 작업(_JOB) — 남은 시간까지 알려 줄 수 있는 유일한 것이다.
+    #  (2) **지금 소켓을 들고 있는 호출이 있는가**(local_llm.holding).
+    #      이게 없으면 스튜디오의 [스토리라인 → 장면 구성](동기 /api/compose)이
+    #      몇 분을 붙잡고 있어도 여기서는 "한가하다" 고 대답하고, 그 동안 대화는
+    #      예전처럼 120초에 죽는다. 경로마다 표시를 붙이는 대신 붙잡는 곳에서 센다 —
+    #      새 경로가 생겨도 자동으로 포함된다.
     try:
         st = vn_compose.compose_job_status()
     except Exception:                      # 상태를 못 읽는 것이 대화를 막을 이유는 없다
-        return {"busy": False, "eta": None}
-    return {"busy": bool(st.get("running")), "eta": st.get("eta")}
+        st = {}
+    try:
+        held = local_llm.holding()
+    except Exception:
+        held = []
+    return {"busy": bool(st.get("running")) or bool(held),
+            "eta": st.get("eta") if st.get("running") else None}
 
 
 def _chat_timeout(wait: dict):
