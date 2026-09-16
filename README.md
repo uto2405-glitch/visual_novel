@@ -24,6 +24,10 @@
 
 ## 시작하기
 
+> **두 기계를 꺼다 켜고 다시 켜려면** → [docs/START_HERE.md](docs/START_HERE.md)
+> (노트북 원클릭 · 그림 PC 깨우기 · 주소가 바뀜을 때 · 안 될 때의 순서)
+
+
 ```powershell
 # 0) 환경 점검 (읽기 전용, 30초) — 이미지를 만들 거면 ComfyUI(기본 http://127.0.0.1:8188)를 먼저 켜 둔다
 python tools/doctor.py
