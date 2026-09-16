@@ -46,6 +46,13 @@ from vn_core import VNError  # noqa: E402
 
 DEFAULT_URL = "http://127.0.0.1:8080/v1"
 TIMEOUT = 120
+# 줄이 있을 때 쓰는 상한. llama-server 는 --parallel 1 이면 줄 선 요청에
+# **응답 헤더조차 주지 않는다** — 슬롯이 풀려야 그때 200 이 온다. 그래서
+# 위의 120초는 '조각 사이의 침묵' 뿐 아니라 '큰 대기'에도 그대로 걸린다.
+# 실측(씀크북): 조립이 도는 동안 보낌 대화는 정확히 120.0초에 죽었다(조립은 275초 걸렸다).
+# 앞에 무엇이 도는지 **아는 곳**(webapp)만 이 값을 넘긴다 — 기본값을 키우면
+# 진짜로 죽은 서버를 알아차리는 데도 그만큼 걸린다.
+QUEUE_TIMEOUT = 900
 TALK_WINDOW = 16   # 서버가 모델에 넘기는 최근 대화 수 — 창 밖 맥락은 prompt_build.memory_digest 가 잇는다
 # 이름으로 허용하는 것은 루프백 별칭뿐. 그 외 호스트명은 DNS 가 어디로든 향할 수 있어 거부한다.
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
@@ -408,12 +415,15 @@ def _read_stream(resp, on_token) -> str:
 
 
 def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
-         on_token=None) -> str:
+         on_token=None, timeout: float | None = None) -> str:
     """대화 메시지 → 응답 텍스트. 실패는 RuntimeError(사유 포함).
 
     on_token 을 주면 SSE 스트리밍으로 받아 조각(str)마다 그 콜백을 부른다. 반환값은
     두 방식 모두 **완성된 전문**이라 호출부를 바꾸지 않고도 붙일 수 있다.
     콜백이 없으면 요청 본문의 stream 까지 예전 그대로다(하위호환).
+
+    timeout 을 주면 그 값을 쓴다(기본 :data:`TIMEOUT`). 앞에 긴 작업이 줄 서 있는 것을
+    아는 호출부가 :data:`QUEUE_TIMEOUT` 을 넘긴다 — 그 사정을 모르는 기본값은 그대로 둔다.
     """
     url = base_url()
     _validate(url)
@@ -426,7 +436,7 @@ def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 320,
     req = urllib.request.Request(url + "/chat/completions", data=body,
                                  headers=headers, method="POST")
     try:
-        with _OPENER.open(req, timeout=TIMEOUT) as r:
+        with _OPENER.open(req, timeout=float(timeout or TIMEOUT)) as r:
             if stream:
                 # 조각은 그대로 흘려 보내고(콜백은 실시간 표시용) **반환값만** 정리한다 —
                 # 저장·파싱되는 것은 반환값이다.

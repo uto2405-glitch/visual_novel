@@ -526,7 +526,7 @@ def _orch_local() -> bool:
 
 
 def orch_chat(messages: list, temperature: float = 0.6, max_tokens: int = 8192,
-              on_token=None) -> str:
+              on_token=None, timeout: float | None = None) -> str:
     """장면 구성용 LLM 호출 — 오케스트레이터는 로컬 LLM 하나뿐이다.
 
     예전에는 mode 가 local 이 아니면 외부 API 클라이언트로 넘어갔다. 그 경로는 은퇴했으므로
@@ -547,7 +547,8 @@ def orch_chat(messages: list, temperature: float = 0.6, max_tokens: int = 8192,
                       '원격 API 경로는 더 이상 없습니다 — mode 를 "local" 로 두거나 '
                       '직접 입력(붙여넣기) 경로를 쓰세요.')
     return local_llm.chat(messages, temperature=temperature, max_tokens=max_tokens,
-                          on_token=on_token or (lambda _piece: None))
+                          on_token=on_token or (lambda _piece: None),
+                          timeout=timeout)
 
 
 def _scene_count(items) -> int:
@@ -718,6 +719,27 @@ def _job_snapshot() -> dict:
         return dict(_JOB)
 
 
+def _compose_eta(job: dict):
+    """조립이 끝나기까지 남은 초(어림잡음). 알 수 없으면 None.
+
+    지금까지 한 장면당 걸린 시간으로 남은 장면을 곱한다. 정확할 필요는 없고,
+    사람이 "다른 걸 하고 올까, 기다릴까" 를 정할 수 있을 정도면 된다.
+    """
+    if not job.get("running"):
+        return None
+    started = float(job.get("started_at") or 0)
+    total = int(job.get("total") or 0)
+    done = len(job.get("items") or [])
+    if not started or total <= 0:
+        return None
+    elapsed = max(0.0, time.time() - started)
+    if done <= 0:
+        # 아직 한 장면도 안 나왔다 — 실측치(장면당 약 30초)로 잡는다.
+        return int(max(0, total * 30 - elapsed))
+    per = elapsed / done
+    return int(max(0, per * (total - done)))
+
+
 def compose_job_status() -> dict:
     """조립 진행 → {running, total, batch, done, scenes, message, error, raw, finished_at}.
 
@@ -740,6 +762,9 @@ def compose_job_status() -> dict:
         "failed_to": job.get("failed_to"),
         "finished_at": job.get("finished_at"),
         "cancelled": bool(job.get("cancelled")),
+        # 남은 시간 어림잡음 — 이 서버가 LLM 을 잡고 있는 동안 대화는 줄을 선다.
+        # 그 사실을 화면이 말하려면 숫자가 필요하다("잠시만" 은 5분을 설명하지 못한다).
+        "eta": _compose_eta(job),
     }
 
 

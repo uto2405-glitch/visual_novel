@@ -260,13 +260,43 @@ async function trimAndAsk(idx, newUserText) {
 }
 
 /* 마지막 발화까지를 서버에 보내 답을 받는다 — send/수정/다시생성이 모두 이걸 통한다. */
+/* 기다리는 동안 무슨 일이 벌어지고 있는지 한 줄로 말한다.
+ *
+ * 왜 필요한가(씽크북 실측): 노트북의 llama-server 는 --parallel 1 이라 조립이 도는 동안
+ * 대화는 통째로 줄을 선다. 조립 275초 · 대화 단독 27초인데, 조립 중에 보낸 대화는 첫
+ * 글자가 262초 뒤에 왔다. 그동안 화면에는 "생각하는 중…" 한 줄뿐이었다 — 사람은 고장 난
+ * 줄 알고 새로고침하거나 같은 말을 한 번 더 보낸다.
+ *
+ * 조립을 서버 작업으로 내려 '탭을 닫아도 계속 돈다' 가 된 뒤로 이 상황은 더 흔해졌다.
+ * 그러니 기다림 자체를 없앨 수는 없어도, **무엇을 기다리는지와 얼마나 남았는지**는
+ * 말할 수 있다. 그 둘이 있으면 기다림은 견딜 만해진다(다른 탭을 보고 오면 된다). */
+async function waitLine() {
+  let st = null;
+  try { st = await api("/api/compose-job-status", {}); } catch (e) { st = null; }
+  if (st && st.running) {
+    const left = Number(st.eta || 0);
+    return "조립이 모델을 잡고 있어 답이 그 뒤에 옵니다"
+           + (left ? (" — 약 " + fmtSecs(left) + " 남았습니다") : "")
+           + ". 다른 탭을 보고 오셔도 됩니다.";
+  }
+  return "생각하는 중… (이 모델은 초당 12~14자 정도라 긴 답은 1~2분 걸립니다)";
+}
+
 async function askServer() {
   /* 답을 기다리는 1~2분 사이에 사람이 다른 대화로 넘어갈 수 있다. 서버는 요청에 실린
    * chat_id 로 올바른 파일에 저장하지만, 화면이 그걸 지금 열린 대화에 붙이면 남의 대화에
    * 남의 답이 섞이고 다음 한 마디에 그대로 저장된다. 떠날 때를 기억해 두고 확인한다. */
   const askedIn = S.chatId;
   const askedList = S.msgs;
-  const wait = addNote("생각하는 중… (이 모델은 초당 12~14자 정도라 긴 답은 1~2분 걸립니다)");
+  const wait = addNote("생각하는 중…");
+  const line = wait.firstChild;
+  const tick = async () => {
+    if (!line || !line.parentNode) return;       // 이미 치운 뒤면 아무 일도 하지 않는다
+    const t = await waitLine();
+    if (line.parentNode) line.textContent = t;
+  };
+  tick();
+  const ticker = setInterval(tick, 10000);
   showStop(true);
   S.abort = new AbortController();
   try {
@@ -287,17 +317,19 @@ async function askServer() {
   } catch (e) {
     wait.remove();
     if (e && e.name === "AbortError") {
-      addNote("기다리기를 멈췤습니다. 서버는 답을 마저 만들고 있을 수 있고, 완성되면 기록에 남습니다. "
+      addNote("기다리기를 멈췄습니다. 서버는 답을 마저 만들고 있을 수 있고, 완성되면 기록에 남습니다. "
               + "새로고침하면 보입니다.");
     } else {
       addNote(String(e.message || e), true);
     }
   } finally {
+    clearInterval(ticker);
     S.abort = null;
     showStop(false);
     setBusy(false);
   }
 }
+
 
 function addNote(text, bad) {
   const wrap = el("div", "turn");

@@ -367,6 +367,30 @@ def chat_count() -> int:
     return int(_CHAT_COUNT["n"])
 
 
+def llm_queue_wait() -> dict:
+    """지금 모델 앞에 줄이 서 있는가 → {"busy": bool, "eta": 초|None}.
+
+    씀크북의 llama-server 는 --parallel 1 로 돌고, 그 뜻은 조립이 도는 동안 대화는
+    **통째로 줄을 선다**는 것이다. 더 나쁜 것은 그 서버가 줄 선 요청에 응답 헤더조차
+    주지 않는다는 점이다 — 그래서 평소의 120초 상한이 그대로 걸려 정확히 120.0초에
+    죽는다(씀크북 실측: 조립 275초 동안 걸은 대화가 전부 실패).
+
+    앞에 무엇이 도는지를 아는 곳은 이 서버다(조립을 여기서 돌리므로). 그러니 상한을
+    푸는 판단도 여기서 한다 — local_llm 의 기본값은 손대지 않는다(그걸 키우면 진짜로
+    꺼진 서버를 알아차리는 데도 15분이 걸린다).
+    """
+    try:
+        st = vn_compose.compose_job_status()
+    except Exception:                      # 상태를 못 읽는 것이 대화를 막을 이유는 없다
+        return {"busy": False, "eta": None}
+    return {"busy": bool(st.get("running")), "eta": st.get("eta")}
+
+
+def _chat_timeout(wait: dict):
+    """줄이 서 있으면 긴 상한, 아니면 None(=기본값)."""
+    return local_llm.QUEUE_TIMEOUT if wait.get("busy") else None
+
+
 def do_chat(messages: list[dict], chat_id: str = "") -> str:
     """스토리 챗 1턴 — 프롬프트 조립은 prompt_build, 모델 선택은 vn_compose 담당.
 
@@ -384,7 +408,8 @@ def do_chat(messages: list[dict], chat_id: str = "") -> str:
     # 매번 보내면 기기마다 다른 값이 오가고, 어느 쪽이 맞는지 알 수 없게 된다.
     sys_msg = prompt_build.story_system_message(talk_store.chat_use_context(chat_id))
     window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
-    reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000)
+    reply = vn_compose.orch_chat([sys_msg] + window, temperature=0.7, max_tokens=1000,
+                                 timeout=_chat_timeout(llm_queue_wait()))
     with WRITE_LOCK:
         # 인물 대화와 같은 규칙: 클라이언트가 보낸 목록으로 덮어쓰지 않고 저장본과 병합한다.
         # (/api/state 가 더 이상 챗로그를 싣지 않으므로, 병합이 없으면 새 탭에서 보낸
@@ -994,7 +1019,8 @@ def r_talk(b):
     # 모델에 넘기는 창의 크기는 local_llm 이 정한다(기억 요약이 덮는 창과 같아야 한다).
     window = [{"role": m["role"], "content": m["content"]}
               for m in context[-local_llm.TALK_WINDOW:]]
-    reply = local_llm.chat([{"role": "system", "content": sysmsg}] + window)
+    reply = local_llm.chat([{"role": "system", "content": sysmsg}] + window,
+                           timeout=_chat_timeout(llm_queue_wait()))
 
     last_user = next((m["content"] for m in reversed(context) if m["role"] == "user"), "")
     clean, photo_meta = prompt_build.resolve_photos(reply, meta.get("album", {}), last_user)

@@ -5825,6 +5825,79 @@ def u38(b: Box):
                  + ", ".join(hits[:8]))
 
 
+@test("unit", "U39 줄 서 있을 때의 상한 — 조립이 도는 동안 대화가 120초에 죽지 않는다")
+def u39(b: Box):
+    """씽크북 실측이 찾아낸 것이다. llama-server 는 ``--parallel 1`` 이라 조립이 도는 동안
+    대화는 통째로 줄을 서는데, **줄 선 요청에는 응답 헤더조차 주지 않는다** — 슬롯이 풀려야
+    그때 200 이 온다. 그래서 평소의 120초 상한이 '조각 사이의 침묵'이 아니라 '큐 대기'에
+    그대로 걸린다.
+
+      대화 단독:      첫 글자 22.5초 / 완료 27.1초
+      조립 중 대화:   첫 글자 262.6초 (조립이 끝난 직후) — 벌점 +240초
+      조립 275초 동안 timeout=120 으로 보낸 대화는 정확히 120.0초에 TimeoutError.
+
+    스트리밍으로 고칠 수 있는 문제가 아니다(조립 자신은 구하지만 뒤에 선 대화는 못 구한다).
+    조립을 서버 작업으로 내려 '탭을 닫아도 계속 돈다' 가 된 뒤로 사람이 그 시간에 대화를
+    시도할 확률은 오히려 올라갔다.
+
+    고치는 방향: **기본값은 그대로 두고**(그걸 키우면 진짜로 꺼진 서버를 알아차리는 데도
+    15분이 걸린다), 앞에 무엇이 도는지 아는 곳 — 조립을 직접 돌리는 이 서버 — 만 상한을 푼다.
+    """
+    ll = b.mod("local_llm")
+    eq(ll.TIMEOUT, 120, "기본 상한이 바뀌었다 — 꺼진 서버를 알아차리는 시간이 같이 늘어난다")
+    ok(ll.QUEUE_TIMEOUT > ll.TIMEOUT * 2,
+       "큐 대기용 상한이 기본값과 비슷하다(%s) — 5~6분짜리 조립을 못 넘긴다" % ll.QUEUE_TIMEOUT)
+
+    # timeout 인자가 **실제로 소켓까지** 내려가는가 (서명만 있고 안 쓰면 아무 효과가 없다)
+    seen = {}
+
+    class _Fake:
+        def __enter__(self):
+            raise ll.VNError("여기까지면 충분하다")
+
+        def __exit__(self, *a):
+            return False
+
+    real_open = ll._OPENER.open
+    real_validate = ll._validate
+    try:
+        ll._validate = lambda url: None
+        ll._OPENER.open = lambda req, timeout=None: seen.update(timeout=timeout) or _Fake()
+        for kw, want in (({}, ll.TIMEOUT), ({"timeout": ll.QUEUE_TIMEOUT}, ll.QUEUE_TIMEOUT)):
+            seen.clear()
+            try:
+                ll.chat([{"role": "user", "content": "x"}], **kw)
+            except Exception:
+                pass
+            eq(seen.get("timeout"), float(want),
+               "timeout=%r 를 줬는데 소켓에는 %r 가 갔다" % (kw.get("timeout"), seen.get("timeout")))
+    finally:
+        ll._OPENER.open = real_open
+        ll._validate = real_validate
+
+    # 서버가 '줄이 있는가' 를 판단하고, 그 판단만 상한을 푼다
+    web = b.mod("webapp")
+    eq(web._chat_timeout({"busy": True}), ll.QUEUE_TIMEOUT, "줄이 서 있는데 상한을 안 푼다")
+    eq(web._chat_timeout({"busy": False}), None, "한가한데도 상한을 풀었다 — 꺼진 서버를 늦게 안다")
+    eq(web._chat_timeout({}), None, "상태를 모를 때 기본값으로 떨어지지 않는다")
+
+    # 두 대화 경로가 **둘 다** 그 값을 쓴다 (하나만 고치면 다른 쪽이 계속 죽는다)
+    src = b.p("tools/webapp.py").read_text(encoding="utf-8")
+    for fn, what in (("def do_chat(", "스토리 대화"), ("def r_talk(", "인물 대화")):
+        body = src[src.index(fn):]
+        body = body[:body.index("\ndef ", 10)]
+        ok("_chat_timeout(" in body, "%s 경로가 큐 상한을 쓰지 않는다 — 조립 중에 120초로 죽는다" % what)
+
+    # 남은 시간 어림 — 화면이 "약 N분" 이라고 말할 수 있어야 기다림이 견딜 만해진다
+    vc = b.mod("vn_compose")
+    eq(vc._compose_eta({"running": False}), None, "안 도는 작업에 남은 시간이 나온다")
+    eq(vc._compose_eta({"running": True, "total": 0}), None, "총 개수를 모르는데 숫자를 지어낸다")
+    now = __import__("time").time()
+    got = vc._compose_eta({"running": True, "total": 10, "started_at": now - 100,
+                           "items": [{}, {}, {}, {}, {}]})   # 5개에 100초 → 남은 5개에 100초
+    ok(got is not None and 80 <= got <= 120, "남은 시간 어림이 이상하다: %r (기대 ~100)" % got)
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
@@ -8674,8 +8747,8 @@ def u28(b: Box):
     vc = b.mod("vn_compose")
     seen: dict = {}
 
-    def fake_chat(messages, temperature=0.8, max_tokens=320, on_token=None):
-        seen.update(on_token=on_token, max_tokens=max_tokens)
+    def fake_chat(messages, temperature=0.8, max_tokens=320, on_token=None, timeout=None):
+        seen.update(on_token=on_token, max_tokens=max_tokens, timeout=timeout)
         return "[]"
 
     real = vc.local_llm.chat
@@ -8687,6 +8760,8 @@ def u28(b: Box):
     ok(callable(seen.get("on_token")),
        "orch_chat 이 on_token 없이 부른다 — 비스트리밍이면 120초가 생성 시간 전체의 상한이 된다")
     eq(seen.get("max_tokens"), 8192, "장면 구성의 출력 상한")
+    # 조립 자신은 줄을 서지 않는다(그게 줄을 세우는 쪽이다) — 기본 상한 그대로 간다.
+    eq(seen.get("timeout"), None, "조립이 큰 상한을 쓴다 — 앞에 줄이 없는 쪽이다")
 
 
 # ============================================================ 러너
