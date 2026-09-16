@@ -479,7 +479,13 @@ def do_chat(messages: list[dict], chat_id: str = "") -> str:
     # 이 갈래가 작품 문맥을 쓰는지는 서버에 저장된 값이 단일 출처다 — 클라이언트가
     # 매번 보내면 기기마다 다른 값이 오가고, 어느 쪽이 맞는지 알 수 없게 된다.
     sys_msg = prompt_build.story_system_message(talk_store.chat_use_context(chat_id))
-    window = messages[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
+    # **모델에 넘기는 창도 서버 기록을 정본으로 삼는다.** 저장은 이미 병합해서 하고 있었는데
+    # (아래 merge_messages) 전송만 클라이언트가 보낸 목록에서 잘랐다. 그 둘이 다른 출처를
+    # 보면 이런 일이 난다: /api/chat-history 가 한 번 실패해 화면이 빈 목록이 되면, 그 뒤
+    # 한 마디에 모델이 **진행 중이던 소설을 전혀 모르는 채** 답한다. 답 자체는 병합 덕에
+    # 로그에 제대로 붙으므로, 남는 것은 "모델이 갑자기 이야기를 잊은" 한 턴이다.
+    context = talk_store.merge_messages(talk_store.load_log(path), messages)
+    window = context[-CHAT_WINDOW:]  # 비용·컨텍스트 관리: 최근 대화만 전송
     before = _log_mark(path)
     # '고유캐릭터 생성하기' 는 대화가 아니라 **동작**이다. 평소 답변 경로로 보내면 모델은
     # 인물을 만드는 대신 인물을 만들자고 맞장구를 친다(그리고 아무것도 남지 않는다).
@@ -1681,6 +1687,13 @@ def r_talk(b):
     sysmsg, meta = prompt_build.persona_prompt(b.get("character_id"))
     cid = str(meta["character_id"])
     reset = bool(b.get("reset"))
+    if reset:
+        # **비우기 전에 보관한다.** 예전에는 reset 이 저장본을 그냥 덮어써서, [처음부터] 뒤
+        # 한 마디만 보내면 그때까지의 인물 대화가 보관본도 없이 사라졌다 —
+        # 이 저장소의 하드 룰("대화 로그는 조용히 짧아지지 않는다")을 어기는 유일한 경로였다.
+        moved = talk_store.reset_messages(cid)
+        if moved.get("archived"):
+            log.info("인물 대화 %s 를 보관하고 비웠습니다(%d턴)", cid, moved["archived"])
     # 모델에 넘길 창은 병합 이력 기준 — 빈 화면에서 시작해도 대화가 이어진다.
     context = (list(incoming) if reset
                else talk_store.merge_messages(talk_store.load_messages(cid), incoming))

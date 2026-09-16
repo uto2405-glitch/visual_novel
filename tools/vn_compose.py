@@ -751,16 +751,33 @@ class _SceneStream:
     95~118초인데 그 사이 화면에는 아무것도 없었다. 장면 1개는 약 30초이므로, 경계를 잡으면
     첫 보상이 30초로 당겨진다 — 기다림이 불안에서 기대로 바뀌는 지점이 거기다.
 
-    방법은 단순하다. 중괄호 깊이를 세다가 최상위 객체가 닫히면 그 조각만 파싱해 본다.
-    문자열 안의 괄호와 이스케이프를 건너뛰므로 대사에 '{' 가 들어 있어도 어긋나지 않는다.
-    실패하면 그냥 넘긴다 — 최종 파싱은 _extract_json_array 가 전문을 놓고 다시 한다.
+    방법은 단순하다. 여는 괄호를 쌓아 두다가 **장면일 법한 객체**가 닫히면 그 조각만
+    파싱해 본다. 문자열 안의 괄호와 이스케이프를 건너뛰므로 대사에 '{' 가 들어 있어도
+    어긋나지 않는다. 실패하면 그냥 넘긴다 — 최종 파싱은 _extract_json_array 가 전문을
+    놓고 다시 한다.
+
+    '장면일 법한 객체' 가 두 자리인 이유: 모델이 두 가지 모양으로 답한다.
+
+        [{"order":1,…}, {"order":2,…}]          ← 맨 바깥이 배열
+        {"scenes":[{"order":1,…}, …]}           ← 한 겹 포장돼 있다
+
+    예전에는 **최상위 객체가 닫히는 순간**만 봤다. 포장된 모양에서는 최상위 객체가
+    응답 전체 하나라서 배치가 다 올 때까지 경계가 한 번도 안 잡혔다 — 실측에서 7회 중
+    2회가 이 모양이었고, 그 회차는 2분 가까이 화면이 조용했고 [현상 멈추기]도 안 먹었다
+    (멈춤은 장면이 도착하는 시점에만 일어난다). 같은 작업인데 그날 모델이 고른 모양에
+    따라 화면이 달랐던 것이다.
+
+    그래서 **닫히는 객체를 일단 다 시도한다.** 구조만으로는 포장 안의 장면과 장면 안의
+    대사 원소를 가를 수 없다 — 둘 다 '객체 하나 안의 배열 원소' 로 보인다. 가르는 일은
+    :func:`_looks_like_scene` 한 곳이 한다(장면 열쇠 두 개 이상). 판정이 두 곳에 있으면
+    반드시 갈라지고, 그때 대사 한 줄이 장면 한 컷으로 집계된다.
     """
 
     def __init__(self, on_scene):
         self.on_scene = on_scene
         self.buf: list[str] = []
-        self.depth = 0
-        self.start = -1
+        self.stack: list[str] = []      # 여는 괄호들 — '{' 와 '[' 를 같이 쌓는다
+        self.opens: list[int] = []      # 아직 안 닫힌 '{' 들의 시작 위치
         self.in_str = False
         self.esc = False
         # 혼잣말 문(門). "start" 면 아직 판단 전, "think" 면 혼잣말을 흘려보내는 중,
@@ -832,16 +849,22 @@ class _SceneStream:
                 continue
             if ch == '"':
                 self.in_str = True
-            elif ch == "{":
-                if self.depth == 0:
-                    self.start = i
-                self.depth += 1
-            elif ch == "}":
-                if self.depth > 0:
-                    self.depth -= 1
-                    if self.depth == 0 and self.start >= 0:
-                        self._try("".join(self.buf[self.start:i + 1]))
-                        self.start = -1
+            elif ch in "{[":
+                if ch == "{":
+                    self.opens.append(i)
+                self.stack.append(ch)
+            elif ch in "}]":
+                if self.stack:
+                    self.stack.pop()
+                if ch == "}" and self.opens:
+                    at = self.opens.pop()
+                    # **닫히는 객체는 일단 다 시도한다.** 구조만으로는 포장 안의 장면과
+                    # 장면 안의 대사 원소를 가를 수 없다(둘 다 '객체 하나 안의 배열 원소'다).
+                    # 가르는 일은 _looks_like_scene 한 곳이 한다 — 판정이 두 곳에 있으면
+                    # 반드시 갈라지고, 그때 대사 한 줄이 장면 한 컷으로 집계된다.
+                    # 너무 깊은 것만 값싸게 걸러 낸다(파싱 비용).
+                    if self.stack.count("{") <= 2:
+                        self._try("".join(self.buf[at:i + 1]))
 
     def _try(self, chunk: str) -> None:
         try:

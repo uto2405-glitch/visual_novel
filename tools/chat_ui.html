@@ -285,6 +285,18 @@ textarea:focus{outline:none;border-color:var(--jade-d)}
   조립 진행과 실패 복구 버튼([이어서 다시]·[받은 N개로 마무리])이 거기 있었다 —
   장면 탭을 한 번 눌렀다 오면 받아 둔 장면을 되살릴 방법이 화면에서 사라졌다.
 -->
+<!--
+  결과 자리는 진행 자리(#live)와 **따로** 산다.
+  조립·그림 폴링이 2.5초마다 #live 를 갈아치우기 때문이다 — 백그라운드 작업이 도는 동안
+  대화 백업을 누르면 결과가 그 사이에 덮여 사라졌고, 하필 그 결과 안에 **내려받기 링크**가
+  있었다(폰 브라우저는 스크립트가 시작한 내려받기를 막는 일이 있어 링크가 유일한 길이다).
+  사람이 응답해야 하는 것과 저절로 갱신되는 것은 같은 자리를 쓰면 안 된다.
+-->
+<section class="live keepbox" id="keepbox" hidden>
+  <p class="line" id="keepMsg"></p>
+  <div class="row" id="keepActs"></div>
+</section>
+
 <section class="live" id="live" hidden>
   <p class="livemsg" id="liveMsg"></p>
   <div class="bar"><i id="liveBar"></i></div>

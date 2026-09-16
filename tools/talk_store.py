@@ -531,6 +531,31 @@ def save_messages(cid: Any, messages: list, cap: int = LOG_CAP) -> None:
     save_log(talk_path(cid), messages, cap)
 
 
+def reset_messages(cid: Any) -> dict:
+    """인물 대화를 **처음부터** 다시 시작한다 — 보관한 **뒤에만** 비운다.
+
+    이 모듈의 하드 룰은 하나다: *대화 로그는 어떤 경로로도 조용히 짧아지지 않는다.*
+    :func:`save_log` 도 :func:`truncate_log` 도 :func:`delete_story_chat` 도 전부
+    아카이브로 옮긴 **뒤에만** 자른다. 그런데 화면의 [처음부터] 만 그 규칙 밖에 있었다 —
+    누른 뒤 아무 말이나 한 마디 보내면 그때까지의 인물 대화 전부(사진 메타까지)가
+    디스크에서 사라지고, 보관본이 없어 내보내기로도 복구할 수 없었다.
+
+    옮기지 못하면 **비우지 않는다.** 실패는 아무것도 잃지 않는 쪽으로 넘어져야 한다.
+    """
+    path = talk_path(cid)
+    msgs = load_log(path)
+    if not msgs:
+        return {"cleared": 0, "archived": 0}
+    try:
+        _append_archive(archive_path(path), msgs)
+    except OSError as exc:
+        raise vn_core.VNError(
+            "지난 대화를 보관하지 못해 비우지 않았습니다(%s). 다시 시도해 주세요." % exc)
+    vn_core.atomic_write_text(path, json.dumps({"messages": []}, ensure_ascii=False, indent=2))
+    forget_summary(path)
+    return {"cleared": len(msgs), "archived": len(msgs)}
+
+
 # ---------------------------------------------------------------- 병합
 def _msg_eq(a: dict, b: dict) -> bool:
     """같은 대사인지 — 사진 메타는 클라이언트가 떼고 보내므로 역할·본문만 비교한다."""

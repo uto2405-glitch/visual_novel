@@ -401,8 +401,14 @@ function stripOffers(text) {
 
 function renderOffers(text, after) {
   /* 지난 제안은 걷어낸다 — 안 그러면 대화를 이어갈수록 옛 버튼이 줄줄이 남는다.
-   * 사람이 스크롤하다 예전 제안을 누르면 지금 이야기와 무관한 개수로 조립이 시작된다. */
-  Array.prototype.forEach.call(document.querySelectorAll(".offer"), (n) => n.remove());
+   * 사람이 스크롤하다 예전 제안을 누르면 지금 이야기와 무관한 개수로 조립이 시작된다.
+   *
+   * 단 **.keep 은 건드리지 않는다.** 실패 복구 줄(받은 글자 보기·받은 N개로 마무리)이
+   * 같은 class 를 쓰고 있어서, 실패 직후 한 마디만 더 물어보면 그 복구 수단이
+   * 조용히 사라졌다. 그 글자는 모델이 100초를 들여 보낸 원문이다. */
+  Array.prototype.forEach.call(document.querySelectorAll(".offer"), (n) => {
+    if (!n.classList.contains("keep")) n.remove();
+  });
   const offers = [];
   let m;
   OFFER_RE.lastIndex = 0;
@@ -637,6 +643,30 @@ function liveShow(msg, actions, frac) {
   });
 }
 
+/* 결과 자리 — **폴링이 절대 건드리지 않는다.**
+ *
+ * 진행(#live)과 결과(#keepbox)를 가른 이유는 하나다: 진행은 저절로 갱신되고 결과는
+ * 사람이 보고 눌러야 한다. 한 자리를 같이 쓰면 2.5초 뒤에 결과가 사라지고, 그 안에
+ * 내려받기 링크가 있으면 사람은 백업이 실패한 줄 안다. 하필 가장 아끼는 자산의 백업이다. */
+function keepShow(msg, nodes) {
+  const box = $("keepbox");
+  if (!box) { addNote(msg); return; }
+  box.hidden = false;
+  $("keepMsg").textContent = msg || "";
+  const acts = $("keepActs");
+  while (acts.firstChild) acts.removeChild(acts.firstChild);
+  (nodes || []).forEach((n) => acts.appendChild(n));
+  const close = el("button", null, "확인");
+  close.type = "button";
+  close.addEventListener("click", keepHide);
+  acts.appendChild(close);
+}
+
+function keepHide() {
+  const box = $("keepbox");
+  if (box) box.hidden = true;
+}
+
 function liveHide() {
   const box = $("live");
   if (box) box.hidden = true;
@@ -697,8 +727,13 @@ async function pollCompose() {
   }
 
   /* 서버가 재시작됐거나 다른 탭이 저장을 마치면 작업 자체가 사라진다. 그때 아무 말도
-   * 없이 멈춰 서면 사람은 아직 돌고 있다고 믿고 기다린다. */
-  if (!st.running && !(st.scenes || []).length && !st.error && S.shown > 0) {
+   * 없이 멈춰 서면 사람은 아직 돌고 있다고 믿고 기다린다.
+   *
+   * 예전에는 '장면을 하나라도 받았을 때' 만 이 판정을 했다(S.shown > 0). 그래서 시작
+   * 직후(첫 장면 전)에 작업이 사라진 기기만 '현상을 시작했습니다…' 에서 조용히 멈췄고,
+   * 사람은 죽은 막대를 보며 7분을 기다렸다 — 새로고침 말고는 벗어날 길이 없었다.
+   * 시작 직후에는 서버가 running=true 를 먼저 세우므로 이 조건이 헛돌지 않는다. */
+  if (!st.running && !(st.scenes || []).length && !st.error) {
     stopPolling();
     liveHide();
     addNote("현상 작업이 더 이상 없습니다 — 다른 화면에서 저장되었거나 서버가 다시 시작됐습니다.");
@@ -801,7 +836,11 @@ function composeFailed(st) {
   liveShow(got ? ("현상이 멈췄습니다 — 받아 둔 " + got + "개를 들고 있습니다.")
                : "현상이 멈췄습니다.", acts, 0);
 
-  const row = el("div", "offer");
+  /* 이 줄은 '지난 제안' 이 아니라 **복구 수단**이다. 그래서 지워지지 않는 표시를 단다
+   * (renderOffers 가 .offer 를 전역에서 걷어낸다). 여기 든 글자는 모델이 100초를 들여
+   * 보낸 원문이고, 직접 입력에 붙여넣으면 다시 부르지 않아도 장면이 된다 —
+   * 실패 직후 뭐라도 한 마디 물어본 사람만 그것을 잃었다. */
+  const row = el("div", "offer keep");
   const from = st.failed_from || (got + 1);
   const to = st.failed_to || from;
 
@@ -849,7 +888,7 @@ function composeFailed(st) {
 }
 
 function offerSave(n) {
-  const row = el("div", "offer");
+  const row = el("div", "offer keep");      /* 받아 둔 장면을 저장하는 길 — 제안이 아니다 */
   const save = el("button", null, "받은 " + n + "개로 마무리");
   save.type = "button";
   save.addEventListener("click", () => { row.remove(); saveJob(); });
@@ -1021,7 +1060,7 @@ async function watchGenAll() {
   addNote(String(fin.message || "일괄 생성이 끝났습니다.")
           + ((fin.failed || []).length ? (" — 실패: " + fin.failed.map((f) => f.scene_id).join(", ")) : ""));
   await refresh();
-  if (S.view === "scenes") showView("scenes");
+  if (S.view === "scenes" || S.view === "gallery") showView(S.view);   /* 보던 탭을 지킨다 */
 }
 
 async function addScene() {
@@ -1358,7 +1397,11 @@ async function watchGen(sid, n, btn) {
     liveHide();
     addNote(sid + " · 후보가 나왔습니다. 마음에 드는 것을 고르세요.");
     await refresh();
-    showView("scenes");
+    /* **보고 있던 탭을 빼앗지 않는다.** 예전에는 끝날 때마다 무조건 장면 탭으로 끌고 갔다 —
+     * 갤러리에서 고르던 중이거나 감상본을 읽던 중에 예고 없이 튕겨 나갔고, 스크롤 위치와
+     * 안내가 사라졌다. **다른 기기에서 시작한 그림** 때문에도 똑같이 당했다(새로고침하면
+     * 돌고 있는 작업에 다시 붙으므로). 그 탭에 있던 사람에게만 다시 그려 준다. */
+    if (S.view === "scenes" || S.view === "gallery") showView(S.view);
   } catch (e) {
     liveHide();
     addNote(String(e.message || e), true);
@@ -1423,6 +1466,21 @@ async function loadChats() {
 }
 
 async function openChat(id) {
+  /* 답을 기다리는 중에 다른 대화로 옮기면, **떠나온 대화의 요청을 여기서 끊는다.**
+   *
+   * 예전에는 S.abort 도 S.busy 도 그대로 뒀다. 새로 연 대화에서는 아무것도 못 보내는데
+   * 이유를 말하는 문구가 없었고, 유일한 탈출구인 버튼에는 '중지' 라고 적혀 있었다
+   * (그 중지는 **떠나온 대화**의 것이다). 게다가 늦게 도착한 오류가 지금 화면에 떨어져,
+   * 방금 쓴 말이 실패한 줄 알고 같은 말을 다시 보내게 됐다.
+   *
+   * 끊는 것이 손해가 아닌 이유: 서버는 요청에 실린 chat_id 로 **올바른 파일에 저장한다.**
+   * 끊기는 것은 화면의 기다림뿐이고, 그 대화를 다시 열면 답이 거기 있다. */
+  if (S.chatId !== (id || "") && S.abort) {
+    try { S.abort.abort(); } catch (e) { /* 이미 끝났으면 할 일이 없다 */ }
+    S.abort = null;
+    setBusy(false);
+    showStop(false);
+  }
   S.chatId = id || "";
   S.ocLoaded = false;      /* 출연진은 대화마다 다르다 — 옆 대화의 것이 켜져 보이면 안 된다 */
   /* 마지막에 본 대화를 기억한다 — 이 기기에만. 예전엔 열 때마다 기본 대화로
@@ -1532,14 +1590,11 @@ async function exportChat(c, btn) {
     try { a.click(); } catch (e) { /* 막히면 아래 링크로 받는다 */ }
     if (a.parentNode) a.parentNode.removeChild(a);
 
-    const acts = [{ label: "확인", onClick: () => liveHide() }];
-    liveShow(r.name + " · " + (r.bytes < 1000000
+    keepShow(r.name + " · " + (r.bytes < 1000000
                ? (Math.round(r.bytes / 1000) + "KB")
                : (r.mb + "MB"))
              + (r.reimportable ? "" : " · 이 화면으로는 다시 못 넣습니다(너무 큽니다)"),
-             acts, 1);
-    const row = document.getElementById("liveActs");
-    if (row) row.insertBefore(dlLink(r.url, r.name, "다시 받기"), row.firstChild);
+             [dlLink(r.url, r.name, "다시 받기")]);
   } catch (e) {
     addNote(String(e.message || e), true);
   } finally {
@@ -1562,11 +1617,16 @@ async function importChatFile(file) {
     const r = await api("/api/chat-import", { b64: bytesToB64(buf) });
     await loadChats();
     if (S.view === "list") renderList();
-    liveShow("가져왔습니다 — " + (r.title || "(제목 없음)") + " · " + r.count + "턴"
+    liveHide();
+    /* 결과는 **폴링이 닿지 않는 자리**에 둔다. 조립이 도는 중에 가져오기를 하면 어떤
+     * 이름으로 들어왔는지도, [열기] 버튼도 2.5초 만에 덮여 사라졌다. */
+    const open = el("button", "go", "열기");
+    open.type = "button";
+    open.addEventListener("click", () => { keepHide(); openChat(r.chat_id); });
+    keepShow("가져왔습니다 — " + (r.title || "(제목 없음)") + " · " + r.count + "턴"
              + (r.archived ? (" · 보관 기록 " + r.archived + "줄") : "")
              + (r.renamed ? " · 같은 이름이 있어 새 이름으로 들어왔습니다" : ""),
-             [{ label: "열기", go: true, onClick: () => { liveHide(); openChat(r.chat_id); } },
-              { label: "확인", onClick: () => liveHide() }], 1);
+             [open]);
   } catch (e) {
     liveHide();
     addNote(String(e.message || e), true);

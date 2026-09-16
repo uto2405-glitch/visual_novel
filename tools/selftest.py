@@ -7637,6 +7637,135 @@ def m18(b: Box):
             os.environ[mk.PROBE_ENV] = keep
 
 
+@test("unit", "U55 [처음부터]는 보관한 뒤에만 비우고, 모델에 넘기는 창도 서버 기록을 본다")
+def u55(b: Box):
+    """이 저장소의 하드 룰은 하나다: **대화 로그는 어떤 경로로도 조용히 짧아지지 않는다.**
+    save_log 도, truncate_log 도, 대화 삭제도 전부 아카이브로 옮긴 **뒤에만** 자른다.
+    그런데 두 곳이 그 규칙 밖에 있었다.
+
+    (1) 인물 대화의 [처음부터]. 누른 뒤 아무 말이나 한 마디 보내면 그때까지의 대화
+        전부(사진 메타까지)가 디스크에서 사라졌고, 보관본이 없어 내보내기로도 복구할 수
+        없었다. 보관에 실패하면 **비우지 않는다** — 실패는 아무것도 잃지 않는 쪽으로
+        넘어져야 한다.
+
+    (2) 스토리 챗이 모델에 넘기는 창. 저장은 서버 기록과 병합해서 하는데 **전송만**
+        클라이언트가 보낸 목록에서 잘랐다. 이력 로드가 한 번 실패해 화면이 빈 목록이
+        되면, 그 뒤 한 마디에 모델은 진행 중이던 소설을 전혀 모르는 채 답한다.
+        그 답은 병합 덕에 로그에는 제대로 붙으므로, 남는 것은 "모델이 갑자기 이야기를
+        잊은" 한 턴이다 — 사람은 왜 그랬는지 알 방법이 없다.
+    """
+    ts = b.mod("talk_store")
+    wb = b.mod("webapp")
+
+    # (1) [처음부터] — 보관한 뒤에만 비운다
+    cid = "U55인물"
+    ts.save_messages(cid, [{"role": "user", "content": "지난 이야기 첫 줄"},
+                           {"role": "assistant", "content": "지난 이야기 답"}])
+    path = ts.talk_path(cid)
+    eq(len(ts.load_messages(cid)), 2, "준비한 대화가 저장되지 않았다")
+    res = ts.reset_messages(cid)
+    eq(res["archived"], 2, "보관한 수가 다르다")
+    eq(ts.load_messages(cid), [], "비우지 않았다")
+    arch = ts.archive_path(path)
+    ok(arch.is_file(), "보관 파일이 없다 — 지운 대화를 되찾을 방법이 사라졌다")
+    body = arch.read_text(encoding="utf-8")
+    ok("지난 이야기 첫 줄" in body and "지난 이야기 답" in body,
+       "보관본에 내용이 없다: %r" % body[:120])
+    eq(ts.reset_messages(cid), {"cleared": 0, "archived": 0}, "빈 대화를 또 보관한다")
+
+    # 보관에 실패하면 비우지 않는다
+    ts.save_messages(cid, [{"role": "user", "content": "두 번째 이야기"}])
+    real = ts._append_archive
+    try:
+        def boom(*a, **k):
+            raise OSError("디스크 가득")
+        ts._append_archive = boom
+        e = raises(lambda: ts.reset_messages(cid), label="보관 실패")
+        ok("보관하지 못" in str(e), "왜 안 비웠는지 말하지 않는다: %s" % str(e)[:60])
+    finally:
+        ts._append_archive = real
+    eq(len(ts.load_messages(cid)), 1,
+       "보관에 실패했는데 비웠다 — 실패가 잃는 쪽으로 넘어졌다")
+
+    # (2) 모델에 넘기는 창 — 화면이 빈 목록이어도 서버 기록을 본다
+    chat_id = "u55chat"
+    p2 = ts.story_chat_path_for(chat_id)
+    ts.save_log(p2, [{"role": "user", "content": "소설 첫 문단"},
+                     {"role": "assistant", "content": "이어지는 문단"}])
+    seen = {}
+    real_chat = wb.vn_compose.orch_chat
+    try:
+        def fake(msgs, **kw):
+            seen["msgs"] = list(msgs)
+            return "답"
+        wb.vn_compose.orch_chat = fake
+        # 화면이 이력을 못 받아 **빈 목록**으로 한 마디만 보내는 상황
+        wb.do_chat([{"role": "user", "content": "그래서 어떻게 됐지?"}], chat_id)
+    finally:
+        wb.vn_compose.orch_chat = real_chat
+    sent = " ".join(str(m.get("content", "")) for m in seen.get("msgs", []))
+    ok("소설 첫 문단" in sent,
+       "모델이 서버에 있는 지난 이야기를 못 받았다 — 그 턴만 기억을 잃는다")
+    ok("그래서 어떻게 됐지?" in sent, "방금 한 말이 안 갔다")
+    kept = ts.load_log(p2)
+    eq(len(kept), 4, "저장본이 병합되지 않았다: %d" % len(kept))
+
+
+@test("unit", "U56 장면 경계는 모델이 고른 모양과 무관하다 — 포장돼 와도 도착하는 대로 보인다")
+def u56(b: Box):
+    """같은 지시문에 모델이 세 가지 모양으로 답한다(실측 7회: 배열 3 · 포장 2 · 객체만 2).
+
+        [{"order":1,…}, …]              맨 바깥이 배열
+        {"scenes":[{"order":1,…}, …]}   한 겹 포장
+        {"order":1,…},{"order":2,…}     배열 없이 객체만
+
+    예전에는 **최상위 객체가 닫히는 순간**만 경계로 봤다. 포장된 모양에서는 최상위 객체가
+    응답 전체 하나라서 배치가 다 올 때까지 경계가 한 번도 안 잡혔다 — 그 회차는 2분 가까이
+    화면이 조용했고 [현상 멈추기]도 안 먹었다(멈춤은 장면 도착 시점에만 일어난다).
+    사람은 죽은 줄 알고 새로고침하거나 다시 시작했고, 그 30~100초는 GPU 시간 그대로다.
+
+    **같은 작업인데 그날 모델이 고른 모양에 따라 화면이 달랐다** — 그게 고쳐야 할 이유다.
+
+    가르는 일은 한 곳에서만 한다(:func:`_looks_like_scene`). 구조만으로는 포장 안의 장면과
+    장면 안의 대사 원소를 구별할 수 없어서(둘 다 '객체 하나 안의 배열 원소' 다), 판정을
+    두 곳에 두면 반드시 갈라지고 그때 **대사 한 줄이 장면 한 컷으로** 집계된다.
+    """
+    vc = b.mod("vn_compose")
+    one = ('{"order":%d,"purpose":"목적","emotion":"기쁨",'
+           '"dialogue":[{"speaker_id":"CHAR-001","text":"안녕"},'
+           '{"speaker_id":"CHAR-002","text":"어"}],"image_prompt":"x"}')
+
+    def stream(text):
+        got = []
+        st = vc._SceneStream(lambda o: got.append(o))
+        for ch in text:            # 한 글자씩 — 진짜 스트리밍과 같은 조건
+            st.feed(ch)
+        return [o.get("order") for o in got]
+
+    eq(stream("[" + ",".join(one % i for i in (1, 2)) + "]"), [1, 2], "맨 바깥 배열")
+    eq(stream('{"scenes":[' + ",".join(one % i for i in (1, 2, 3)) + "]}"), [1, 2, 3],
+       "포장된 모양에서 장면이 도착하는 대로 안 보인다 — 배치가 다 올 때까지 화면이 조용하다")
+    eq(stream(",".join(one % i for i in (1, 2))), [1, 2], "배열 없이 객체만 오는 모양")
+    eq(stream("```json\n[" + (one % 9) + "]\n```"), [9], "코드펜스로 감싼 모양")
+    eq(stream("생각 중… </think>" + '{"scenes":[' + (one % 4) + "]}"), [4],
+       "혼잣말 뒤에 포장된 모양이 오면 못 본다")
+
+    # **대사 원소를 장면으로 세지 않는다.** 이걸 놓치면 장면 하나가 대사 수만큼
+    # 부풀고, 이어받기 번호(start = len(items)+1)가 통째로 어긋난다.
+    eq(len(stream('{"scenes":[' + (one % 1) + "]}")), 1,
+       "한 장면인데 여러 개로 셌다 — 대사 원소까지 장면으로 세고 있다")
+
+    # 포장 객체 자신도 장면이 아니다
+    eq(stream('{"total":3,"scenes":[]}'), [], "포장 객체를 장면으로 셌다")
+    eq(stream('{"speaker_id":"A","text":"안녕"}'), [], "대사 원소 하나를 장면으로 셌다")
+
+    # 대사에 괄호가 들어 있어도 어긋나지 않는다
+    tricky = ('{"order":7,"purpose":"목적","emotion":"놀람",'
+              '"dialogue":[{"speaker_id":"A","text":"이건 {중괄호} 와 \\"따옴표\\" 다"}],'
+              '"image_prompt":"x"}')
+    eq(stream("[" + tricky + "]"), [7], "대사 속 괄호·따옴표에 경계가 어긋난다")
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —
@@ -7887,6 +8016,67 @@ def w40(b: Box):
         wb.image_gen.generate_for_scene = real
         b.wapi("/api/scene-delete", {"scene_id": sid})
         b.wapi("/api/oc-delete", {"id": cid})
+
+
+@test("js", "J19 화면이 사람의 자리를 빼앗지 않는다 — 탭·잠금·복구 수단·결과 자리")
+def j19(b: Box):
+    """BACKLOG §U 의 네 건(160·161·162·164)을 한자리에서 잠근다. 공통점이 있다:
+    **서버는 옳게 만들어져 있는데 화면이 사람이 하던 일을 덮는다.**
+
+    브라우저로 재현하기 어려운 것들이라(여러 기기·타이밍) 소스에서 그 구조가 남아
+    있는지를 본다. 약한 검사지만, 이 네 줄은 지우거나 되돌리기가 쉬운 종류다 —
+    실제로 전부 한 줄씩 잘못 적혀 있었다.
+    """
+    NL = chr(10)
+    js = (b.root / "tools" / "chat_ui.js").read_text(encoding="utf-8")
+    html = (b.root / "tools" / "chat_ui.html").read_text(encoding="utf-8")
+
+    # 161 — **배경에서 끝난 작업**이 보고 있던 탭을 빼앗지 않는다.
+    # 사람이 직접 누른 흐름(장면 추가·편집·삭제·영상)에서 장면 탭으로 가는 것은 옳다 —
+    # 그건 그 사람이 방금 시킨 일이다. 문제는 지켜보기만 하던 고리가 끌고 가는 것이다.
+    def body(name):
+        at = js.find(name)
+        ok(at > 0, "%s 를 못 찾았다" % name)
+        ends = [x for x in (js.find(NL + "function ", at + 10),
+                            js.find(NL + "async function ", at + 10)) if x > 0]
+        return js[at:min(ends) if ends else len(js)]
+
+    for name in ("async function watchGen(", "async function watchGenAll("):
+        src = body(name)
+        ok('showView("scenes")' not in src,
+           "%s 가 끝나면서 장면 탭으로 끌고 간다 — 갤러리·감상본을 보던 사람이 튕겨 나가고,"
+           " **다른 기기에서 시작한 그림** 때문에도 똑같이 당한다" % name.strip())
+        ok("showView(S.view)" in src, "%s 가 보던 탭을 다시 그리지 않는다" % name.strip())
+
+    # 160 — 대화를 옮기면 떠나온 요청을 끊고 잠금을 푼다
+    at = js.find("async function openChat(")
+    head = js[at:at + 1200]
+    ok("S.abort.abort()" in head,
+       "대화를 옮겨도 기다리던 요청을 안 끊는다 — 새 대화에서 아무것도 못 보내고, "
+       "늦게 온 오류가 남의 화면에 떨어진다")
+    ok("setBusy(false)" in head, "옮긴 뒤에도 보내기 잠금이 남는다")
+
+    # 163 — 첫 장면이 오기 전에 작업이 사라져도 알아챈다
+    gone = [ln for ln in js.split(NL) if "!st.running" in ln and "st.scenes" in ln]
+    eq(len(gone), 1, "'작업이 사라졌다' 판정이 한 곳이 아니다: %d" % len(gone))
+    ok("S.shown" not in gone[0],
+       "'장면을 하나라도 받았을 때' 만 사라짐을 판정한다 — 시작 직후에 당한 기기는 "
+       "죽은 막대를 보며 7분을 기다린다: %s" % gone[0].strip())
+
+    # 164 — 복구 수단은 '지난 제안' 과 함께 걷히지 않는다
+    ok('classList.contains("keep")' in js,
+       "제안을 걷어낼 때 복구 줄까지 걷는다 — 실패 직후 한 마디만 더 물으면 "
+       "100초짜리 원문을 잃는다")
+    ok('el("div", "offer keep")' in js, "복구 줄에 지켜야 한다는 표시가 없다")
+
+    # 162 — 진행과 '사람이 응답해야 하는 결과' 가 다른 자리에 산다
+    ok('id="keepbox"' in html, "결과 전용 자리가 없다 — 폴링이 2.5초마다 덮는다")
+    ok("function keepShow(" in js and "function keepHide(" in js, "결과 자리를 쓰는 함수가 없다")
+    for who in ("chat-export", "chat-import"):
+        at = js.find(who)
+        ok(at > 0, "%s 경로를 못 찾았다" % who)
+        ok("keepShow(" in js[at:at + 1400],
+           "%s 결과를 진행 자리에 띄운다 — 내려받기 링크가 폴링에 덮여 사라진다" % who)
 
 
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
