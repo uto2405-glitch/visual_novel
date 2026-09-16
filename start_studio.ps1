@@ -20,7 +20,10 @@ param(
     [switch]$NoLlm,               # 로컬 LLM 은 건드리지 않음
     [switch]$NoComfy,             # 이미지 엔진(ComfyUI)은 건드리지 않음
     [switch]$NoBrowser,           # 브라우저 자동 열기 안 함
-    [string]$LlmRoot = ""         # 로컬 LLM(llama.cpp) 설치 폴더 · 환경변수 LOCAL_LLM_HOME 로도 지정
+    [string]$LlmRoot = "",        # 로컬 LLM(llama.cpp) 설치 폴더 · 환경변수 LOCAL_LLM_HOME 로도 지정
+    [string[]]$Trust = @(),       # 이 기기(IP)만 PIN 없이 들어온다 — 내 폰 하나만 열 때
+    [string]$Comfy = "",          # 그림 엔진 주소(다른 PC 에 있을 때). 예: http://DESKTOP-06ACMT6:8188
+    [string]$Llm = ""             # 글 엔진 주소. 매니페스트를 덮는다 — 아래 주석 참고
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +44,15 @@ function Write-Step($text) { Write-Output "  $text" }
 # LLM 주소 해석 — 순서는 tools/local_llm.py 의 base_url() 과 **같아야 한다**.
 # (여기서만 다르게 고르면 기동 배너와 스튜디오가 서로 다른 서버를 가리키고,
 #  그 어긋남은 "켰다는데 왜 안 되지" 로만 드러난다.)
+# -Llm 은 환경변수 LOCAL_LLM_URL 로 넣는다.
+#
+# 왜 매니페스트를 안 고치는가: project\manifest.json 은 **git 에 올라가는 파일**이라
+# 두 기계가 같은 한 줄을 나눠 쓴다. 그런데 올바른 값이 서로 다르다 — 노트북은 그 모델을
+# 자기가 들고 있으니 127.0.0.1 이 맞고(자기 자신을 LAN 주소로 부르면 DHCP 가 바뀔
+# 때마다 같이 깨진다), 데스크탑은 노트북 주소가 맞다. 한 파일로는 둘 다 만족할 수
+# 없으므로, 기계별 값은 이번 실행에만 유효한 환경변수로 덮는다(저장소는 그대로 둔다).
+if ($Llm) { $env:LOCAL_LLM_URL = $Llm.TrimEnd("/") }
+
 function Get-LlmUrl {
     if ($env:LOCAL_LLM_URL) { return ([string]$env:LOCAL_LLM_URL).TrimEnd('/') }
     $mf = Join-Path $repo "project\manifest.json"
@@ -55,10 +67,33 @@ function Get-LlmUrl {
     return "http://127.0.0.1:$llmPort/v1"
 }
 
-# 이 주소가 다른 기기인가. 루프백이 아니면 원격이고, 원격이면 **여기서 켤 수 없다**.
+# 이 기계 자신을 가리키는 주소들 — 루프백 + 이 PC 의 LAN IP + 호스트 이름.
+#
+# 왜 필요한가: 매니페스트에 적힌 LLM 주소가 **이 기계 자신의 LAN 주소**인 경우가 있다.
+# 노트북이 메인이 되면 정확히 그렇다(orchestrator.api.base_url = http://192.168.219.182:8080/v1
+# 인데 그 IP 가 노트북 자신이다). 예전 판정은 "루프백이 아니면 남의 기계" 였으므로 그때
+# llama-server 를 **켜지 않고** "다른 기기에 있습니다" 라고만 적었다 — 원클릭의 핵심이
+# 바로 거기서 죽는다. 사람은 아이콘을 눌렀는데 글 관련 탭이 전부 먹통인 화면을 본다.
+function Get-SelfHosts {
+    $self = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($n in @("127.0.0.1", "localhost", "::1")) { [void]$self.Add($n) }
+    try { [void]$self.Add($env:COMPUTERNAME.ToLower()) } catch { }
+    try { [void]$self.Add([System.Net.Dns]::GetHostName().ToLower()) } catch { }
+    try {
+        foreach ($a in [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName())) {
+            [void]$self.Add($a.IPAddressToString.ToLower())
+        }
+    } catch { }
+    return $self
+}
+
+# 이 주소가 **다른 기기**인가. 여기서 켤 수 있는지를 가른다.
 function Test-RemoteLlm($url) {
-    try { $h = ([uri]$url).Host } catch { return $false }
-    if ($h -eq "localhost" -or $h -eq "::1") { return $false }
+    try { $h = ([uri]$url).Host.ToLower() } catch { return $false }
+    if (-not $h) { return $false }
+    $self = Get-SelfHosts
+    if ($self.Contains($h)) { return $false }
+    if ($self.Contains(($h -split '\.')[0])) { return $false }   # LENOVO.local → LENOVO
     $ip = [System.Net.IPAddress]::None
     if ([System.Net.IPAddress]::TryParse($h, [ref]$ip)) {
         return (-not [System.Net.IPAddress]::IsLoopback($ip))
@@ -110,6 +145,9 @@ try {
         if ($ig.comfyui -and $ig.comfyui.api -and $ig.comfyui.api.base_url) { $comfyUrl = "$($ig.comfyui.api.base_url)" }
     }
 } catch { }
+# -Comfy 는 환경변수로 넣는다 — 매니페스트를 고치지 않고 이번 실행만 다른 기계를 보게 한다.
+# (자식 프로세스인 스튜디오가 그대로 물려받는다. comfyui_client 의 순서: COMFYUI_URL > 매니페스트.)
+if ($Comfy) { $env:COMFYUI_URL = $Comfy.TrimEnd("/") }
 if ($env:COMFYUI_URL) { $comfyUrl = $env:COMFYUI_URL }
 $comfyUrl = $comfyUrl.TrimEnd("/")
 try { $comfyPort = ([uri]$comfyUrl).Port } catch { }
@@ -247,6 +285,9 @@ $argv = New-Object System.Collections.Generic.List[string]
 $argv.Add($webapp)
 $argv.Add("--port"); $argv.Add("$Port")
 if ($Lan) { $argv.Add("--lan") }
+foreach ($t in $Trust) {
+    if ($t) { $argv.Add("--trust"); $argv.Add($t) }
+}
 if ($NoBrowser) { $argv.Add("--no-browser") }
 
 Set-Location $repo

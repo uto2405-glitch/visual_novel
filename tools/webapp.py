@@ -1798,6 +1798,33 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 400)
 
 
+def _own_names() -> list[str]:
+    """이 기계를 가리키는 **자기 이름들** — DHCP 가 주소를 바꿔도 안 깨지는 길.
+
+    공유기가 빌려주는 IP 는 껐다 켜면 바뀔 수 있다. 그때마다 폰의 북마크도, 다른 PC 의
+    설정도 같이 틀어진다. 그런데 같은 랜의 윈도 기계끼리는 **이름**으로 서로를 찾는다
+    (실측: 데스크탑에서 ``http://LENOVO:8080`` 이 0.24초에 200 을 냈다). 그래서 이름도
+    자기 주소로 인정하면 주소가 바뀌어도 링크가 산다.
+
+    이름을 허용하는 것이 Host 검증을 무르게 하지 않는가 — 무르게 하지 않는다. 여기 담기는
+    것은 **이 기계 자신의 이름뿐**이고, 그건 이미 허용한 LAN IP 와 정확히 같은 대상을
+    가리킨다. 임의의 이름은 여전히 403 이다(그게 DNS 리바인딩 방어의 핵심이다).
+    """
+    out: list[str] = []
+    try:
+        h = socket.gethostname().strip().lower()
+    except OSError:
+        return out
+    if not h:
+        return out
+    out.append(h)
+    short = h.split(".")[0]
+    if short and short != h:
+        out.append(short)
+    out.append(short + ".local")        # mDNS 로 찾는 기기(아이폰 등)를 위해
+    return out
+
+
 def _lan_ips() -> list[str]:
     ips = set()
     try:
@@ -1911,8 +1938,14 @@ def main() -> int:
 
     if args.lan:
         ips = _lan_ips()
-        ALLOWED_HOSTS.update(ips)   # 폰이 보내는 Host(=LAN IP)를 허용(그 외 Host 는 계속 403)
-        LAN_URLS[:] = [f"http://{ip}:{port}/" for ip in ips]   # /api/state → 폰 접속 QR
+        names = _own_names()
+        # 폰이 보내는 Host(=LAN IP)와 이 기계의 자기 이름만 허용한다(그 외 Host 는 계속 403).
+        # 이름을 넣는 이유는 DHCP 다 — 주소가 바뀜어도 http://LENOVO:8765 는 그대로 산다.
+        ALLOWED_HOSTS.update(ips)
+        ALLOWED_HOSTS.update(names)
+        # 폰은 윈도 이름을 못 찾는 일이 많다 — QR 은 IP 를 먼저 둔다(폰에서 확실히 열리는 젠).
+        LAN_URLS[:] = ([f"http://{ip}:{port}/" for ip in ips]
+                       + [f"http://{n}:{port}/" for n in names[:1]])
         print("=" * 56)
         print("LAN 모드 — 같은 와이파이의 폰/태블릿에서 아래 주소로 접속:")
         for ip in ips:
