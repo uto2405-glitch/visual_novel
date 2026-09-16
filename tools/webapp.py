@@ -808,7 +808,9 @@ def r_compose(b):
                                      bool(b.get("branching")))
 
 
-CHAT_COMPOSE_CAP = 4        # 한 번에 이어 붙일 수 있는 장면 수 상한
+CHAT_COMPOSE_CAP = 4        # 사람이 개수를 안 말했을 때 — '새로 쓴 만큼만' 의 상한
+CHAT_COMPOSE_MAX = 12       # 사람이 개수를 말했을 때의 상한(장면 하나에 30초대다 —
+                            #   12개면 6분대이고, 그보다 크면 한 번에 기다리기 어렵다)
 # 시크릿 대화는 글을 **요청 본문으로** 들고 온다(디스크에 없으니까). 그 글의 상한이다 —
 # 본문 상한(MAX_BODY_BYTES)보다 훨씬 작게 두는 이유는, 모델에게 보낼 수 있는 양이
 # 그보다 작기 때문이다. 넘으면 **뒤에서부터** 자른다(최근 이야기가 장면이 된다).
@@ -856,7 +858,13 @@ def r_compose_chat(b):
     if len(body.strip()) < 40:
         raise VNError("장면으로 만들 이야기가 너무 짧습니다 — 조금 더 써 보세요.")
 
-    cap = max(1, min(int(b.get("max") or CHAT_COMPOSE_CAP), CHAT_COMPOSE_CAP))
+    # 개수는 두 가지로 정해진다.
+    #   * 사람이 안 말하면 **새로 쓴 만큼만** 알아서(CHAT_COMPOSE_CAP).
+    #   * 사람이 개수를 말했으면 그 말을 따른다(CHAT_COMPOSE_MAX 까지).
+    # 사람이 6개라고 말했는데 4개만 만들면, 그건 묻지도 않고 줄인 것이다.
+    want = int(b.get("max") or 0)
+    cap = (max(1, min(want, CHAT_COMPOSE_MAX)) if want
+           else max(1, min(CHAT_COMPOSE_CAP, CHAT_COMPOSE_MAX)))
     # 출연진을 싣는다. 이게 없으면 조립은 매니페스트의 첫 인물을 모든 장면에 밀어
     # 넣는다 — 고양이 이야기의 장면마다 이지혜가 서 있던 이유가 그것이다.
     cast = talk_store.chat_cast(cid)

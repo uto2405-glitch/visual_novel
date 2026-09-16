@@ -536,7 +536,7 @@ function pullScenes(text) {
  * 개수도 안 묻는다. 사람이 원한 것은 "대화하다 누르면 그 대목이 장면이 되는 것" 이지
  * "지금부터 몇 장면을 만들지 정하는 것" 이 아니었다. 새로 쓴 분량에 든 만큼(최대 4개)
  * 만들고, 통으로 다시 굽지 않으니 30~90초면 끝난다. */
-async function composeChat(all) {
+async function composeChat(all, howMany) {
   if (S.composing) return;
   const btn = $("composeNow");
   if (btn) btn.disabled = true;
@@ -552,9 +552,11 @@ async function composeChat(all) {
         "시크릿 대화를 장면으로 만듭니다.\n\n" +
         "대화 내용은 서버에 저장되지 않지만, **만들어지는 장면과 그림은 디스크에 남습니다** " +
         "(그것이 장면을 만드는 목적이므로).\n\n계속할까요?")) { if (btn) btn.disabled = false; return; }
-      r = await api("/api/compose-text", { text: body, cast: S.cast || null });
+      r = await api("/api/compose-text", { text: body, cast: S.cast || null,
+                                          max: howMany || undefined });
     } else {
-      r = await api("/api/compose-chat", { chat_id: S.chatId, all: !!all });
+      r = await api("/api/compose-chat", { chat_id: S.chatId, all: !!all,
+                                          max: howMany || undefined });
     }
     S.shown = 0;
     addNote(all ? "이 대화 전체를 장면으로 만듭니다 — 다 되면 이어 붙입니다."
@@ -563,6 +565,21 @@ async function composeChat(all) {
     startPolling();
   } catch (e) {
     addNote(String(e.message || e), true);
+    /* 거절당했다고 화면이 조용해지면 안 된다. 거절의 가장 흔한 이유가 "이미 돌고 있다" 이고,
+     * 그때 이 기기가 할 일은 새로 시작하는 것이 아니라 **그 진행을 같이 보는 것**이다.
+     * 폰과 PC 를 번갈아 쓰면 반드시 일어난다 — 예전에는 둘 중 나중에 누른 쪽이 빨간 줄
+     * 하나만 보고 영원히 멈춰 있었다. 오류 문구를 읽는 대신 상태를 다시 묻는다.
+     * (이 복구는 예전에 [개수 정해서…] 쪽에만 있었다. 두 버튼이 한 길이 됐으니 여기 둔다.) */
+    try {
+      const st = await api("/api/compose-job-status", {});
+      if (st && (st.running || (st.scenes || []).length)) {
+        S.shown = 0;                 // 이 기기는 이 작업을 처음 본다 — 받아 둔 것부터 줄이게
+        addNote(st.running
+          ? "다른 곳에서 시작한 현상이 돌고 있습니다 — 여기서도 같이 보여 드립니다."
+          : "받아 둔 장면이 있습니다 — 아래에서 마무리하거나 버릴 수 있습니다.");
+        startPolling();
+      }
+    } catch (e2) { /* 상태도 못 읽으면 위의 오류 문구가 마지막 말이다 */ }
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -582,51 +599,34 @@ async function refreshComposeBtn() {
   try {
     const d = await api("/api/compose-chat-ready", { chat_id: S.chatId });
     const fresh = Number((d && d.fresh) || 0);
-    btn.textContent = fresh ? ("여기까지 장면으로 (" + fresh + "턴)") : "장면으로 조립";
+    /* **버튼 얼굴에 사실을 적는다.** 폰에는 마우스를 올려 보는 설명(title)이 없다 —
+     * 예전에는 새로 쓴 것이 없어도 '장면으로 조립' 이라고만 적혀 있어서, 누르고 나서야
+     * 빨간 줄로 "새로 쓴 이야기가 없습니다" 를 봤다. 누르기 전에 보여야 한다. */
+    btn.textContent = fresh ? ("여기까지 장면으로 (" + fresh + "턴)")
+                            : "새로 쓴 대목 없음 — [개수 정해서…] 로 전체를";
     btn.title = fresh
       ? "지난번 조립 이후 새로 쓴 " + fresh + "턴만 장면으로 만듭니다. 기존 장면은 그대로 둡니다."
-      : "새로 쓴 이야기가 없습니다 — 대화를 더 이어 쓴 뒤에 누르세요.";
+      : "지난번 조립 뒤로 새로 쓴 이야기가 없습니다. 대화를 더 잇거나, "
+        + "[개수 정해서…] 에서 '대화 전체' 를 켜고 다시 만들 수 있습니다.";
   } catch (e) { /* 문구만 못 고칠 뿐이다 */ }
 }
 
+/* [개수 정해서…] — **[장면으로 조립] 과 같은 글을 읽는다.** 다른 것은 개수뿐이다.
+ *
+ * 예전에는 이 버튼만 project/story/storyline.md 를 읽었다. 통합 화면은 그 파일을 한 번도
+ * 쓰지 않으므로, 사람은 고양이 이야기를 쓰고 **예전 문서의 장면**을 받았다. 같은 화면의
+ * 버튼 두 개가 서로 다른 원본을 보는 상태였다.
+ *
+ * 남은 차이는 둘뿐이고 둘 다 사람이 고른다:
+ *   개수 — 안 말하면 새로 쓴 만큼만, 말하면 그 수만큼
+ *   범위 — 새로 쓴 대목만(기본) / 대화 전체
+ */
 async function runCompose() {
   if (S.composing) return;
-  const total = Math.max(1, Math.min(parseInt($("total").value, 10) || 6, 24));
-  const batch = Math.max(1, Math.min(parseInt($("batch").value, 10) || 3, 6));
-
-  const already = (S.state && S.state.scenes) || [];
-  if (already.length) {
-    addNote("이미 장면 " + already.length + "개가 있습니다. 덮어쓰려면 스튜디오 화면에서 "
-            + "다시 구성하세요 — 여기서는 기존 작품을 지우지 않습니다.", true);
-    closeDrawer();
-    return;
-  }
+  const total = Math.max(1, Math.min(parseInt($("total").value, 10) || 6, 12));
+  const all = !!($("composeAll") && $("composeAll").checked);
   closeDrawer();
-
-  try {
-    await api("/api/compose-job", { total: total, batch: batch, branching: false });
-  } catch (e) {
-    addNote(String(e.message || e), true);
-    /* 거절당했다고 화면이 조용해지면 안 된다. 거절의 가장 흔한 이유가 "이미 돌고 있다" 이고,
-     * 그때 이 기기가 할 일은 새로 시작하는 것이 아니라 **그 진행을 같이 보는 것**이다.
-     * 폰과 PC 를 번갈아 쓰면 반드시 일어난다 — 예전에는 둘 중 나중에 누른 쪽이 빨간 줄
-     * 하나만 보고 영원히 멈춰 있었다. 오류 문구를 읽는 대신 상태를 다시 묻는다. */
-    try {
-      const st = await api("/api/compose-job-status", {});
-      if (st && (st.running || (st.scenes || []).length)) {
-        S.shown = 0;                 // 이 기기는 이 작업을 처음 본다 — 받아 둔 것부터 줄이게
-        addNote(st.running
-          ? "다른 곳에서 시작한 현상이 돌고 있습니다 — 여기서도 같이 보여 드립니다."
-          : "받아 둔 장면이 있습니다 — 아래에서 마무리하거나 버릴 수 있습니다.");
-        startPolling();
-      }
-    } catch (e2) { /* 상태도 못 읽으면 위의 오류 문구가 마지막 말이다 */ }
-    return;
-  }
-  addNote("현상을 시작했습니다 — " + total + "장면, 약 " + fmtSecs(total * 32) + ". "
-          + "화면을 닫거나 폰을 잠그셔도 계속 돕니다.");
-  liveShow("현상을 시작했습니다…", [], 0);
-  startPolling();
+  await composeChat(all, total);
 }
 
 /* 지금 돌고 있는 일을 탭 밖의 고정 자리에 그린다.
@@ -2252,7 +2252,7 @@ function renderCast() {
   bar.appendChild(add);
   const blank = el("button", "keep", "+ 빈 인물");
   blank.type = "button";
-  blank.addEventListener("click", () => saveOc("", { name: "새 인물" }));
+  blank.addEventListener("click", addBlankOc);
   bar.appendChild(blank);
   m.appendChild(bar);
 
@@ -2302,10 +2302,23 @@ function ocCard(oc) {
   }
 
   const p = oc.profile || {};
-  const bits = [p.age, p.gender_presentation, p.hair, p.eyes, p.wardrobe].filter(Boolean);
+  const bits = [p.age, p.gender_presentation, p.hair, p.eyes, p.build, p.wardrobe]
+    .filter(Boolean);
+  if ((p.signature_props || []).length) bits.push((p.signature_props || []).join(" · "));
   if (bits.length) card.appendChild(el("p", "line", bits.join(" · ")));
+  /* 성격·말투는 **글 쪽**에 쓰인다(장면 대사의 말투). 그림 문장과 나란히 보여 줘야
+   * 어느 칸이 무엇을 바꾸는지 사람이 눈으로 안다. */
+  if (p.personality) card.appendChild(el("p", "note", "성격: " + p.personality));
+  if (p.speech_style) card.appendChild(el("p", "note", "말투: " + p.speech_style));
   if (oc.prompt_anchor) card.appendChild(el("p", "note", "그림 문장: " + oc.prompt_anchor));
   if ((oc.prompt_tags || []).length) card.appendChild(el("p", "note", "태그: " + oc.prompt_tags.join(", ")));
+  if (oc.notes) card.appendChild(el("p", "note", "메모: " + oc.notes));
+  /* 그림 문장이 비어 있으면 이 인물은 컷에 아무 영향을 못 준다 — 그 말을 그 자리에서 한다. */
+  if (!oc.prompt_anchor) {
+    card.appendChild(el("p", "note",
+      "그림 문장이 비어 있습니다 — 이대로는 이 인물이 그림에 반영되지 않습니다. "
+      + "[고치기] 에서 영어 한 문장으로 적어 주세요."));
+  }
 
   if ((oc.photos || []).length) {
     const shelf = el("div", "shelf");
@@ -2352,44 +2365,83 @@ function ocCard(oc) {
   return card;
 }
 
+/* 인물 한 명의 설정 칸 — 저장 계층이 받는 것을 **전부** 연다.
+ *
+ * 예전에는 7칸만 보여 줬는데 characters.py 는 처음부터 프로필 9칸 + 메모 + 기본 의상을
+ * 받고 있었다. 나이·성별·체형·소품·성격을 적을 자리가 화면에 없어서, 사람이 쓸 수 있는
+ * 것과 코드가 쓰는 것이 어긋나 있었다(대화에서 만든 인물은 그 칸들이 채워져 오는데
+ * 화면에서는 보이지도 고쳐지지도 않았다).
+ *
+ * 칸마다 **무엇에 쓰이는지**를 이름 옆에 적는다. 이 인물의 설정은 두 갈래로 갈려 쓰인다:
+ *   글 쪽  — 성격·말투는 장면 대사의 말투가 된다(vn_compose 가 지시문에 싣는다)
+ *   그림 쪽 — 앵커 문장과 태그가 모든 컷에 그대로 들어간다(prompt_build)
+ * 그 구별을 안 적으면, 사람은 한국어 성격을 정성껏 쓰고 그림이 안 변한다고 여긴다. */
+var OC_GROUPS = [
+  { title: "기본", rows: [
+    { key: "name", label: "이름", lines: 1, top: true },
+    { key: "age", label: "나이 — 성인만(이 저장소 규칙)", lines: 1 },
+    { key: "gender_presentation", label: "성별 표현", lines: 1 },
+  ] },
+  { title: "겉모습 — 글과 그림 양쪽에 쓰입니다", rows: [
+    { key: "hair", label: "머리", lines: 1 },
+    { key: "eyes", label: "눈", lines: 1 },
+    { key: "build", label: "체형", lines: 1 },
+    { key: "wardrobe", label: "기본 복장", lines: 1 },
+    { key: "signature_props", label: "상징 소품 (쉼표로 구분)", lines: 1, list: true },
+  ] },
+  { title: "성격·말투 — 장면 대사가 여기서 나옵니다", rows: [
+    { key: "personality", label: "성격", lines: 3 },
+    { key: "speech_style", label: "말투 — 반말/존댓말, 말버릇", lines: 2 },
+  ] },
+  { title: "그림 — 영어로 적습니다(체크포인트가 영어 태그로 학습됐습니다)", rows: [
+    { key: "prompt_anchor", label: "그림 문장 — 모든 컷에 그대로 들어갑니다", lines: 3, top: true },
+    { key: "prompt_tags", label: "태그 (영어, 쉼표) — 얼굴·옷을 잡는 줄", lines: 2, top: true, list: true },
+    { key: "wardrobe_default", label: "기본 의상 (영어)", lines: 1, top: true },
+  ] },
+  { title: "메모 — 나만 보는 기록(그림·대사에 안 들어갑니다)", rows: [
+    { key: "notes", label: "메모", lines: 2, top: true },
+  ] },
+];
+
 function ocEditor(oc) {
   const box = el("div", "editbox");
   const p = oc.profile || {};
-  const rows = [
-    { key: "name", label: "이름", value: oc.name || "", lines: 1 },
-    { key: "prompt_anchor", label: "그림 문장 (영어 — 모든 장면에 그대로 들어갑니다)",
-      value: oc.prompt_anchor || "", lines: 3 },
-    { key: "prompt_tags", label: "태그 (영어, 쉼표로 구분 — 얼굴·옷을 잡는 줄)",
-      value: (oc.prompt_tags || []).join(", "), lines: 2 },
-    { key: "hair", label: "머리 (한국어)", value: p.hair || "", lines: 1 },
-    { key: "eyes", label: "눈 (한국어)", value: p.eyes || "", lines: 1 },
-    { key: "wardrobe", label: "기본 복장 (한국어)", value: p.wardrobe || "", lines: 1 },
-    { key: "speech_style", label: "말투 (한국어 — 장면 대사가 이 말투로 나옵니다)",
-      value: p.speech_style || "", lines: 2 },
-  ];
   const inputs = {};
-  rows.forEach((r) => {
-    box.appendChild(el("p", "line", r.label));
-    const t = el("textarea");
-    t.rows = r.lines;
-    t.value = r.value;
-    inputs[r.key] = t;
-    box.appendChild(t);
+
+  OC_GROUPS.forEach((g) => {
+    box.appendChild(el("p", "note", "· " + g.title));
+    g.rows.forEach((r) => {
+      const cur = r.top ? oc[r.key] : p[r.key];
+      box.appendChild(el("p", "line", r.label));
+      const t = el("textarea");
+      t.rows = r.lines;
+      t.value = r.list ? ((cur || []).join ? (cur || []).join(", ") : String(cur || ""))
+                       : String(cur == null ? "" : cur);
+      inputs[r.key] = { el: t, spec: r };
+      box.appendChild(t);
+    });
   });
+
   const row = el("div", "row");
   const save = el("button", "go", "저장");
   save.type = "button";
   save.addEventListener("click", async () => {
     save.disabled = true;
-    const fields = {
-      name: inputs.name.value.trim(),
-      prompt_anchor: inputs.prompt_anchor.value.trim(),
-      prompt_tags: inputs.prompt_tags.value.split(",").map((s) => s.trim()).filter(Boolean),
-      profile: Object.assign({}, p, {
-        hair: inputs.hair.value.trim(), eyes: inputs.eyes.value.trim(),
-        wardrobe: inputs.wardrobe.value.trim(), speech_style: inputs.speech_style.value.trim(),
-      }),
-    };
+    /* **프로필은 통째로 보낸다.** 서버는 받은 프로필로 9칸을 다시 만들기 때문에
+     * (characters._clean_profile), 일부만 보내면 안 보낸 칸이 빈칸이 된다. */
+    const fields = { profile: {} };
+    Object.keys(inputs).forEach((k) => {
+      const { el: t, spec } = inputs[k];
+      const raw = t.value.trim();
+      const val = spec.list ? raw.split(",").map((x) => x.trim()).filter(Boolean) : raw;
+      if (spec.top) fields[k] = val;
+      else fields.profile[k] = val;
+    });
+    if (!fields.name) {
+      save.disabled = false;
+      addNote("이름은 비울 수 없습니다 — 매칭 화면에서 고를 수가 없습니다.", true);
+      return;
+    }
     try {
       await saveOc(oc.id, fields);
     } catch (e) {
@@ -2403,6 +2455,21 @@ function ocEditor(oc) {
   row.appendChild(cancel);
   box.appendChild(row);
   return box;
+}
+
+/* 빈 인물도 **이름부터** 받는다. 예전에는 '새 인물' 로 만들어 놓고 끝이라,
+ * 두 번 누르면 이름이 같은 인물이 둘 생겼다(실제로 그렇게 됐다). */
+async function addBlankOc() {
+  const name = (window.prompt("인물 이름 — 나중에 고칠 수 있습니다", "") || "").trim();
+  if (!name) return;
+  await saveOc("", { name: name });
+  /* 만들자마자 설정 칸을 연다 — 이름만 있는 인물은 그림에 아무 영향을 못 준다. */
+  const made = (S.oc || []).filter((x) => x.name === name).pop();
+  if (made) {
+    const card = Array.prototype.filter.call(
+      stream().querySelectorAll(".card"), (c) => c.textContent.indexOf(made.id) === 0)[0];
+    if (card && !card.querySelector(".editbox")) card.appendChild(ocEditor(made));
+  }
 }
 
 async function saveOc(id, fields) {

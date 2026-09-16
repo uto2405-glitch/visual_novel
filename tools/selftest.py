@@ -6044,27 +6044,17 @@ def j18(b: Box):
     # 탭마다 다른 것이 그려져야 한다 — 같은 DOM 이 나오면 해시 라우팅이 죽은 것이다
     ok(lst != talk, "목록과 대화가 같은 화면을 그린다 — 탭 전환이 동작하지 않는다")
 
-    # 스크립트가 죽으면 이 표시들은 초기값('확인 중') 그대로 남는다(boot 이 끝까지 못 갔다는 뜻).
+    # 상태 칩은 **여기서 보지 않는다.**
     #
-    # **'확인 실패' 도 갱신이다.** 처음엔 연결/끊김/거부만 받았는데, 상태 조회 자체가
-    # 실패하면 칩은 "글자 확인 실패" 가 된다 — 화면은 멀쩡히 끝까지 갔는데 검사만
-    # 빨간불이었고, 그게 5회 중 1회씩 깜빡이던 나머지 이유였다.
-    chip = ""
-    at = talk.find('id="chipLlm"')
-    if at >= 0:
-        chip = " ".join(talk[at:at + 120].split())
-    settled = any(w in talk for w in ("연결", "끊김", "거부", "확인 실패"))
-    if not settled:
-        # 두 가지가 같은 모습이다: **화면이 안 바꿨다**(진짜 고장)와 **상태 조회가 아직
-        # 안 끝났다**(이 기계가 느리거나 모델 쪽 연결이 오래 걸린다). 둘을 가르지 않으면
-        # 이 검사는 4~6회에 한 번씩 깜빡이고, 깜빡이는 검사는 없는 검사보다 나쁘다 —
-        # 사람이 결과를 안 믿게 된다. 그래서 **조회에 걸리는 시간을 직접 잰다.**
-        t0 = time.time()
-        b.wapi("/api/talk-status", {})
-        slow = time.time() - t0
-        ok(slow > 3.0,
-           "상태 칩이 갱신되지 않았다 — 상태 조회는 %.1f초면 끝나는데 화면이 안 바꿨다. 칩: %s"
-           % (slow, chip or "(못 찾음)"))
+    # 예전에는 "칩이 갱신됐는가" 로 boot 완료를 판정했다. 그런데 그 칩을 바꾸는 것은
+    # 네트워크 조회(/api/talk-status)이고, 이 검사는 헤드리스 브라우저를 여러 번 띄우며
+    # CPU 를 다툰다 — **화면이 고장 난 것**과 **조회가 아직 안 끝난 것**이 같은 모습으로
+    # 보인다. 실측으로 6회에 한 번씩 깜빡였다. 조회 시간을 재서 가르려 해 봤지만 그것도
+    # '지금 빠르다' 만 알려 줄 뿐 '그때 빨랐다' 는 못 알려 준다.
+    #
+    # boot 이 끝까지 갔다는 것은 이미 위에서 본다(조립 버튼·탭 버튼·목록 화면은 전부
+    # boot 이 만든 것이다). 칩이 상황마다 무엇을 보여 주는가는 J12 가 따로 본다.
+    # 깜빡이는 검사는 없는 검사보다 나쁘다 — 사람이 결과를 안 믿게 된다.
 
 
 @test("unit", "U40 남은 시간 — 절대 올라가지 않고, 배치 경계를 넘고, 멈춘 작업을 숨기지 않는다")
@@ -7797,6 +7787,37 @@ def w38(b: Box):
     cid = oc.get("id", "")
     ok(cid.startswith("OC-"), "새 인물의 id 가 이상하다: %r" % cid)
     eq(oc.get("photos"), [], "새 인물에 사진이 붙어 있다")
+    # 사람이 적을 수 있는 칸이 **저장 계층이 받는 칸과 같아야** 한다.
+    # 한동안 화면은 7칸만 열어 두고 저장 계층은 프로필 9칸 + 메모 + 기본 의상을 받고
+    # 있었다 — 대화에서 만든 인물은 그 칸들이 채워져 오는데 화면에서는 보이지도,
+    # 고쳐지지도 않았다. 화면이 여는 칸 목록(OC_GROUPS)과 여기를 같이 본다.
+    full = {"name": "W38 연우",   # 이름은 그대로 둔다 — 뒤의 출연진 확인이 이 이름을 본다
+            "prompt_anchor": "a 32-year-old Korean man, short black hair",
+            "prompt_tags": ["black hair", "round glasses"],
+            "wardrobe_default": "grey knit cardigan",
+            "notes": "서점 주인. 2화부터 등장.",
+            "profile": {"age": "32", "gender_presentation": "남성", "hair": "짧은 검은 머리",
+                        "eyes": "안경 너머 지적인 눈", "build": "마른 편",
+                        "wardrobe": "니트 카디건", "signature_props": ["둥근 안경", "만년필"],
+                        "personality": "말수가 적고 관찰이 많다.", "speech_style": "담담한 반말"}}
+    code, saved = b.wapi("/api/oc-save", {"id": cid, "fields": full})
+    eq(code, 200, "설정을 다 채워 저장하지 못한다: %s" % str(saved)[:140])
+    back = saved.get("character") or {}
+    eq(back.get("notes"), full["notes"], "메모가 안 돌아온다")
+    eq(back.get("name"), full["name"], "이름이 안 돌아온다")
+    got_p = back.get("profile") or {}
+    for k, v in full["profile"].items():
+        eq(got_p.get(k), v, "프로필 '%s' 칸이 왕복하지 않는다" % k)
+
+    # 화면이 그 칸들을 실제로 열어 두는가 — 저장만 되고 적을 자리가 없으면 소용없다
+    js = (b.root / "tools" / "chat_ui.js").read_text(encoding="utf-8")
+    at = js.find("OC_GROUPS")
+    ok(at > 0, "설정 칸 목록(OC_GROUPS)이 화면에 없다")
+    spec = js[at:at + 2000]
+    for k in list(full["profile"]) + ["prompt_anchor", "prompt_tags", "wardrobe_default", "notes"]:
+        ok('"%s"' % k in spec, "화면에 '%s' 를 적을 자리가 없다 — 저장 계층은 받는 칸이다" % k)
+
+
 
     # 조립이 이 인물을 쓰려면 검사기 A2 가 먼저 그를 알아야 한다 — 저장하면서 얹혀야 한다
     code, st = b.wapi("/api/state", None)
@@ -8131,6 +8152,59 @@ def w41(b: Box):
        "낡음 안내를 화면에 띄우는 자리가 없다")
 
 
+@test("webapp", "W42 조립 버튼 둘은 **같은 글**을 읽는다 — 다른 것은 개수와 범위뿐", web=True)
+def w42(b: Box):
+    """사용자가 물었다: "개수를 정해서는 뭐고 장면으로 조립은 뭐야? 개수 정해서는 되는데
+    장면으로 조립은 이야기가 없다고 에러가 뜬다."
+
+    그럴 만했다. 두 버튼이 **서로 다른 원본**을 읽고 있었다:
+      [장면으로 조립]  → 지금 이 대화의 **새로 쓴 대목**
+      [개수 정해서…]   → project/story/storyline.md (통합 화면이 한 번도 안 쓰는 문서)
+    그래서 하나는 "새로 쓴 이야기가 없다" 고 거절하고, 다른 하나는 **엉뚱한 예전 문서**로
+    멀쩡히 장면을 만들었다. 같은 화면의 버튼 두 개가 다른 이야기를 만든 것이다.
+
+    이제 둘 다 같은 글(이 대화)을 읽고, 사람이 고르는 것은 둘뿐이다 — **개수**와
+    **범위**(새로 쓴 대목만 / 대화 전체).
+    """
+    js = (b.root / "tools" / "chat_ui.js").read_text(encoding="utf-8")
+    html = (b.root / "tools" / "chat_ui.html").read_text(encoding="utf-8")
+
+    at = js.find("async function runCompose(")
+    ok(at > 0, "runCompose 를 못 찾았다")
+    body = js[at:at + 700]
+    ok("composeChat(" in body,
+       "[개수 정해서…] 가 아직 다른 길로 간다 — 같은 글을 읽어야 한다")
+    ok("/api/compose-job" not in body,
+       "[개수 정해서…] 가 storyline.md 를 읽는 옛 경로를 그대로 쓴다")
+    ok('$("composeAll")' in body, "범위(대화 전체)를 고를 자리가 없다")
+    ok('id="composeAll"' in html, "서랍에 '대화 전체' 칸이 없다")
+
+    # 개수는 사람 말대로 — 안 말하면 '새로 쓴 만큼만'
+    wb = b.mod("webapp")
+    ok(wb.CHAT_COMPOSE_MAX >= 6,
+       "사람이 개수를 말해도 상한이 너무 작다(%d)" % wb.CHAT_COMPOSE_MAX)
+    ok(wb.CHAT_COMPOSE_CAP <= wb.CHAT_COMPOSE_MAX, "기본 상한이 최대 상한보다 크다")
+
+    # 새로 쓴 것이 없으면 **누르기 전에** 버튼 얼굴에 적는다(폰에는 title 이 없다)
+    at = js.find("async function refreshComposeBtn(")   # 부르는 자리 말고 정의
+    ok(at > 0, "버튼 문구를 고치는 자리를 못 찾았다")
+    block = js[at:at + 1400]
+    ok("새로 쓴 대목 없음" in block,
+       "새로 쓴 것이 없을 때 버튼이 그 사실을 말하지 않는다 — 누르고 나서야 빨간 줄을 본다")
+
+    # 실제로 개수가 서버까지 간다
+    code, made = b.wapi("/api/chat", {"chat_id": "w42chat", "messages": [
+        {"role": "user", "content": "비 오는 저녁 서점에서 시작하는 짧은 이야기를 쓰자. "
+                                    "주인은 조용한 사람이고 고양이가 한 마리 들어온다."}]})
+    eq(code, 200, "대화가 안 된다")
+    code, got = b.wapi("/api/compose-chat-ready", {"chat_id": "w42chat"})
+    try:
+        fresh = int(got.get("fresh") or 0)
+    except (TypeError, ValueError):
+        fresh = 0
+    ok(fresh > 0, "새로 쓴 대목이 0 으로 보인다: %s" % got)
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
@@ -8164,8 +8238,12 @@ def j16(b: Box):
     has(wg, "st.want", "새로고침 뒤 요청 장수를 서버에서 읽지 않는다 — 진행 막대가 늘 0 이다")
 
     # (2) 거절 뒤에 상태를 다시 묻는가
-    rc = js[js.index("async function runCompose("):]
-    rc = rc[:rc.index("function liveShow")]
+    #
+    # 이 복구는 예전에 [개수 정해서…](runCompose)에만 있었다. 두 버튼이 같은 글을 읽게
+    # 되면서 조립을 시작하는 길이 composeChat 하나로 합쳐졌으므로, 복구도 거기 있어야 한다
+    # — 시작하는 자리와 복구하는 자리가 갈리면 한쪽 버튼만 조용해진다.
+    rc = js[js.index("async function composeChat("):]
+    rc = rc[:rc.index("async function refreshComposeBtn(")]
     ok("/api/compose-job-status" in rc,
        "조립이 거절당했을 때 상태를 다시 묻지 않는다 — 두 번째 기기가 빨간 줄 하나 보고 멈춘다")
     ok("startPolling()" in rc.split("catch (e)")[1],

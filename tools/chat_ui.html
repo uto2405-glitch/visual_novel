@@ -307,19 +307,23 @@ textarea:focus{outline:none;border-color:var(--jade-d)}
 <button class="jump" id="jump" type="button" hidden>맨 아래로</button>
 
 <section class="drawer" id="drawer">
-  <label>한 번에 조립할 장면 수
-    <input type="number" id="batch" value="3" min="1" max="6">
-    <span class="line">3개가 95~115초. 그 이상은 시간초과 위험이 커집니다.</span>
+  <label>만들 장면 수
+    <input type="number" id="total" value="6" min="1" max="12">
+    <span class="line">장면 하나에 30초대입니다(6개면 3분대).</span>
   </label>
-  <label>이번 회차에서 만들 장면 수
-    <input type="number" id="total" value="6" min="1" max="24">
+  <label>
+    <input type="checkbox" id="composeAll">
+    <span class="line">대화 <b>전체</b>로 만들기 — 끄면 <b>지난번 조립 이후 새로 쓴 대목만</b>.</span>
   </label>
+  <input type="hidden" id="batch" value="3">
   <div class="bar"><i id="bar"></i></div>
   <div class="row">
     <button id="runCompose" class="go" type="button">조립 시작</button>
     <button id="closeDrawer" type="button">닫기</button>
   </div>
-  <p class="line" id="drawerNote">모아서 한 번에 저장합니다. 개수가 맞지 않으면 저장 전에 멈춥니다.</p>
+  <p class="line" id="drawerNote">여기서 만드는 것도 <b>지금 이 대화</b>입니다 —
+    아래 [장면으로 조립] 과 같은 글을 읽고, 개수만 사람이 정합니다.
+    모아서 한 번에 저장하고, 개수가 맞지 않으면 저장 전에 멈춥니다.</p>
 </section>
 
 <footer>

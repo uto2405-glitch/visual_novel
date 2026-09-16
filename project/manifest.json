@@ -258,23 +258,29 @@
     },
     {
       "character_id": "OC-001",
-      "name": "새 인물",
+      "name": "민호",
       "version": 1,
       "profile": {
-        "age": "",
-        "gender_presentation": "",
-        "hair": "",
-        "eyes": "",
-        "build": "",
-        "wardrobe": "",
-        "signature_props": [],
-        "personality": "",
-        "speech_style": ""
+        "age": "32",
+        "gender_presentation": "남성",
+        "hair": "짧은 검은 머리",
+        "eyes": "안경 너머 지적인 눈",
+        "build": "마른 편",
+        "wardrobe": "니트 카디건",
+        "signature_props": [
+          "둥근 안경",
+          "만년필"
+        ],
+        "personality": "말수가 적고 관찰이 많다.",
+        "speech_style": "담담한 반말"
       },
       "reference_images": [],
-      "prompt_anchor": "",
-      "prompt_tags": [],
-      "wardrobe_default": "",
+      "prompt_anchor": "a 32-year-old Korean man, short black hair, round glasses",
+      "prompt_tags": [
+        "black hair",
+        "round glasses"
+      ],
+      "wardrobe_default": "grey knit cardigan",
       "wardrobe_variants": []
     },
     {
