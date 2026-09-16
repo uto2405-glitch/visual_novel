@@ -1264,6 +1264,40 @@ def r_gen_cost(b):
                           "ComfyUI 로만 갑니다." if faces else "")}
 
 
+def r_make_video(b):
+    """고른 컷 → 영상 한 편 (MakeFun · **유료**).
+
+    두 가지를 부르기 전에 **사람이 알아야** 한다. 그래서 화면이 먼저 묻고, 여기서는
+    그 동의가 실려 왔는지 확인만 한다:
+      * 돈이 나간다(크레딧 차감).
+      * **컷이 이 기계 밖으로 나간다** — 공급자가 URL 만 받으므로 그쪽 저장소에 올린다.
+        그 컷에 사람 얼굴이 있으면 그 얼굴이 함께 나간다.
+
+    응답 형식이 명세에 없어 **첫 호출은 확인을 겸한다**(원문이 로그에 남는다).
+    """
+    sid = _require_scene(b.get("scene_id")) and str(b.get("scene_id"))
+    if not bool(b.get("confirm_paid")) or not bool(b.get("confirm_upload")):
+        raise VNError("영상은 유료이고 고른 컷이 공급자 서버로 올라갑니다 — "
+                      "화면에서 두 가지를 모두 확인해 주세요.")
+    if not os.environ.get(makefun_client.TOKEN_ENV, "").strip():
+        raise VNError("%s 환경변수가 없습니다 — MakeFun 키를 넣고 스튜디오를 다시 켜 주세요."
+                      % makefun_client.TOKEN_ENV)
+    seconds = int(b.get("seconds") or 5)
+    if seconds not in makefun_client.VIDEO_TIMES:
+        raise VNError("영상 길이는 %s초 중에서 고릅니다."
+                      % ", ".join(str(x) for x in makefun_client.VIDEO_TIMES))
+
+    def work():
+        gen_jobs.note(sid, "MakeFun 에 영상 요청 중… (유료)")
+        return makefun_client.video_for_scene(
+            sid, seconds=seconds, prompt=str(b.get("prompt") or ""),
+            model_version=str(b.get("model_version") or ""), quiet=True)
+
+    # 같은 장면에 두 번 시키지 않는다 — 그림과 같은 잠금을 쓴다(유료라 더 중요하다).
+    return gen_jobs.start(sid, work, "영상", sync=bool(b.get("sync")), count=1,
+                          message="MakeFun 영상 생성 중… 몇 분 걸립니다(유료).")
+
+
 def r_image_engine(b):
     """이미지 엔진 상태 — {engine, provider, ok, detail, checkpoints, model, billable}.
 
@@ -1803,6 +1837,7 @@ POST_ROUTES = {
     "/api/oc-photo": r_oc_photo, "/api/oc-photo-delete": r_oc_photo_delete,
     "/api/cast": r_cast, "/api/oc-from-chat": r_oc_from_chat,
     "/api/compose-text": r_compose_text, "/api/gen-cost": r_gen_cost,
+    "/api/make-video": r_make_video,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/export-pwa": r_export_pwa,

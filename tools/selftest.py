@@ -7306,6 +7306,106 @@ def m15(b: Box):
     raises(lambda: mk.quote(mk.P_T2I_START, "본문아님"), label="본문이 dict 가 아닌 경우")
 
 
+@test("makefun", "M16 영상 — 요청은 명세대로, 응답은 모르는 채로 안전하게, 실패해도 작업 id 는 남는다")
+def m16(b: Box):
+    """출처: 노트북 보존본 `scratch/makefun_spec.json` — A2E Developer API v1.0.0, 2026-08.
+
+    이 경로는 이 저장소에서 처음으로 **요청은 확정이고 응답은 미확정**인 기능이다.
+    `/api/v1/userImage2Video/start` 와 `GET /{_id}` 의 200 스키마가 둘 다 `{"type":"object"}`
+    에 example `{}` 다 — 작업 id 도 mp4 URL 도 어느 필드인지 명세가 말해 주지 않는다.
+    그래서 지키는 것이 셋이다.
+
+    (1) **요청은 명세대로.** 특히 `model_version` 을 반드시 싣는다. 원문: *"Ultra users
+        default to a2e-v2 … a2e-v2 costs more per second"* — 값을 비우면 계정 등급에 따라
+        단가가 달라진다. 같은 버튼이 사람마다 다른 돈을 쓰면 화면은 아무것도 약속할 수 없다.
+
+    (2) **모르는 응답에 이름을 붙이지 않는다.** 관용 파서로 찾고, 못 찾으면 **응답을 담아
+        던진다.** 조용히 빈손으로 돌아가면 이미 과금된 작업을 영영 못 찾는다.
+
+    (3) **실패해도 대장에 남는다.** 유료 경로에서 조용한 실패는 곧 잃어버린 돈이다 —
+        작업 id 하나가 재과금 없이 결과를 되찾는 유일한 단서다.
+    """
+    mk = b.mod("makefun_client")
+
+    # (1) 요청 본문 — 길이는 허용값으로 내리고(올리면 돈이 더 든다), 모델은 반드시 실린다
+    body = mk.video_body("https://cdn.example/a.png", "달빛", seconds=7)
+    eq(body["video_time"], 5, "7초를 그대로 보냈다 — 서버 처리가 미정의인 값이다")
+    eq(mk.video_body("https://x/a.png", seconds=25)["video_time"], 20, "상한을 넘겨 보냈다")
+    eq(mk.video_body("https://x/a.png", seconds=15)["video_time"], 15, "허용값을 바꿔 버렸다")
+    ok(body.get("model_version") in mk.VIDEO_MODELS,
+       "model_version 을 안 싣는다 — 계정 등급에 따라 단가가 달라진다")
+    eq(mk.video_body("https://x/a.png", end_image_url="https://x/b.png")["model_type"], "FLF2V",
+       "끝 컷을 줬는데 보간 모드로 안 간다")
+    raises(lambda: mk.video_body("http://x/a.png"), label="평문 http 원본")
+    raises(lambda: mk.video_body("https://x/a.png", model_version="gpt-5"), label="모르는 모델")
+
+    # (2) 응답을 모를 때 — 조용히 넘어가지 않는다
+    with mf_stub(mk, lambda m, p_, bd: {"data": {"nothing": 1}}):
+        e = raises(lambda: mk.video_start("https://x/a.png"), label="id 없는 응답")
+        ok("응답" in str(e), "id 를 못 찾았는데 응답을 안 보여 준다: %s" % str(e)[:80])
+
+    def api_done_without_url(m, p_, bd):
+        if p_.endswith("/start"):
+            return {"data": {"_id": "vid_abc123"}}
+        return {"data": {"_id": "vid_abc123", "current_status": "completed"}}
+
+    with mf_stub(mk, api_done_without_url):
+        e = raises(lambda: mk.video_result("vid_abc123", max_sec=30), label="주소 없는 완료")
+        ok("주소" in str(e), "끝났다는데 결과가 없을 때 조용하다: %s" % str(e)[:80])
+
+    # 정상 흐름 — URL 은 '찾아서' 쓴다(필드 이름을 코드가 단정하지 않는다)
+    def api_ok(m, p_, bd):
+        if "presigned" in p_:      # 컷을 올려야 주소가 생긴다(공급자는 URL 만 받는다)
+            return {"data": {"uploadUrl": "https://up.example/put",
+                             "cdnUrl": "https://cdn.example/in.png"}}
+        if p_.endswith("/start"):
+            return {"data": {"_id": "vid_abc123"}}
+        # 보낸 그림이 그대로 돌아온다 — 결과로 착각하면 돈 내고 원본을 돌려받는다
+        return {"data": {"_id": "vid_abc123", "current_status": "completed",
+                         "source": "https://cdn.example/in.png",
+                         "이상한이름": "https://cdn.example/out.mp4"}}
+
+    with mf_stub(mk, api_ok):
+        got = mk.video_result("vid_abc123", max_sec=30)
+    eq(got["urls"][0], "https://cdn.example/out.mp4",
+       "필드 이름이 낯설다고 결과를 못 찾는다(명세에 이름이 없다) — 또는 영상이 첫째가 아니다")
+    with mf_stub(mk, api_ok):
+        only = mk.video_result("vid_abc123", max_sec=30, source_url="https://cdn.example/in.png")
+    ok("https://cdn.example/in.png" not in only["urls"],
+       "보낸 그림이 결과 목록에 남아 있다 — 돈 내고 원본을 돌려받을 수 있다")
+
+    # (3) 장면 경로 — 저장 + 대장, 그리고 실패해도 작업 id 가 남는다
+    mp4 = b"\\x00\\x00\\x00\\x18ftypmp42" + b"0" * 64
+    with fresh_scene(b) as sid:
+        raw = b.root / "images" / "raw" / sid
+        raw.mkdir(parents=True, exist_ok=True)
+        cut = raw / "mf_pick_1.png"
+        cut.write_bytes(_png_bytes())
+        sc_path = b.root / "project" / "scenes" / (sid + ".json")
+        sc = read_json(sc_path)
+        sc.setdefault("assets", {})["raw_images"] = ["images/raw/%s/%s" % (sid, cut.name)]
+        sc["assets"]["selected_image"] = "images/raw/%s/%s" % (sid, cut.name)
+        sc_path.write_text(json.dumps(sc, ensure_ascii=False), encoding="utf-8")
+
+        n0 = _usage_len(b)
+        with mf_stub(mk, api_ok, fetch=lambda url: mp4, put=lambda req: None):
+            res = mk.video_for_scene(sid, seconds=10, quiet=True)
+        ok(res["file"].endswith(".mp4"), "mp4 를 저장하지 않았다: %s" % res["file"])
+        ok((b.root / res["file"]).is_file(), "저장했다는 파일이 없다")
+        # 업로드(R2)도 대장에 남으므로 **영상 줄을 골라서** 본다
+        rows = [r for r in _usage_tail(b, n0) if r.get("kind") == "image2video"]
+        eq(len(rows), 1, "영상 한 줄이 대장에 남지 않았다: %s"
+                         % [r.get("kind") for r in _usage_tail(b, n0)])
+        eq(rows[0]["billable"], True, "유료인데 대장이 무료라고 한다")
+        eq(rows[0]["task_id"], "vid_abc123", "대장에 작업 id 가 없다 — 되찾을 단서가 사라진다")
+
+        # 고른 컷이 없으면 아예 시작하지 않는다(돈이 나가기 전에 멈춘다)
+        sc["assets"]["selected_image"] = ""
+        sc_path.write_text(json.dumps(sc, ensure_ascii=False), encoding="utf-8")
+        e = raises(lambda: mk.video_for_scene(sid, quiet=True), label="고른 컷 없음")
+        ok("고른" in str(e), "왜 못 만드는지 말하지 않는다: %s" % str(e)[:60])
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —

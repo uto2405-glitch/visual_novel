@@ -1161,6 +1161,16 @@ function sceneCard(sc) {
   many.addEventListener("click", () => genFor(sc.scene_id, many, 4));
   row.appendChild(many);
 
+  /* 영상은 **고른 컷이 있을 때만** 보인다. 유료이고, 고르지 않은 컷으로 돈을 쓰면
+   * 그건 사람이 시킨 적 없는 지출이다. MakeFun 을 쓸 수 있는 기계에서만 보인다. */
+  if (sc.selected_image && (((S.state && S.state.image) || {}).engines || []).includes("makefun")) {
+    const mv = el("button", null, "영상으로 · 유료");
+    mv.type = "button";
+    mv.title = "고른 컷을 움직이게 만듭니다(MakeFun · 크레딧이 듭니다). 컷이 공급자 서버로 올라갑니다.";
+    mv.addEventListener("click", () => makeVideo(sc, mv));
+    row.appendChild(mv);
+  }
+
   if (sc.selected_image && sc.status !== "APPROVED") {
     const ap = el("button", null, "승인");
     ap.type = "button";
@@ -1225,6 +1235,53 @@ async function approve(sid, btn) {
  * 끝낼 수 있다. 총 시간이 줄어드는 게 아니라, 계속할지 내가 정하게 되는 것이다.
  *
  * 고르는 것은 여전히 사람이다. 자동 선택은 하지 않는다. */
+/* 고른 컷을 움직이게 한다 — MakeFun · 유료.
+ *
+ * 버튼을 고른 컷이 있는 장면에만 두는 이유: 후보 중 무엇을 쓸지는 사람이 정하는 일이고,
+ * 영상은 돈이 든다. 고르지 않은 컷으로 돈을 쓰면 그건 사람이 시킨 적 없는 지출이다. */
+async function makeVideo(sc, btn) {
+  const sid = sc.scene_id;
+  let cost = {};
+  try { cost = await api("/api/gen-cost", { scene_id: sid, engine: "makefun" }); } catch (e) { cost = {}; }
+  if (!window.confirm(
+    sid + " 의 고른 컷으로 영상을 만듭니다 (MakeFun · 유료).\n\n"
+    + (cost.note || "유료 호출입니다 — 크레딧이 차감됩니다.")
+    + (quoteLine(cost) ? "\n" + quoteLine(cost) : "")
+    + "\n\n계속할까요?")) return;
+  if (!window.confirm(
+    "한 가지 더 확인합니다.\n\n"
+    + "공급자는 주소만 받기 때문에 **고른 컷을 그쪽 서버에 올립니다** — 그림이 이 기계 밖으로 "
+    + "나갑니다. 그 컷에 사람 얼굴이 있으면 얼굴도 함께 나갑니다.\n\n계속할까요?")) return;
+  const secs = parseInt(window.prompt("영상 길이(초) — 5 · 10 · 15 · 20 중에서", "5") || "5", 10);
+  if (![5, 10, 15, 20].includes(secs)) { addNote("5 · 10 · 15 · 20 초 중에서 고릅니다.", true); return; }
+  if (btn) btn.disabled = true;
+  liveShow(sid + " · 영상 " + secs + "초 만드는 중… (유료 · 몇 분 걸립니다)", [], 0);
+  try {
+    const r = await api("/api/make-video", { scene_id: sid, seconds: secs,
+                                             confirm_paid: true, confirm_upload: true,
+                                             sync: true });
+    liveHide();
+    addNote("영상을 만들었습니다 — " + (r.file || "") + " (작업 " + (r.task_id || "") + ")");
+    await refresh();
+    showView("scenes");
+  } catch (e) {
+    liveHide();
+    addNote(String(e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* 견적이 켜져 있으면 받은 숫자를 **필드명째** 보여 준다. 이름을 붙이지 않는 이유는
+ * 어느 필드가 '장당 크레딧' 인지 명세에 없기 때문이다 — 모르는 것을 아는 척하면
+ * 사람은 그 숫자를 믿고 돈 쓰는 결정을 한다. */
+function quoteLine(cost) {
+  const rows = (cost && cost.quote) || [];
+  if (!rows.length) return "";
+  return "견적: " + rows.map((r) => r.field + "=" + r.value).join(" · ")
+         + (cost.quote_note ? ("\n" + cost.quote_note) : "");
+}
+
 async function genFor(sid, btn, want) {
   if (S.gen) return;
   const n = Math.max(1, Math.min(parseInt(want, 10) || 1, 4));

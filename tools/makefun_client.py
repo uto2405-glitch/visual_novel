@@ -100,6 +100,14 @@ P_CREDITS = "/api/v1/transactionRecord/creditsHistory"
 # 생성 전 견적. 명세(A2E Developer API v1.0.0)가 "작업을 만들지도, 공급자를 부르지도,
 # 크레딧을 차감하지도 않는다" 고 못박은 경로다 — 그래서 누르기 전에 물어볼 수 있다.
 P_QUOTE = "/api/v1/generation/quote"
+# 컷 한 장 → 움직이는 컷. 요청 쪽은 명세로 확정되지만 **응답 쪽은 비어 있다**
+# ({"type":"object"} · example {}) — 작업 id 도 mp4 URL 도 어느 필드인지 모른다.
+# 업스케일과 같은 상황이라 같은 방식으로 간다(관용 파서 + 모르면 응답을 담아 던지기).
+P_I2V_START = "/api/v1/userImage2Video/start"
+P_I2V_TASK = "/api/v1/userImage2Video/"
+P_I2V_RECORDS = "/api/v1/userImage2Video/allRecords"
+VIDEO_TIMES = (5, 10, 15, 20)          # 명세: min 5 · max 20 · 기본 5 (설명에 이 넷)
+VIDEO_MODELS = ("a2e", "a2e-v2", "a2e-v2-flash")
 
 # ---------------------------------------------------------------- NSFW 안전장치
 # 공급자 명세에 이런 파라미터가 있다:
@@ -1047,6 +1055,185 @@ def wait(task_id: str, max_sec: int = POLL_MAX_SEC,
                 pass
     raise VNError(f"생성 대기 시간 초과({max_sec}초) — 작업 {task_id} "
                   f"(--refetch 로 나중에 다시 받을 수 있습니다)")
+
+
+def video_body(image_url: str, prompt: str = "", *, seconds: int = 5,
+               model_version: str = "", negative: bool = True, end_image_url: str = "",
+               quiet: bool = True) -> dict:
+    """userImage2Video 요청 본문 한 벌.
+
+    **model_version 을 반드시 실어 보낸다.** 명세 원문이 이렇다: *"Ultra users default to
+    a2e-v2 and other roles default to a2e. a2e-v2 costs more per second; a2e-v2-flash uses
+    a2e pricing."* 즉 값을 비우면 **계정 등급에 따라 단가가 달라진다** — 같은 버튼을 눌러도
+    사람마다 다른 돈이 나가고, 그건 화면이 무엇을 약속해도 지킬 수 없다는 뜻이다.
+    """
+    src = str(image_url or "").strip()
+    if not src.startswith("https://"):
+        raise VNError(f"https 가 아닌 주소는 영상 원본으로 쓸 수 없습니다: {src[:80]}")
+    try:
+        secs = int(seconds)
+    except (TypeError, ValueError):
+        secs = 5
+    if secs not in VIDEO_TIMES:
+        # 명세는 min/max 만 걸고 5·10·15·20 은 설명에만 있다. 그 사이 값(7초)을 서버가
+        # 어떻게 처리하는지는 미정의라, **가까운 허용값으로 내린다**(올리면 돈이 더 든다).
+        allowed = [t for t in VIDEO_TIMES if t <= max(5, min(secs, 20))]
+        secs = allowed[-1] if allowed else 5
+        _say(f"  영상 길이를 {secs}초로 맞춥니다(허용: {', '.join(map(str, VIDEO_TIMES))}).", quiet)
+    ver = str(model_version or _cfg().get("video_model", "") or "a2e").strip()
+    if ver not in VIDEO_MODELS:
+        raise VNError(f"모르는 영상 모델입니다: {ver!r} (가능: {', '.join(VIDEO_MODELS)})")
+    body = {"image_url": src, "video_time": secs, "model_version": ver,
+            "number_of_images": 1}
+    text = str(prompt or "").strip()
+    if text:
+        body["prompt"] = apply_negative(text, negative) if negative else text
+    tail = str(end_image_url or "").strip()
+    if tail:
+        body["model_type"] = "FLF2V"      # 첫 컷 → 끝 컷 보간
+        body["end_image_url"] = tail
+    return body
+
+
+_VIDEO_EXT = (".mp4", ".webm", ".mov", ".m4v")
+
+
+def video_urls_in(rec, skip: str = "") -> list:
+    """영상 응답에서 **결과처럼 생긴 주소**를 모은다 — 필드 이름이 아니라 값으로 찾는다.
+
+    다른 경로는 이름으로 찾아도 된다(`_urls_in`). 여기는 그럴 수가 없다 — 이 경로의 응답
+    스키마가 명세에 통째로 비어 있어서, 우리가 아는 이름 목록에 결과가 들어 있으리라는
+    근거가 없다. 그래서 값을 훑는다.
+
+    두 가지를 조심한다:
+      * **보낸 그림이 그대로 돌아올 수 있다.** 그걸 결과로 착각하면 영상 대신 원본 png 를
+        내려받아 mp4 라는 이름으로 저장한다 — 사람은 돈을 내고 원본을 돌려받는다.
+      * 영상 확장자를 **앞**에 둔다. 섬네일 같은 것이 같이 와도 첫 번째가 영상이 되도록.
+    """
+    out: list = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+        elif isinstance(node, str):
+            u = node.strip()
+            if u.startswith("https://") and u not in out and u != str(skip or "").strip():
+                out.append(u)
+
+    walk(rec)
+    vids = [u for u in out if u.lower().split("?")[0].endswith(_VIDEO_EXT)]
+    return vids + [u for u in out if u not in vids]
+
+
+def video_start(image_url: str, prompt: str = "", **kw) -> str:
+    """영상 생성 시작 → 작업 id. **유료 호출이다.**
+
+    응답 스키마가 명세에 비어 있어 id 가 어느 필드인지 모른다. 관용 파서로 찾고,
+    **못 찾으면 응답을 담아 던진다** — 조용히 실패하면 이미 과금된 작업을 영영 못 찾는다.
+    그리고 첫 호출의 응답을 통째로 로그에 남긴다: 그 한 번이 이 미지를 끝낸다.
+    """
+    quiet = bool(kw.pop("quiet", True))
+    body = video_body(image_url, prompt, quiet=quiet, **kw)
+    d = _call("POST", P_I2V_START, body, idempotent=False, quiet=quiet)
+    log.info("영상 시작 응답(원문 일부) — 형식 확인용: %s", _trim(d, 400))
+    if d.get("success") is False:
+        raise VNError("영상 생성 시작이 거부됐습니다 — 응답: " + _trim(d))
+    rec = _as_rec(d.get("data"))
+    vid = _pick(rec, _ID_FIELDS) or _pick(d, _ID_FIELDS)
+    if not vid:
+        raise VNError("영상 작업 id 를 찾지 못했습니다(명세에 응답 스키마가 없습니다) — "
+                      "응답 원문: " + _trim(d, 300))
+    return _uid_ok(vid)
+
+
+def video_result(vid: str, max_sec: int = 900, quiet: bool = True,
+                 source_url: str = "") -> dict:
+    """영상 작업을 기다렸다가 결과 → {id, status, urls, raw}.
+
+    mp4 URL 이 어느 필드인지도 명세에 없다. 그래서 **URL 처럼 생긴 것을 전부 모아** 돌려주고,
+    고르는 것은 부르는 쪽에 맡긴다. 다 끝났는데 URL 이 하나도 없으면 조용히 빈손으로
+    돌아가지 않고 응답을 담아 던진다 — 이미 돈이 나갔기 때문이다.
+    """
+    vid = _uid_ok(vid)
+    deadline = time.time() + max(30, int(max_sec))
+    last: dict = {}
+    while True:
+        try:
+            d = _call("GET", P_I2V_TASK + urllib.parse.quote(vid), timeout=30, quiet=quiet)
+            rec = _as_rec(d.get("data")) or (d if isinstance(d, dict) else {})
+        except VNError as exc:
+            log.warning("영상 상세 조회 실패 — 목록으로 넘어갑니다: %s", exc)
+            rec = {}
+        if not rec:
+            d = _call("GET", P_I2V_RECORDS + "?pageNum=1&pageSize=50", timeout=30, quiet=quiet)
+            for it in _as_list(d.get("data")) or _as_list(d):
+                if isinstance(it, dict) and _pick(it, _ID_FIELDS) == vid:
+                    rec = it
+                    break
+        last = rec or last
+        st = _pick(rec, _STATUS_FIELDS).lower()
+        urls = video_urls_in(rec, skip=source_url)
+        if st in ("completed", "success", "succeeded", "done", "finished") or (urls and not st):
+            if not urls:
+                raise VNError("영상이 끝났다는데 결과 주소가 없습니다(명세에 응답 스키마가 "
+                              "없습니다) — 응답 원문: " + _trim(rec, 300))
+            log.info("영상 완료 응답(원문 일부) — 형식 확인용: %s", _trim(rec, 400))
+            return {"id": vid, "status": st or "completed", "urls": urls, "raw": rec}
+        if st in ("failed", "error", "cancelled", "canceled"):
+            raise VNError(f"영상 생성이 실패했습니다(작업 {vid}) — 응답: " + _trim(rec, 200))
+        if time.time() > deadline:
+            raise VNError(f"영상이 제한 시간 안에 끝나지 않았습니다(작업 {vid}). "
+                          "돈은 이미 나갔으므로 이 id 로 나중에 결과를 받을 수 있습니다.")
+        time.sleep(POLL_SEC)
+
+
+def video_for_scene(scene_id: str, *, seconds: int = 5, prompt: str = "",
+                    model_version: str = "", quiet: bool = True) -> dict:
+    """장면의 **고른 컷**으로 영상 한 편 → 저장 경로와 주소.
+
+    고른 컷만 쓰는 이유: 후보 중 무엇을 쓸지는 사람이 정하는 일이고(승인 게이트),
+    영상은 유료다 — 고르지 않은 컷으로 돈을 쓰면 그 돈은 사람이 시킨 적이 없다.
+
+    컷은 **밖으로 나간다.** 공급자가 URL 만 받으므로 R2 에 먼저 올려야 하고, 그 컷에는
+    사람 얼굴이 들어 있을 수 있다(PhotoMaker 로 얼굴을 고정했다면 실존 인물의 얼굴이다).
+    그래서 부르는 쪽이 사람에게 먼저 묻는다 — 이 함수는 묻지 않는다(부르면 나간다).
+
+    응답 형식이 명세에 없어 **첫 호출의 원문을 로그에 남긴다.** 그 한 번으로 확정된다.
+    """
+    sc = _load_scene(scene_id)
+    rel = selected_of(sc)
+    if not rel:
+        raise VNError(f"{scene_id} 에 고른 컷이 없습니다 — 먼저 후보 중 하나를 고르세요.")
+    src = ROOT / rel
+    if not src.is_file():
+        raise VNError(f"고른 컷 파일이 없습니다: {rel}")
+    url = upload_file(src, quiet=quiet)
+    vid, err, saved = "", "", None
+    try:
+        vid = video_start(url, prompt or str(sc.get("purpose", "") or ""),
+                          seconds=seconds, model_version=model_version, quiet=quiet)
+        got = video_result(vid, quiet=quiet, source_url=url)
+        out_dir = RAW_DIR / scene_id / "video"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        data = _fetch_bytes(got["urls"][0], 300)
+        saved = out_dir / f"mf_{vid[-6:]}.mp4"
+        saved.write_bytes(data)
+    except VNError as exc:
+        err = str(exc)[:300]
+        raise
+    finally:
+        # 대장은 성공·실패 둘 다 남긴다. 실패해도 **돈은 이미 나갔을 수 있고**, 그때
+        # 남은 작업 id 하나가 재과금 없이 결과를 되찾는 유일한 단서다.
+        log_usage({"kind": "image2video", "scene_id": scene_id, "task_id": vid,
+                              "requested": 1, "saved": 1 if saved else 0,
+                              "ok": bool(saved), "model": model_version or "a2e",
+                              "seconds": seconds, "billable": True, "error": err})
+    return {"scene_id": scene_id, "task_id": vid, "seconds": seconds,
+            "file": saved.relative_to(ROOT).as_posix()}
 
 
 def _fetch_bytes(url: str, timeout: int) -> bytes:
