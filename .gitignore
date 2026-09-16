@@ -41,6 +41,9 @@ project/story/memory_*.json
 
 # 재구성 백업 잔재 (backups/ 로 이관 전 과거 흔적)
 project/scenes_backup_*/
+# 지운 장면의 보관소 — 그림이 통째로 들어 있어서 커밋에 실리면 안 된다.
+# (되돌리려면 디스크에서 꺼내 다시 넣으면 된다 — 장면 파일과 컷 폴더가 그대로 있다.)
+project/scenes_deleted/
 
 # 작품 보관소(works.py) — **장면은 추적하고 그림은 안 한다.**
 #

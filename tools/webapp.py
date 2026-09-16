@@ -817,6 +817,28 @@ def r_set_crop(b):
     return scene_ops.set_crop(b.get("scene_id"), anchor)
 
 
+def r_scene_add(b):
+    """맨 뒤에 빈 장면을 하나 만든다 — 내용은 장면 탭에서 바로 고친다."""
+    fields = b.get("fields") if isinstance(b.get("fields"), dict) else {}
+    with WRITE_LOCK:
+        sc = scene_ops.create_scene(fields={"purpose": str(fields.get("purpose") or "새 장면"),
+                                            "status": "SCENE_PLAN"})
+    return {"scene_id": sc.get("scene_id"), "scene_order": sc.get("scene_order")}
+
+
+def r_scene_delete(b):
+    """장면 삭제 — 버리지 않고 project/scenes_deleted/ 로 옮긴다(승인된 장면은 거절)."""
+    sid = b.get("scene_id")
+    _require_scene(sid)
+    busy = gen_jobs.running()
+    if sid in busy:
+        raise VNError(f"{sid} 은 지금 그림을 굽는 중입니다 — 끝난 뒤에 지우세요.")
+    with WRITE_LOCK:
+        res = scene_ops.delete_scene(sid, str(b.get("reason") or ""))
+    log.info("장면 삭제 %s → %s", sid, res.get("archived_to"))
+    return res
+
+
 def r_set_scene(b):
     """장면 내용 편집 — {scene_id, fields:{...}}.
 
@@ -1433,6 +1455,7 @@ POST_ROUTES = {
     "/api/compose-manual": r_compose_manual, "/api/scene-brief": r_scene_brief,
     "/api/set-prompt": r_set_prompt, "/api/preflight": r_preflight, "/api/export": r_export,
     "/api/set-crop": r_set_crop, "/api/set-scene": r_set_scene,
+    "/api/scene-add": r_scene_add, "/api/scene-delete": r_scene_delete,
     "/api/register-images": r_register, "/api/select": r_select,
     "/api/approve": r_approve, "/api/check": r_check, "/api/lint": r_lint,
     "/api/export-viewer": r_export_viewer, "/api/export-pwa": r_export_pwa,

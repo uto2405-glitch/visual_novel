@@ -21,6 +21,7 @@ webapp 의 r_* 와 advance_scene 의 cmd_* 는 이 함수들을 부르는 얇은
   approve(sid)                                    REVIEW_HUMAN → APPROVED (FAIL 시 롤백)
   revise(sid, stage, note="")                     이전 단계로 되돌림(자료 보존)
   update_fields(sid, fields)                      장면 계획 필드 병합 저장(화이트리스트)
+  delete_scene(sid, reason="")                    장면 삭제 — 버리지 않고 scenes_deleted/ 로 옮긴다
   set_crop(sid, anchor)                           인화 크롭 기준점(승인 잠금의 유일한 예외)
   record_generation_tasks(sid, tasks, size=None)  생성 task id 기록(assets 쓰기의 유일한 통로)
   assert_mutable(sid, what)                       승인 잠금 사전 점검(문구 한 벌) → 장면 dict
@@ -469,6 +470,48 @@ def fix_anchor_text(sc: dict, text: str) -> tuple[str, list[str]]:
     text, dropped = _drop_bare_ids(text, [r for r, _a in scene_anchors(sc)])
     touched.extend(dropped)
     return text, touched
+
+
+def delete_scene(sid: str, reason: str = "") -> dict:
+    """장면 하나를 지운다 — **버리지 않고 보관소로 옮긴다.**
+
+    장면과 그 그림은 다시 만들 수 없다(그림 한 장에 23초, 승인은 사람의 시간이다).
+    그래서 이 모듈의 다른 되돌릴 수 없는 동작들과 같은 규칙을 쓴다: 지우는 대신 옮긴다.
+    ``project/scenes_deleted/<시각>/`` 에 장면 파일과 그 컷 폴더가 통째로 들어간다.
+
+    **승인된 장면은 거절한다.** 사람 승인 게이트를 지우기로 우회할 수 있으면 그 게이트는
+    없는 것과 같다 — 되돌리려면 revise 를 거쳐야 하고, 그것 자체가 기록으로 남는다.
+
+    번호는 다시 매기지 않는다. SCENE-003 을 지워도 004 는 004 로 남는다 — 번호를 당기면
+    이미 구운 그림 폴더(images/raw/SCENE-004)와 감상본의 이동 대상(goto)이 전부 어긋난다.
+    """
+    path = _require(sid)
+    with _LOCK:
+        sc = _load(path)
+        _deny_if_approved(sc, sid, "장면을 지우려면")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        home = vn_core.PROJECT / "scenes_deleted" / f"{stamp}_{sid}"
+        home.mkdir(parents=True, exist_ok=True)
+        moved = {"scene": False, "images": 0}
+        try:
+            path.replace(home / path.name)
+            moved["scene"] = True
+        except OSError as exc:
+            raise VNError(f"{sid} 를 보관소로 옮기지 못했습니다 — 지우지 않았습니다. ({exc})")
+        folder = vn_core.IMAGES_RAW / sid
+        if folder.is_dir():
+            try:
+                n = sum(1 for _ in folder.rglob("*") if _.is_file())
+                folder.replace(home / "images_raw")
+                moved["images"] = n
+            except OSError:
+                pass            # 그림을 못 옮겨도 장면은 이미 보관됐다 — 반쯤은 살린다
+        if reason:
+            try:
+                (home / "why.txt").write_text(str(reason)[:500], encoding="utf-8")
+            except OSError:
+                pass
+    return {"scene_id": sid, "archived_to": home.name, **moved}
 
 
 def set_prompt(sid: str, text: str, fix_anchors: bool = False) -> dict:

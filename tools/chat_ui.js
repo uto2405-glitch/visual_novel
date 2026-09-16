@@ -79,6 +79,8 @@ const S = {
   gen: false,        // 그림을 굽는 중 (굽기 버튼만 잠김)
   works: {},         // 대화 id → 그 대화가 가진 장면 수
   work: "",          // 지금 올라와 있는 작품의 대화 id
+  style: "",         // 고른 그림체 키("" = 매니페스트 그대로)
+  styles: [],        // 쓸 수 있는 그림체 목록
 };
 
 /* 기다리는 동안 보내기 버튼을 중지로 바꾼다. 눈앉을 띄지 않고 누를 수 있는 자리가 거기뿐이다. */
@@ -346,7 +348,15 @@ async function askServer() {
       return;
     }
     S.msgs.push({ role: "assistant", content: reply });
-    refreshComposeBtn();
+    /* 그림체 목록을 **그리기 전에** 받는다. 뒤에서 받으면 첫 화면의 드롭다운이
+   * 빈 채로 그려지고, 사람은 탭을 한 번 옮겨야 보게 된다. */
+  try {
+    const d = await api("/api/image-style", {});
+    S.style = (d && d.style) || "";
+    S.styles = (d && d.styles) || [];
+  } catch (e) { S.styles = []; }
+
+  refreshComposeBtn();
     const turn = addTurn("assistant", reply, S.msgs.length - 1);
     renderOffers(reply, turn);
     loadChats();
@@ -867,6 +877,196 @@ function thumbUrl(rel) {
   return "/img/" + cut + "?w=200";
 }
 
+/* 장면 탭 위의 도구 띠 — 그림체 고르기 · 한 번에 굽기 · 장면 추가.
+ *
+ * 그림체를 여기 두는 이유: 그림을 뽑는 화면이 장면 탭이라, 무엇으로 구울지도 같은 자리에
+ * 있어야 한다. 설정을 다른 탭에 두면 사람은 [그림 뽑기] 를 누른 **뒤에** 그림체가 틀렸다는
+ * 걸 알게 되고, 그건 23초를 버린 뒤다. */
+function sceneBar() {
+  const bar = el("div", "scenebar");
+
+  const sel = el("select", "styleSel");
+  sel.id = "styleSel";
+  /* 빈 배열은 자바스크립트에서 **참**이라 `S.styles || [기본]` 은 빈 목록을 그대로 쓴다.
+   * 그러면 드롭다운에 항목이 하나도 없다 — 실제로 브라우저로 띄워 보고 잡았다.
+   * 길이로 본다. 목록을 못 받았어도 "지금 설정" 하나는 반드시 고를 수 있어야 한다. */
+  const opts = (S.styles && S.styles.length) ? S.styles : [{ key: "", label: "지금 설정" }];
+  opts.forEach((st) => {
+    const o = el("option", null, st.label + (st.found === false ? " (모델 없음)" : ""));
+    o.value = st.key;
+    if (st.key === (S.style || "")) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener("change", async () => {
+    const want = sel.value;
+    sel.disabled = true;
+    try {
+      const d = await api("/api/image-style", { style: want });
+      S.style = (d && d.style) || "";
+      S.styles = (d && d.styles) || S.styles;
+      const hit = (S.styles || []).filter((x) => x.key === S.style)[0] || {};
+      addNote(hit.found === false
+        ? (hit.note || "그 그림체의 모델을 찾지 못했습니다.")
+        : ("그림체: " + (hit.label || "지금 설정")
+           + (S.style ? " · 바꾼 뒤 첫 장은 모델을 새로 올리느라 1분쯤 더 걸립니다" : "")));
+    } catch (e) {
+      addNote(String(e.message || e), true);
+    } finally {
+      sel.disabled = false;
+    }
+  });
+  bar.appendChild(el("span", "note", "그림체"));
+  bar.appendChild(sel);
+
+  const all = el("button", "keep", "그림 없는 장면 전부 · 한 장씩");
+  all.type = "button";
+  all.id = "genAll";
+  all.title = "그림이 아직 없는 장면마다 한 장씩 굽습니다. 승인된 장면은 건드리지 않습니다.";
+  all.addEventListener("click", genAll);
+  bar.appendChild(all);
+
+  const add = el("button", "keep", "+ 빈 장면");
+  add.type = "button";
+  add.title = "맨 뒤에 빈 장면을 하나 만듭니다. 내용은 여기서 바로 고칠 수 있습니다.";
+  add.addEventListener("click", addScene);
+  bar.appendChild(add);
+  return bar;
+}
+
+async function genAll() {
+  const btn = $("genAll");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api("/api/gen-all", { });
+    addNote(r.total + "개 장면에 한 장씩 굽습니다 — 화면을 닫으셔도 계속 돕니다.");
+    watchGenAll();
+  } catch (e) {
+    addNote(String(e.message || e), true);
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* 일괄 생성은 몇 분짜리다. 그 사이 화면이 조용하면 사람은 죽은 줄 안다 —
+ * 조립과 같은 규칙으로 고정 자리에 진행을 그리고, 멈출 길을 같이 둔다. */
+async function watchGenAll() {
+  const stop = { label: "그만 굽기", onClick: async (b) => {
+    b.disabled = true; b.textContent = "이번 장까지만…";
+    try { await api("/api/gen-all-cancel", {}); } catch (e) { /* 폴링이 본다 */ }
+  } };
+  let seen = -1;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2500));
+    let st;
+    try { st = await api("/api/gen-all-status", {}); } catch (e) { continue; }
+    const done = Number((st && st.done) || 0);
+    const total = Number((st && st.total) || 0);
+    liveShow(String((st && st.message) || "굽는 중…"), [stop], total ? done / total : 0);
+    if (done !== seen) {
+      seen = done;
+      await refresh();
+      if (S.view === "scenes" || S.view === "gallery") showView(S.view);
+    }
+    if (!st || !st.running) break;
+  }
+  const btn = $("genAll");
+  if (btn) btn.disabled = false;
+  let fin = {};
+  try { fin = await api("/api/gen-all-status", {}); } catch (e) { fin = {}; }
+  liveHide();
+  addNote(String(fin.message || "일괄 생성이 끝났습니다.")
+          + ((fin.failed || []).length ? (" — 실패: " + fin.failed.map((f) => f.scene_id).join(", ")) : ""));
+  await refresh();
+  if (S.view === "scenes") showView("scenes");
+}
+
+async function addScene() {
+  try {
+    const r = await api("/api/scene-add", {});
+    addNote(r.scene_id + " 을 만들었습니다 — 아래에서 내용을 채우세요.");
+    await refresh();
+    showView("scenes");
+  } catch (e) {
+    addNote(String(e.message || e), true);
+  }
+}
+
+/* 장면 한 줄을 그 자리에서 고친다 — 목적·대사·카메라.
+ *
+ * 예전에는 고치려면 스튜디오로 건너가야 했고, 폰에서는 그 화면이 좁아 사실상 불가능했다.
+ * 여기서 고치는 것은 **장면 계획 필드뿐**이다(scene_ops.EDITABLE_FIELDS). 상태·승인·
+ * 이미지 목록은 이 경로로 바뀌지 않는다 — 그 다섯은 상태 전이 함수만이 만든다. */
+function sceneEditor(sc, card) {
+  const box = el("div", "editbox");
+  const rows = [
+    { key: "purpose", label: "이 장면이 하는 일", value: sc.purpose || "", lines: 2 },
+    { key: "dialogue", label: "대사 (한 줄에 하나)", lines: 4,
+      value: (sc.dialogue || []).map((d) => (typeof d === "string" ? d
+              : ((d.speaker_id ? d.speaker_id + ": " : "") + (d.line || "")))).join("\n") },
+  ];
+  const inputs = {};
+  rows.forEach((r) => {
+    box.appendChild(el("p", "line", r.label));
+    const t = el("textarea");
+    t.rows = r.lines;
+    t.value = r.value;
+    inputs[r.key] = t;
+    box.appendChild(t);
+  });
+
+  const row = el("div", "row");
+  const save = el("button", "go", "저장");
+  save.type = "button";
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    const fields = { purpose: inputs.purpose.value.trim() };
+    /* "이름: 대사" 한 줄을 그대로 받는다 — 콜론이 없으면 화자 없는 줄로 둔다.
+     * 사람에게 JSON 을 쓰게 하지 않는다. */
+    const lines = inputs.dialogue.value.split("\n").map((s) => s.trim()).filter(Boolean);
+    fields.dialogue = lines.map((s) => {
+      const i = s.indexOf(":");
+      if (i > 0 && i < 24) return { speaker_id: s.slice(0, i).trim(), line: s.slice(i + 1).trim() };
+      return { speaker_id: "", line: s };
+    });
+    try {
+      await api("/api/set-scene", { scene_id: sc.scene_id, fields: fields });
+      addNote(sc.scene_id + " 을 고쳤습니다.");
+      await refresh();
+      showView("scenes");
+    } catch (e) {
+      save.disabled = false;
+      addNote(String(e.message || e), true);
+    }
+  });
+  const cancel = el("button", null, "닫기");
+  cancel.type = "button";
+  cancel.addEventListener("click", () => box.remove());
+  row.appendChild(save);
+  row.appendChild(cancel);
+  box.appendChild(row);
+  return box;
+}
+
+/* 삭제는 되돌릴 수 없는 유일한 장면 동작이라 반드시 묻는다.
+ * 그리고 무엇이 어디로 가는지 말한다 — "지웁니다" 만으로는 사람이 판단할 수 없다. */
+async function deleteScene(sc, btn) {
+  const n = (sc.raw_images || []).length;
+  if (!window.confirm(
+    sc.scene_id + " 을 지웁니다.\n" +
+    (n ? ("이 장면의 그림 " + n + "장도 같이 갑니다.\n") : "") +
+    "버리지 않고 project/scenes_deleted/ 로 옮기므로 되돌릴 수 있습니다.\n\n" +
+    "뒤 장면의 번호는 그대로 둡니다(당기면 이미 구운 그림과 어긋납니다).\n\n계속할까요?")) return;
+  btn.disabled = true;
+  try {
+    const r = await api("/api/scene-delete", { scene_id: sc.scene_id });
+    addNote(r.scene_id + " 을 보관소로 옮겼습니다 (" + r.archived_to + ", 그림 " + r.images + "장).");
+    await refresh();
+    showView("scenes");
+  } catch (e) {
+    btn.disabled = false;
+    addNote(String(e.message || e), true);
+  }
+}
+
 function sceneCard(sc) {
   const card = el("div", "card");
   const head = el("h2");
@@ -921,6 +1121,22 @@ function sceneCard(sc) {
     ap.type = "button";
     ap.addEventListener("click", () => approve(sc.scene_id, ap));
     row.appendChild(ap);
+  }
+  /* 승인된 장면은 고치거나 지울 수 없다 — 서버가 어차피 거절하지만,
+   * 누를 수 있는 버튼을 두고 거절하는 것은 사람을 두 번 움직이게 하는 일이다. */
+  if (sc.status !== "APPROVED") {
+    const ed = el("button", null, "내용 고치기");
+    ed.type = "button";
+    ed.addEventListener("click", () => {
+      const open = card.querySelector(".editbox");
+      if (open) { open.remove(); return; }
+      card.appendChild(sceneEditor(sc, card));
+    });
+    row.appendChild(ed);
+    const del = el("button", "del", "장면 삭제");
+    del.type = "button";
+    del.addEventListener("click", () => deleteScene(sc, del));
+    row.appendChild(del);
   }
   card.appendChild(row);
   return card;
@@ -1040,9 +1256,10 @@ function renderScenes() {
   if (S.view !== "scenes") return;
   const m = stream();
   while (m.firstChild) m.removeChild(m.firstChild);
+  m.appendChild(sceneBar());
   const scenes = (S.state && S.state.scenes) || [];
   if (!scenes.length) {
-    addNote("아직 장면이 없습니다. [대화] 탭에서 이야기를 쓰고 조립하세요.");
+    addNote("아직 장면이 없습니다. [대화] 탭에서 이야기를 쓰고 조립하거나, 위의 [+ 빈 장면] 을 누르세요.");
     return;
   }
   scenes.forEach((sc) => m.appendChild(sceneCard(sc)));
@@ -1798,6 +2015,14 @@ async function boot() {
     await openChat(last);
   }
   refreshComposeBtn();
+
+  /* 그림체 목록을 **그리기 전에** 받는다. 뒤에서 받으면 첫 화면의 드롭다운이 빈 채로
+   * 그려지고, 사람은 탭을 한 번 옮겼다 와야 보게 된다 — 실제로 브라우저로 띄워 보고 알았다. */
+  try {
+    const d = await api("/api/image-style", {});
+    S.style = (d && d.style) || "";
+    S.styles = (d && d.styles) || [];
+  } catch (e) { S.styles = []; }
 
   showView(viewFromHash() || "talk");
 

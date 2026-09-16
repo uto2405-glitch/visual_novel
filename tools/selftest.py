@@ -6671,6 +6671,125 @@ def vn_core_files(b: Box):
     return sorted(b.mod("vn_core").scene_files())
 
 
+@test("unit", "U49 그림체 사전 설정 — 체크포인트까지 갈리고, 못 찾으면 조용히 다른 그림체로 굽지 않는다")
+def u49(b: Box):
+    """그림체를 바꾸는 진짜 레버는 **체크포인트**다. 같은 모델에 "photorealistic" 을 적어
+    봐야 애니 모델은 반실사까지만 가고, 실사 모델에 "anime" 를 적으면 어색한 중간이 된다.
+    그래서 프리셋은 체크포인트와 문구를 한 쌍으로 묶는다.
+
+    체크포인트를 **파일 이름 조각으로 찾는** 이유: 사람이 모델을 새 판으로 바꾸면
+    (v170 → v180) 이름이 달라지는데, 그때마다 코드를 고쳐야 하면 프리셋이 조용히 죽는다.
+
+    못 찾았을 때가 중요하다. 그냥 아무 모델로 구우면 **고른 것과 다른 그림체**가 나오는데
+    사람은 그 사실을 모른다 — 23초를 쓰고 나서야 이상하다고 느낀다. 반드시 말해야 한다.
+    """
+    cc = b.mod("comfyui_client")
+    real = cc.checkpoints
+    try:
+        cc.checkpoints = lambda refresh=False: [
+            "waiIllustriousSDXL_v170.safetensors",
+            "juggernautXL_ragnarok.safetensors",
+        ]
+        r = cc.resolve_style("real")
+        ok("juggernaut" in r["ckpt"].lower(), "실사풍이 실사 모델을 안 고른다: %s" % r["ckpt"])
+        ok(r["found"], "찾았는데 못 찾았다고 한다")
+        ok("photorealistic" in r["positive"], "실사 문구가 없다")
+        for k in ("webtoon", "anime"):
+            r = cc.resolve_style(k)
+            ok("illustrious" in r["ckpt"].lower(), "%s 가 애니 모델을 안 고른다" % k)
+        # 이름이 바뀌어도 조각으로 찾는다
+        cc.checkpoints = lambda refresh=False: ["waiIllustriousSDXL_v999_final.safetensors"]
+        ok(cc.resolve_style("webtoon")["found"], "판이 바뀐 이름을 못 찾는다 — 프리셋이 죽는다")
+
+        # 못 찾으면 **말한다**
+        cc.checkpoints = lambda refresh=False: ["somethingElse.safetensors"]
+        r = cc.resolve_style("real")
+        eq(r["found"], False, "없는데 찾았다고 한다")
+        ok(r["note"], "못 찾았는데 아무 말도 안 한다 — 다른 그림체로 조용히 굽는다")
+        ok("실사" in r["note"], "무엇을 못 찾았는지 말하지 않는다: %r" % r["note"])
+    finally:
+        cc.checkpoints = real
+
+    # 모르는 키는 거절한다(요청 body 로 들어오는 값이다)
+    try:
+        cc.set_style("nosuchstyle")
+        ok(False, "모르는 그림체를 저장했다")
+    except Exception as exc:
+        ok("nosuchstyle" in str(exc), "무엇이 잘못됐는지 말하지 않는다")
+
+    # 그림체를 고르면 저장된 프롬프트 안의 옛 그림체 문구를 걷어낸다 —
+    # 안 걷으면 한 프롬프트 안에서 "cel-shaded webtoon" 과 "photorealistic" 이 싸운다
+    mf = json.loads(b.p("project/manifest.json").read_text(encoding="utf-8"))
+    style = str(mf.get("visual_style") or "")
+    if style:
+        mixed = style + ", a cat looking up at a butterfly"
+        out = cc._drop_style_words(mixed)
+        ok(style.lower() not in out.lower(), "옛 그림체 문구가 남았다: %r" % out[:80])
+        ok("butterfly" in out, "본문까지 지웠다: %r" % out[:80])
+
+
+@test("unit", "U50 장면 추가·삭제 — 지운 장면은 버리지 않고, 승인된 장면은 지워지지 않는다")
+def u50(b: Box):
+    """장면과 그 그림은 다시 만들 수 없다(그림 한 장에 23초, 승인은 사람의 시간이다).
+    그래서 삭제도 이 저장소의 다른 되돌릴 수 없는 동작들과 같은 규칙을 쓴다 — 지우는 대신
+    옮긴다. 장면 파일과 컷 폴더가 통째로 project/scenes_deleted/ 로 간다.
+
+    **승인된 장면은 거절한다.** 사람 승인 게이트를 '지우기' 로 우회할 수 있으면 그 게이트는
+    없는 것과 같다.
+
+    번호는 다시 매기지 않는다. SCENE-003 을 지워도 004 는 004 로 남는다 — 번호를 당기면
+    이미 구운 그림 폴더(images/raw/SCENE-004)와 감상본의 이동 대상(goto)이 전부 어긋난다.
+    """
+    so = b.mod("scene_ops")
+    vc = b.mod("vn_core")
+
+    made = so.create_scene(fields={"purpose": "U50 시험", "status": "SCENE_PLAN"})
+    sid = made["scene_id"]
+    folder = vc.IMAGES_RAW / sid
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "a.png").write_bytes(b"PNG")
+    before = len(vc.scene_files())
+
+    res = so.delete_scene(sid, "시험")
+    eq(res["scene"], True, "장면 파일을 못 옮겼다")
+    eq(res["images"], 1, "컷 폴더가 같이 가지 않았다")
+    ok(not (vc.SCENES / (sid + ".json")).exists(), "지웠는데 장면 파일이 남아 있다")
+    ok(not folder.exists(), "컷 폴더가 제자리에 남아 있다")
+    eq(len(vc.scene_files()), before - 1, "장면 수가 하나 줄지 않았다")
+
+    home = vc.PROJECT / "scenes_deleted" / res["archived_to"]
+    ok(home.is_dir(), "보관소가 없다 — 되돌릴 방법이 사라졌다")
+    kept = sorted(p.name for p in home.rglob("*") if p.is_file())
+    ok(any(n.endswith(".json") for n in kept), "장면 파일이 보관되지 않았다: %s" % kept)
+    ok(any(n.endswith(".png") for n in kept), "그림이 보관되지 않았다: %s" % kept)
+    ok(any(n == "why.txt" for n in kept), "지운 사유가 남지 않았다: %s" % kept)
+
+    # 승인된 장면은 거절 — 그리고 거절 뒤에도 그 장면은 그대로 있어야 한다.
+    # 샌드박스에 승인된 장면이 있기를 **기다리지 않는다** — 없으면 이 가드가
+    # 통째로 안 시험되고, 그걸 모른 채 통과한다(돌연변이가 그걸 드러냈다).
+    made2 = so.create_scene(fields={"purpose": "U50 승인본", "status": "SCENE_PLAN"})
+    appr = made2["scene_id"]
+    ap_path = vc.SCENES / (appr + ".json")
+    _sc = json.loads(ap_path.read_text(encoding="utf-8"))
+    _sc["status"] = "APPROVED"
+    ap_path.write_text(json.dumps(_sc, ensure_ascii=False), encoding="utf-8")
+    if appr:
+        keep = (vc.SCENES / (appr + ".json")).read_bytes()
+        try:
+            so.delete_scene(appr)
+            ok(False, "승인된 장면을 지웠다 — 사람 승인 게이트가 우회된다")
+        except Exception as exc:
+            ok("APPROVED" in str(exc) or "되돌" in str(exc),
+               "거절 사유가 승인 잠금이라고 말하지 않는다: %s" % str(exc)[:60])
+        eq((vc.SCENES / (appr + ".json")).read_bytes(), keep, "거절했는데 장면이 변했다")
+        # 샌드박스는 모든 테스트가 함께 쓴다 — 사람 손으로 APPROVED 로 놓은 이
+        # 장면은 그림도 프롬프트도 없어 검사기 기준으로는 깨진 상태다.
+        # 내가 만들었으니 내가 치운다 — 안 치우면 뒤에 오는 테스트가 내 쓰레기를 보고 운다.
+        _sc["status"] = "SCENE_PLAN"
+        ap_path.write_text(json.dumps(_sc, ensure_ascii=False), encoding="utf-8")
+        so.delete_scene(appr, "U50 뒷정리")
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
