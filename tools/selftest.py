@@ -7456,8 +7456,9 @@ def m17(b: Box):
     eq(rows2[0]["billable"], False, "재는 일 자체가 과금이라고 적었다")
 
     n1 = _usage_len(b)
-    with mf_stub(mk, lambda m, p_, bd: {"data": []}):
-        empty = mk.record_spend("text2image", "SCENE-001", "2026-09-16T12:59:00Z")
+    with patched(mk, "SPEND_RETRY_SEC", 0):          # 재시도 대기는 여기서 볼 것이 아니다
+        with mf_stub(mk, lambda m, p_, bd: {"data": []}):
+            empty = mk.record_spend("text2image", "SCENE-001", "2026-09-16T12:59:00Z")
     eq(empty["spent"], None, "못 쟀는데 0 이라고 한다")
     eq([r for r in _usage_tail(b, n1) if r.get("kind") == "spend"], [],
        "못 쟀는데 대장에 남겼다 — 나중에 '0 크레딧' 으로 읽힌다")
@@ -7475,6 +7476,72 @@ def m17(b: Box):
     ok(got["n"] >= 1, "쌓인 실측을 못 읽는다: %s" % got)
     ok(got["avg"] is not None and got["avg"] > 0, "평균이 없다: %s" % got)
     eq(mk.measured_spend("없는종류")["n"], 0, "다른 종류의 실측까지 섞어 센다")
+
+    # ---- 페이지가 꽉 차면 다음 장을 읽는다 --------------------------------
+    # 한 번의 생성이 여러 줄을 만든다(장수 최대 8 · 업스케일이 같은 창에 끼기도 한다).
+    # 한 장만 읽고 끝내면 기록이 6줄인데 5줄만 세고, 평균 단가가 **실제보다 싸게** 나온다.
+    # 화면이 사람에게 '덜 든다' 고 말하는 쪽의 오류라 더 나쁘다.
+    pages = {"seen": []}
+
+    def paged(m, p_, bd):
+        if "creditsHistory" not in p_:
+            return {"data": []}
+        num = int(re.search(r"pageNum=(\d+)", p_).group(1))
+        size = int(re.search(r"pageSize=(\d+)", p_).group(1))
+        pages["seen"].append(num)
+        all_rows = [{"amount": -2, "createdAt": "2026-09-16T13:00:0%d" % i} for i in range(6)]
+        chunk = all_rows[(num - 1) * size: num * size]
+        return {"data": chunk}
+
+    with mf_stub(mk, paged):
+        many = mk.consumption_since("2026-09-16T12:59:00Z", limit=5)
+    eq(len(many), 6, "꽉 찬 페이지를 보고 다음 장을 안 읽었다 — 단가가 실제보다 싸게 나온다")
+    ok(len(pages["seen"]) >= 2, "페이지를 한 장만 읽었다: %s" % pages["seen"])
+    eq(mk.SPEND_PAGE >= 50, True, "기본 페이지 크기가 너무 작다: %d" % mk.SPEND_PAGE)
+
+    # 끝없이 읽지는 않는다(응답이 늘 꽉 차 있어도 멈춘다)
+    with mf_stub(mk, lambda m, p_, bd: {"data": [{"amount": -1}] * 50}
+                 if "creditsHistory" in p_ else {"data": []}):
+        forever = mk.consumption_since("2026-09-16T12:59:00Z")
+    eq(len(forever), 50 * mk.SPEND_MAX_PAGES, "페이지 상한이 안 걸린다 — 끝없이 읽는다")
+    # 상한 자체도 못 박는다. 위 줄은 상수로 기대값을 계산하므로 상수가 커지면 같이 커진다
+    # — 그러면 '상한이 있다' 만 보고 '상한이 쓸모 있다' 는 못 본다(돌연변이로 확인).
+    ok(mk.SPEND_MAX_PAGES <= 10,
+       "페이지 상한이 너무 큽니다(%d) — 계정 이력이 많으면 생성마다 수십 번 조회한다"
+       % mk.SPEND_MAX_PAGES)
+
+    # ---- 과금은 완료 뒤에 확정된다 — 한 번은 더 기다려 본다 ----------------
+    tries = {"n": 0}
+
+    def late(m, p_, bd):
+        if "creditsHistory" not in p_:
+            return {"data": []}
+        tries["n"] += 1
+        return {"data": [] if tries["n"] == 1 else [{"amount": -9}]}
+
+    n2 = _usage_len(b)
+    with patched(mk, "SPEND_RETRY_SEC", 0):
+        with mf_stub(mk, late):
+            late_rec = mk.record_spend("text2video", "SCENE-002", "2026-09-16T12:59:00Z")
+    eq(late_rec["spent"], 9,
+       "기록이 늦게 올라오는 경우를 못 잡는다 — 끝나자마자 재면 아직 0줄일 수 있다")
+    eq(tries["n"], 2, "빈손이었는데 한 번 더 확인하지 않았다")
+
+    # ---- 충분히 쌓이면 그만 잰다(이 조회도 실호출이다) --------------------
+    calls = {"n": 0}
+
+    def counting(m, p_, bd):
+        if "creditsHistory" in p_:
+            calls["n"] += 1
+        return {"data": [{"amount": -1}] if "creditsHistory" in p_ else []}
+
+    for _ in range(mk.SPEND_SAMPLE_CAP + 2):
+        with patched(mk, "SPEND_RETRY_SEC", 0):
+            with mf_stub(mk, counting):
+                mk.record_spend("포화시험", "SCENE-003", "2026-09-16T12:59:00Z")
+    got_n = mk.measured_spend("포화시험")["n"]
+    eq(got_n, mk.SPEND_SAMPLE_CAP,
+       "충분히 쟀는데 계속 잰다 — 덤이 세금이 된다(쌓인 수: %s)" % got_n)
 
     # UTC 로 보낸다 — 로컬 시각이면 시차만큼 남의 기록이 섞이거나 내 기록이 빠진다
     ok(mk.now_iso().endswith("Z"), "시작 경계를 UTC 로 안 보낸다: %s" % mk.now_iso())

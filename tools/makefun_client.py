@@ -1738,7 +1738,13 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def consumption_since(since_iso: str, *, limit: int = 5, quiet: bool = True) -> list:
+SPEND_PAGE = 50            # 한 번에 받아 오는 소비 기록 수
+SPEND_MAX_PAGES = 5       # 더 있어도 여기서 끊는다(창이 좁으니 이보다 많을 일이 거의 없다)
+SPEND_RETRY_SEC = 3.0     # 기록이 아직 안 올라왔을 때 한 번 더 기다리는 시간
+SPEND_SAMPLE_CAP = 10     # 이만큼 쌓이면 그만 잰다 — 덤은 덤으로 끝나야 한다
+
+
+def consumption_since(since_iso: str, *, limit: int = SPEND_PAGE, quiet: bool = True) -> list:
     """그 시각 이후의 **소비 기록**만 → [{amount, at, raw}] (실패하면 빈 목록).
 
     공급자는 "장당 몇 크레딧" 을 공개하지 않는다. 그래서 물어보는 대신 **잰다** —
@@ -1757,26 +1763,34 @@ def consumption_since(since_iso: str, *, limit: int = 5, quiet: bool = True) -> 
     stamp = str(since_iso or "").strip()
     if not stamp:
         return []
-    q = urllib.parse.urlencode({"pageNum": 1, "pageSize": max(1, min(int(limit), 50)),
-                                "is_consumption": "true", "startDate": stamp})
-    try:
-        d = _call("GET", f"{P_CREDITS}?{q}", timeout=30, quiet=quiet)
-    except (RuntimeError, VNError) as exc:
-        log.warning("소비 기록을 못 읽었습니다(실측만 건너뜁니다): %s", str(exc)[:120])
-        return []
-    out = []
-    for it in (_as_list(d.get("data")) or _as_list(d)):
-        if not isinstance(it, dict):
-            continue
-        amount = None
-        for _k, v in _flat_numbers(it):
-            if v < 0:                     # 명세: 음수 = 소비
-                amount = v
-                break
-        if amount is None:
-            continue
-        out.append({"amount": amount, "at": _pick(it, ("createdAt", "created_at", "date", "time")),
-                    "raw": _trim(it, 200)})
+    size = max(1, min(int(limit), 100))
+    out: list = []
+    for page in range(1, SPEND_MAX_PAGES + 1):
+        q = urllib.parse.urlencode({"pageNum": page, "pageSize": size,
+                                    "is_consumption": "true", "startDate": stamp})
+        try:
+            d = _call("GET", f"{P_CREDITS}?{q}", timeout=30, quiet=quiet)
+        except (RuntimeError, VNError) as exc:
+            log.warning("소비 기록을 못 읽었습니다(실측만 건너뜁니다): %s", str(exc)[:120])
+            return []
+        rows = [it for it in (_as_list(d.get("data")) or _as_list(d)) if isinstance(it, dict)]
+        for it in rows:
+            amount = None
+            for _k, v in _flat_numbers(it):
+                if v < 0:                 # 명세: 음수 = 소비
+                    amount = v
+                    break
+            if amount is None:
+                continue
+            out.append({"amount": amount,
+                        "at": _pick(it, ("createdAt", "created_at", "date", "time")),
+                        "raw": _trim(it, 200)})
+        # **페이지가 꽉 찼으면 더 있다.** 한 장만 읽고 끝내면 기록이 6줄인데 5줄만 세고,
+        # 평균 단가가 **실제보다 싸게** 나온다 — 화면이 사람에게 덜 든다고 말하는 쪽의
+        # 오류라 더 나쁘다. 한 번의 생성이 여러 줄을 만든다(장수 최대 8 · 업스케일 등).
+        if len(rows) < size:
+            break
+        log.info("소비 기록이 한 페이지를 채웠습니다 — 다음 장을 읽습니다(page %d)", page + 1)
     return out
 
 
@@ -1797,7 +1811,19 @@ def record_spend(kind: str, scene_id: str, since_iso: str, detail: dict | None =
     이 한 줄이 쌓이면 다음번엔 사람에게 "지난번엔 이만큼 나갔습니다" 를 보여 줄 수 있다.
     실패한 호출 뒤에도 부른다 — **실패도 과금되는지**가 여기서만 답이 나온다.
     """
+    # 이미 충분히 쟀으면 그만 잰다. 이 조회도 실호출이라(무과금이지만 토큰을 쓴다)
+    # 생성마다 계속 재면 덤이 세금이 된다.
+    seen = measured_spend(kind)
+    if seen.get("n", 0) >= SPEND_SAMPLE_CAP:
+        return {"kind": "spend", "of": str(kind), "skipped": "enough",
+                "spent": None, "records": 0, "ok": False}
     rows = consumption_since(since_iso)
+    if not rows:
+        # **과금은 보통 제출이 아니라 완료 시점에 확정된다.** 끝나자마자 재면 아직 줄이
+        # 안 올라와 있을 수 있다. 한 번만 더 기다려 본다 — 그래도 없으면 '못 쟀음' 이다
+        # ('0 크레딧을 썼다' 가 아니다. 그 둘을 같이 적으면 실측이 오염된다).
+        time.sleep(SPEND_RETRY_SEC)
+        rows = consumption_since(since_iso)
     total = round(sum(abs(r["amount"]) for r in rows), 4)
     rec = {"kind": "spend", "of": str(kind), "scene_id": str(scene_id or ""),
            "billable": False, "ok": bool(rows), "records": len(rows),
