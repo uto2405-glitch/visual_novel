@@ -914,7 +914,7 @@ def r_oc_from_chat(b):
 def r_oc_list(b):
     """서랍 전체 + 얼굴 고정이 지금 어디까지 되는가."""
     return {"characters": [_oc_view(oc) for oc in characters.list_all()],
-            "face_lock": characters.face_lock_state()}
+            "face_lock": image_gen.face_state()}
 
 
 def r_oc_save(b):
@@ -1207,8 +1207,10 @@ def _gen_all_worker(sids: list, style):
                 _ALL.update({"message": f"{sid} 굽는 중… ({i}/{len(sids)})",
                              "done": len(done), "total": len(sids), "current": sid})
             try:
-                gen_jobs.run(sid, lambda: image_gen.generate_for_scene(
-                    sid, n=1, engine="comfyui", quiet=True, style=style), "일괄 생성")
+                face = scene_face_photo(vn_core.load_json_safe(vn_core.scene_path(sid), {}))
+                gen_jobs.run(sid, lambda sid=sid, face=face: image_gen.generate_for_scene(
+                    sid, n=1, engine="comfyui", quiet=True, style=style,
+                    face_photo=face), "일괄 생성")
                 scene_ops.register_images(sid)
                 done.append(sid)
             except Exception as exc:
@@ -1265,6 +1267,34 @@ def r_gen_all_cancel(b):
     return {"cancelled": True}
 
 
+def scene_face_photo(sc) -> str:
+    """이 장면의 얼굴을 잡을 사진 한 장 — 조건이 맞을 때만, 아니면 "".
+
+    조건이 좁은 이유는 PhotoMaker 의 한계 그대로다:
+      * 인물이 **정확히 한 명**일 것. 두 사람이 나오는 장면에 얼굴 임베딩 하나를 먹이면
+        두 얼굴이 섞인다 — 아무것도 안 하는 편이 낫다.
+      * 그 인물이 서랍에 있고 사진이 **있을** 것. 없는 인물(CHAR-001 같은 매니페스트 전용)은
+        예전 그대로 태그와 앵커로만 고정한다.
+
+    조용히 켜지는 기능이라 로그에 남긴다 — 나중에 "왜 이 컷만 얼굴이 다르지" 를 따질 때
+    그 한 줄이 유일한 단서다.
+    """
+    ids = sc.get("characters") if isinstance(sc.get("characters"), list) else []
+    ids = [str(x).strip() for x in ids if str(x).strip()]
+    if len(ids) != 1 or not characters.exists(ids[0]):
+        return ""
+    try:
+        oc = characters.get(ids[0])
+    except VNError:
+        return ""
+    for rel in (oc.get("reference_images") or []):
+        path = characters.ref_path(ids[0], str(rel))
+        if path is not None and path.is_file():
+            log.info("얼굴 고정 %s ← %s %s", sc.get("scene_id"), ids[0], path.name)
+            return str(path)
+    return ""
+
+
 def r_gen_image(b):
     """설정된 이미지 엔진으로 장면 이미지 생성 → images/raw/<scene>/ 저장 + 자동 등록·검사.
 
@@ -1313,6 +1343,7 @@ def r_gen_image(b):
             sid, n=n, engine=engine,
             on_progress=_progress(sid, "생성", engine),
             on_each=_each,
+            face_photo=scene_face_photo(sc),
             should_stop=lambda: gen_jobs.cancelled(sid))
 
     return gen_jobs.start(

@@ -137,6 +137,28 @@ def engine_info(mf: dict | None = None) -> dict:
             "billable": engine == "makefun"}
 
 
+def face_state(engine: str | None = None) -> dict:
+    """사진으로 얼굴을 잡을 수 있는가 — **지금 고른 엔진 기준으로** 한 곳에서만 답한다.
+
+    답이 두 곳에 있으면 반드시 갈라진다(한쪽은 '못 한다', 다른 쪽은 이미 하고 있는 식).
+    그래서 서랍(characters)은 이 질문에 답하지 않고, 화면은 늘 여기로 묻는다.
+    """
+    eng = active_engine() if engine is None else str(engine)
+    cli = client(eng)
+    fn = getattr(cli, "face_ready", None)
+    if not callable(fn):
+        return {"ok": False, "engine": eng, "how": "text",
+                "note": "%s 엔진은 사진으로 얼굴을 잡지 못합니다 — 인물 태그와 앵커 문장으로 고정합니다."
+                        % label(eng)}
+    try:
+        got = dict(fn())
+    except Exception as exc:                      # 엔진이 꺼져 있어도 화면은 열려야 한다
+        return {"ok": False, "engine": eng, "how": "text",
+                "note": "그림 엔진에 물어보지 못했습니다(%s)." % str(exc)[:80]}
+    got.setdefault("engine", eng)
+    return got
+
+
 def health(engine: str | None = None) -> dict:
     """엔진 상태 — comfyui 는 /system_stats + 체크포인트(3초 상한), makefun 은 토큰 유무(네트워크 없음).
 

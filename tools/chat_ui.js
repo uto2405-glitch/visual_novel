@@ -1918,9 +1918,9 @@ function renderCast() {
 
   /* 얼굴 고정이 지금 어디까지 되는지 **먼저** 말한다. 사진을 붙여 놓고 못 쓰면서
    * 말하지 않으면, 사람은 얼굴이 흔들릴 때마다 자기 사진을 의심한다. */
-  if (S.faceLock && S.faceLock.photo_used === false) {
+  if (S.faceLock && S.faceLock.note) {
     const n = el("p", "note");
-    n.textContent = "얼굴 고정: " + (S.faceLock.note || "");
+    n.textContent = (S.faceLock.ok ? "얼굴 고정 켜짐: " : "얼굴 고정: ") + S.faceLock.note;
     m.appendChild(n);
   }
 

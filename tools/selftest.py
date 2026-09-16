@@ -6944,10 +6944,11 @@ def u51(b: Box):
                "서랍이 작품과 함께 갈리는 자리에 있다: %s" % ch.DIR)
         ok(ch.DIR.name not in [n for n, _ in wk._PAIRS], "서랍 폴더 이름이 작품 폴더와 겹친다")
 
-        # 사진으로 얼굴을 잡을 수 있는지 **솔직하게** 말한다
-        st = ch.face_lock_state()
-        eq(st["photo_used"], False, "사진을 쓴다고 말한다 — 지금 엔진은 사진을 못 본다")
-        ok("IPAdapter" in st["note"], "무엇이 있어야 되는지 말하지 않는다")
+        # 사진으로 얼굴을 잡을 수 있는가 — **서랍은 이 질문에 답하지 않는다.**
+        # 엔진마다 다르고 모델 파일이 있어야 한다. 답이 두 곳에 있으면 갈라지고,
+        # 그때 사람은 '사진을 쓴다' 는 화면을 보면서 얼굴이 흔들리는 그림을 받는다.
+        ok(not hasattr(ch, "face_lock_state"),
+           "서랍이 얼굴 고정 여부를 따로 답한다 — 엔진(image_gen.face_state)과 갈라진다")
     finally:
         ch.DIR, ch.REFS, ch.ARCHIVE = keep
         mf_path.write_bytes(mf_keep)
@@ -7028,6 +7029,112 @@ def u52(b: Box):
         mf_path.write_bytes(mf_keep)
 
 
+@test("unit", "U53 얼굴 고정(PhotoMaker) — 한 사람일 때만 켜지고, 특별한 낱말이 한 번 들어가고, 없으면 조용히 끄지 않는다")
+def u53(b: Box):
+    """사진으로 얼굴을 잡는 길은 ComfyUI 기본 노드로 이미 있다(PhotoMakerLoader ·
+    PhotoMakerEncode). 커스텀 노드도 InsightFace 도 필요 없고 모델 파일 하나면 된다 —
+    이 저장소가 '부속 설치를 늘리지 않는다' 는 규칙 아래 있으므로 그 차이가 결정적이다.
+
+    세 가지가 조용히 틀리기 쉽다.
+
+    (1) **낱말.** 프롬프트 안의 "photomaker" 한 개가 그 사람의 자리를 대신한다
+        (comfy_extras/nodes_photomaker.py 의 special_token). 낱말이 없으면 노드는 자리를
+        못 찾아 **실패한다**. 두 번 들어가도 자리가 흐트러진다. 정확히 한 번이어야 한다.
+
+    (2) **인원수.** 임베딩은 하나다. 두 사람이 나오는 장면에 먹이면 두 얼굴이 섞인다 —
+        아무것도 안 하는 편이 낫다.
+
+    (3) **없을 때.** 모델이 없거나 업로드가 실패해도 그림은 구워야 한다. 얼굴이 안 잡힌
+        그림이 아무 그림도 없는 것보다 낫다. 다만 **조용히** 넘어가면 안 된다 — 사람은
+        사진을 등록해 뒀으니 당연히 얼굴이 잡혔다고 믿는다.
+    """
+    cf = b.mod("comfyui_client")
+    wb = b.mod("webapp")
+    # **webapp 이 보는 그 서랍**을 쓴다. Box.mod 는 모듈을 box_<이름> 으로 따로 적재하므로
+    # b.mod("characters") 와 webapp 안의 characters 는 서로 **다른 객체**다 — 앞의 것을
+    # 고치면 webapp 은 여전히 진짜 서랍을 본다(그래서 이 검사가 조용히 아무것도 안 봤다).
+    ch = wb.characters
+
+    # (1) 낱말 — 사람 낱말 뒤에 정확히 한 번
+    got = cf.with_face_token("a 32-year-old Korean man with short black hair")
+    eq(got.count(cf.PHOTOMAKER_TOKEN), 1, "특별한 낱말이 한 번이 아니다: %r" % got)
+    ok(got.startswith("a 32-year-old Korean man " + cf.PHOTOMAKER_TOKEN),
+       "낱말이 사람 낱말 뒤에 붙지 않았다: %r" % got)
+    eq(cf.with_face_token(got), got, "이미 있는데 또 넣었다")
+    ok(cf.PHOTOMAKER_TOKEN in cf.with_face_token("rainy alley at night"),
+       "사람 낱말이 없으면 낱말을 아예 안 넣는다 — 그러면 노드가 실패한다")
+
+    # 그래프 — 얼굴을 주면 긍정 쪽만 갈린다(부정 프롬프트는 그대로)
+    s = cf.settings("x.safetensors")
+    plan = cf.size_plan(768)
+    g = cf.build_graph("a woman in a cafe", "lowres", ckpt="x.safetensors", seed=1, s=s, plan=plan,
+                       face={"model": "photomaker-v1.bin", "image": "vn_faces/a.png"})
+    eq(g["3"]["inputs"]["positive"], ["22", 0], "얼굴을 줬는데 긍정 조건이 안 갈렸다")
+    eq(g["3"]["inputs"]["negative"], ["7", 0], "부정 프롬프트까지 갈렸다")
+    eq(g["20"]["class_type"], "PhotoMakerLoader", "PhotoMaker 를 안 실었다")
+    eq(g["21"]["inputs"]["image"], "vn_faces/a.png", "올린 사진 이름이 안 들어갔다")
+    ok(cf.PHOTOMAKER_TOKEN in g["22"]["inputs"]["text"], "인코드 문구에 특별한 낱말이 없다")
+    eq(g["22"]["inputs"]["clip"], g["6"]["inputs"]["clip"], "인코드가 다른 CLIP 을 쓴다")
+
+    g2 = cf.build_graph("a woman in a cafe", "lowres", ckpt="x.safetensors", seed=1, s=s, plan=plan)
+    eq(g2["3"]["inputs"]["positive"], ["6", 0], "얼굴을 안 줬는데 그래프가 달라졌다")
+    ok("20" not in g2 and "22" not in g2, "얼굴을 안 줬는데 PhotoMaker 노드가 실렸다")
+    # 반쪽 정보로는 켜지 않는다(모델만 / 사진만)
+    for half in ({"model": "photomaker-v1.bin"}, {"image": "a.png"}, {}):
+        gh = cf.build_graph("x", "y", ckpt="x", seed=1, s=s, plan=plan, face=half)
+        eq(gh["3"]["inputs"]["positive"], ["6", 0], "반쪽 정보로 얼굴 고정을 켰다: %s" % half)
+
+    # 콤보 모양 두 가지 — 이 서버 안에 둘이 같이 산다(실측)
+    eq(cf._combo_options([["a.bin", "b.bin"], {"tooltip": "x"}]), ["a.bin", "b.bin"],
+       "예전 스키마를 못 읽는다")
+    eq(cf._combo_options(["COMBO", {"options": ["a.bin"]}]), ["a.bin"],
+       "새 스키마를 못 읽는다 — 모델이 있는데 '없음' 으로 보인다")
+    eq(cf._combo_options([]), [], "빈 입력에서 터진다")
+
+    # (2) 인원수 — 서랍에 사진이 있는 인물 한 명일 때만
+    keep = (ch.DIR, ch.REFS, ch.ARCHIVE)
+    root = b.root / "facetest"
+    ch.DIR, ch.REFS, ch.ARCHIVE = root / "c", root / "c" / "refs", root / "gone"
+    try:
+        one = ch.create("사진 있는 사람")
+        two = ch.create("사진 없는 사람")
+        ch.add_reference(one["character_id"], b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+        cid = one["character_id"]
+        picked = wb.scene_face_photo({"scene_id": "S1", "characters": [cid]})
+        ok(picked.endswith(".png"),
+           "사진이 있는 한 사람인데 얼굴 고정을 안 켰다: %r (서랍=%s, 사진=%s)"
+           % (picked, ch.DIR, ch.get(cid).get("reference_images")))
+        eq(wb.scene_face_photo({"scene_id": "S1", "characters": [cid, two["character_id"]]}), "",
+           "두 사람인데 얼굴 고정을 켰다 — 두 얼굴이 섞인다")
+        eq(wb.scene_face_photo({"scene_id": "S1", "characters": []}), "",
+           "사람이 없는 장면에 얼굴 고정을 켰다")
+        eq(wb.scene_face_photo({"scene_id": "S1", "characters": ["CHAR-001"]}), "",
+           "서랍에 없는 인물에 얼굴 고정을 켰다")
+        eq(wb.scene_face_photo({"scene_id": "S1", "characters": [two["character_id"]]}), "",
+           "사진이 없는 인물에 얼굴 고정을 켰다")
+        # 파일이 사라졌으면(사람이 디스크에서 지웠다) 목록에 남아 있어도 켜지 않는다
+        gone = ch.get(cid)["reference_images"][0]
+        ch.ref_path(cid, gone).unlink()
+        eq(wb.scene_face_photo({"scene_id": "S1", "characters": [cid]}), "",
+           "기록만 있고 파일이 없는 사진으로 얼굴 고정을 켰다")
+    finally:
+        ch.DIR, ch.REFS, ch.ARCHIVE = keep
+
+    # (3) 없을 때 — 조용히 넘어가지 않는다
+    real = cf.photomaker_models
+    try:
+        cf.photomaker_models = lambda refresh=False: []
+        st = cf.face_ready()
+        eq(st["ok"], False, "모델이 없는데 된다고 한다")
+        ok("photomaker" in st["note"].lower(), "무엇이 있어야 되는지 말하지 않는다: %r" % st["note"])
+        cf.photomaker_models = lambda refresh=False: ["photomaker-v1.bin"]
+        st = cf.face_ready()
+        eq(st["ok"], True, "모델이 있는데 안 된다고 한다")
+        ok("한 사람" in st["note"], "한 장면에 한 사람이라는 한계를 말하지 않는다")
+    finally:
+        cf.photomaker_models = real
+
+
 @test("webapp", "W38 고유 캐릭터 — 서랍·사진·출연진이 웹으로 왕복하고, 사진 경로는 서랍 밖을 못 가리킨다", web=True)
 def w38(b: Box):
     """모듈 검사(U51)가 보는 것은 함수다. 이 검사가 보는 것은 **배선**이다 —
@@ -7044,7 +7151,11 @@ def w38(b: Box):
     eq(code, 200, "서랍 목록 라우트가 없다")
     base = len(got.get("characters") or [])
     lock = got.get("face_lock") or {}
-    eq(lock.get("photo_used"), False, "사진으로 얼굴을 잡는다고 화면에 말하고 있다")
+    # 값이 아니라 **모양**을 본다. 사진으로 얼굴을 잡을 수 있는지는 이 기계에 모델이
+    # 깔려 있는가에 달렸고, 그건 코드의 옳고 그름이 아니다. 검사가 볼 것은 화면이
+    # 언제나 '되는지 여부'와 '그 이유'를 함께 받는가이다.
+    ok(isinstance(lock.get("ok"), bool), "얼굴 고정 가능 여부가 참·거짓으로 오지 않는다: %r" % lock)
+    ok(str(lock.get("note") or "").strip(), "얼굴 고정 상태에 설명이 없다 — 사람이 판단할 수 없다")
 
     code, made = b.wapi("/api/oc-save", {"fields": {
         "name": "W38 연우", "prompt_anchor": "24-year-old Korean man, short black hair",

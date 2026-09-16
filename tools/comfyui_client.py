@@ -607,8 +607,150 @@ def set_style(key: str) -> str:
     return k
 
 
+# ------------------------------------------------------------------ 얼굴 고정(PhotoMaker)
+#
+# 왜 PhotoMaker 인가: 이 ComfyUI 에 **이미 기본 노드로 들어 있다**(PhotoMakerLoader ·
+# PhotoMakerEncode). 커스텀 노드도, InsightFace 도, 추가 pip 도 필요 없다 — 이 저장소가
+# '래퍼·부속 설치를 늘리지 않는다' 는 규칙 아래 있으므로 그 차이가 결정적이다.
+# 필요한 것은 모델 파일 하나뿐이다: models/photomaker/photomaker-v1.bin (934MB).
+#
+# 어떻게 동작하나: 프롬프트 안의 **특별한 낱말 한 개**가 그 사람의 자리를 대신한다.
+# ComfyUI 구현의 그 낱말은 "photomaker" 다(comfy_extras/nodes_photomaker.py 의
+# special_token). 그 자리에 참고 사진에서 뽑은 얼굴 임베딩이 끼어든다.
+#
+# 한계를 분명히 적어 둔다 — 화면이 이 사실을 그대로 말해야 하기 때문이다:
+#   * **한 장면에 한 사람.** 두 인물이 나오는 장면에는 쓸 수 없다(임베딩이 하나다).
+#   * SDXL 실사 계열에서 가장 잘 듣는다. 애니·웹툰 체크포인트에서는 약해진다.
+#   * 사진이 여러 장이면 같은 사람의 사진이어야 한다(여러 얼굴을 섞지 않는다).
+PHOTOMAKER_TOKEN = "photomaker"
+_PM_CACHE: dict = {"ts": 0.0, "names": []}
+# 사람 낱말 — 특별한 낱말을 **이 낱말 바로 뒤**에 둔다("a young man photomaker").
+# 그냥 앞에 붙이면("photomaker, a young man …") 성별·나이가 얼굴 임베딩과 따로 놀아서
+# 실측에서 옷만 맞고 얼굴이 흔들리는 그림이 나온다.
+_PERSON_WORD = re.compile(
+    r"\b(man|woman|male|female|guy|girl|boy|lady|person|gentleman|student|adult)\b", re.I)
+
+
+def _combo_options(spec) -> list:
+    """object_info 의 콤보 입력 → 고를 수 있는 이름 목록.
+
+    ComfyUI 안에 **두 가지 모양이 동시에** 산다(이 기계에서 실측):
+      CheckpointLoaderSimple → [["a.safetensors", …], {tooltip: …}]      (예전 스키마)
+      PhotoMakerLoader       → ["COMBO", {"options": ["photomaker-v1.bin"]}]  (새 스키마)
+    한쪽만 읽으면 다른 쪽에서 조용히 빈 목록이 되고, 기능이 '설치 안 됨' 으로 보인다.
+    """
+    if not isinstance(spec, list) or not spec:
+        return []
+    head = spec[0]
+    if isinstance(head, list):
+        return [str(x) for x in head if x]
+    tail = spec[1] if len(spec) > 1 else None
+    opts = tail.get("options") if isinstance(tail, dict) else None
+    return [str(x) for x in (opts if isinstance(opts, list) else []) if x]
+
+
+def photomaker_models(refresh: bool = False) -> list:
+    """설치된 PhotoMaker 모델 목록. **없어도 예외를 내지 않는다** — 기능이 꺼져 있을 뿐이다.
+
+    노드 자체가 없는 ComfyUI(구버전)도 같은 취급이다. 여기서 예외를 던지면 그림 생성
+    화면 전체가 얼굴 고정 하나 때문에 열리지 않는다.
+    """
+    now = time.monotonic()
+    if not refresh and _PM_CACHE["names"] and now - _PM_CACHE["ts"] < _CKPT_TTL:
+        return list(_PM_CACHE["names"])
+    try:
+        d = _json("GET", "/object_info/PhotoMakerLoader", timeout=10)
+        spec = d["PhotoMakerLoader"]["input"]["required"]["photomaker_model_name"]
+        names = _combo_options(spec)
+    except (VNError, KeyError, IndexError, TypeError):
+        names = []
+    _PM_CACHE.update(ts=now, names=list(names))
+    return names
+
+
+def face_ready() -> dict:
+    """사진으로 얼굴을 잡을 수 있는가 — **지금 이 엔진 기준으로**.
+
+    화면이 이 답을 그대로 사람에게 보여 준다. 조용히 못 쓰면서 사진만 받아 두면,
+    사람은 얼굴이 흔들릴 때마다 자기 사진을 의심한다.
+    """
+    names = photomaker_models()
+    if not names:
+        return {"ok": False, "model": "", "how": "text",
+                "note": ("지금은 인물 태그와 앵커 문장으로만 얼굴을 고정합니다. 사진으로 잡으려면 "
+                         "ComfyUI 의 models/photomaker/ 에 photomaker-v1.bin 이 있어야 합니다.")}
+    return {"ok": True, "model": names[0], "how": "photomaker",
+            "note": ("등록한 사진으로 얼굴을 잡습니다(PhotoMaker). 한 장면에 한 사람까지이고, "
+                     "실사 계열 체크포인트에서 가장 잘 듣습니다.")}
+
+
+def with_face_token(text: str) -> str:
+    """프롬프트에 특별한 낱말을 **한 번** 넣는다(이미 있으면 그대로).
+
+    사람 낱말 바로 뒤가 제자리다. 못 찾으면 맨 앞에 둔다 — 없는 것보다는 낫고,
+    PhotoMakerEncode 는 낱말이 아예 없으면 **그 자리를 못 찾아 실패한다**.
+    """
+    body = str(text or "")
+    if re.search(r"\b%s\b" % PHOTOMAKER_TOKEN, body, re.I):
+        return body
+    m = _PERSON_WORD.search(body)
+    if m:
+        return body[:m.end()] + " " + PHOTOMAKER_TOKEN + body[m.end():]
+    return PHOTOMAKER_TOKEN + ", " + body if body else PHOTOMAKER_TOKEN
+
+
+def upload_image(path, subfolder: str = "vn_faces") -> str:
+    """참고 사진을 ComfyUI 로 올린다 → LoadImage 가 쓸 이름.
+
+    경로로 건네지 않는 이유: **두 기계가 다를 수 있다.** 노트북에서 스튜디오를 돌리면
+    사진은 노트북에 있고 ComfyUI 는 데스크탑에 있다 — 경로는 서로의 디스크를 가리키지
+    못한다. 그림을 HTTP 로 받아오는 것과 같은 이유로, 보내는 것도 HTTP 로 한다.
+    """
+    src = Path(path)
+    data = src.read_bytes()
+    if not data:
+        raise VNError(f"참고 사진이 비어 있습니다: {src.name}")
+    boundary = "----vnstudio%s" % uuid.uuid4().hex
+    ctype = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+             "webp": "image/webp", "gif": "image/gif"}.get(src.suffix.lower().lstrip("."),
+                                                           "application/octet-stream")
+    parts: list[bytes] = []
+
+    def field(name: str, value: str) -> None:
+        parts.append(("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
+                      % (boundary, name, value)).encode("utf-8"))
+
+    field("overwrite", "true")
+    if subfolder:
+        field("subfolder", subfolder)
+    parts.append(("--%s\r\nContent-Disposition: form-data; name=\"image\"; filename=\"%s\"\r\n"
+                  "Content-Type: %s\r\n\r\n" % (boundary, src.name, ctype)).encode("utf-8"))
+    parts.append(data)
+    parts.append(("\r\n--%s--\r\n" % boundary).encode("utf-8"))
+    body = b"".join(parts)
+    req = urllib.request.Request(
+        base_url() + "/upload/image", data=body, method="POST",
+        headers={"Content-Type": "multipart/form-data; boundary=" + boundary,
+                 "User-Agent": "vn-studio/1.0"})
+    try:
+        with _OPENER.open(req, timeout=60) as r:
+            got = json.loads(r.read(1 << 20).decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = ""
+        with contextlib.suppress(Exception):
+            detail = e.read().decode("utf-8", "replace")
+        raise VNError(f"참고 사진을 ComfyUI 에 올리지 못했습니다(HTTP {e.code}): {detail[:200]}")
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as e:
+        raise _fail_connect(getattr(e, "reason", None) or f"{type(e).__name__}: {e}")
+    nm = str((got or {}).get("name", "") or "").strip()
+    if not nm:
+        raise VNError("ComfyUI 가 올린 사진의 이름을 주지 않았습니다.")
+    sub = str((got or {}).get("subfolder", "") or "").strip()
+    return f"{sub}/{nm}" if sub else nm
+
+
 def build_graph(prompt: str, negative: str, *, ckpt: str, seed: int, s: dict, plan: dict,
-                name: str = "") -> dict:
+                name: str = "", face: dict | None = None) -> dict:
     """ComfyUI API 그래프(노드 id → {class_type, inputs}).
 
     4 CheckpointLoaderSimple → [10 CLIPSetLastLayer] → 6/7 CLIPTextEncode → 5 EmptyLatentImage
@@ -623,10 +765,20 @@ def build_graph(prompt: str, negative: str, *, ckpt: str, seed: int, s: dict, pl
         clip = ["10", 0]
     g["6"] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": clip}}
     g["7"] = {"class_type": "CLIPTextEncode", "inputs": {"text": negative, "clip": clip}}
+    positive = ["6", 0]
+    if face and face.get("model") and face.get("image"):
+        # 얼굴 고정 — 긍정 쪽 조건만 갈아 끼운다(부정 프롬프트는 그대로다).
+        g["20"] = {"class_type": "PhotoMakerLoader",
+                   "inputs": {"photomaker_model_name": str(face["model"])}}
+        g["21"] = {"class_type": "LoadImage", "inputs": {"image": str(face["image"])}}
+        g["22"] = {"class_type": "PhotoMakerEncode",
+                   "inputs": {"photomaker": ["20", 0], "image": ["21", 0], "clip": clip,
+                              "text": with_face_token(prompt)}}
+        positive = ["22", 0]
     g["5"] = {"class_type": "EmptyLatentImage",
               "inputs": {"width": int(plan["base_width"]), "height": int(plan["base_height"]),
                          "batch_size": 1}}
-    common = {"model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
+    common = {"model": ["4", 0], "positive": positive, "negative": ["7", 0],
               "sampler_name": str(s["sampler"]), "scheduler": str(s["scheduler"]),
               "cfg": float(s["cfg"]), "seed": check_seed(seed)}
     g["3"] = {"class_type": "KSampler",
@@ -792,7 +944,7 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
                     long_edge: int | None = None, negative: bool = True,
                     scene_id: str = "", on_progress=None, quiet: bool = False,
                     input_images=None, seed=None, on_each=None, should_stop=None,
-                    style: str | None = None) -> GenResult:
+                    style: str | None = None, face_photo=None) -> GenResult:
     """n 장을 **순차** 렌더(시드 seed, seed+1, …)해 out_dir 에 cf_<id6>_<i>.png 로 저장.
 
     한 장이 실패해도 나머지는 살리고 경고로 알린다. 장마다 _gen_meta.json 항목과
@@ -833,6 +985,20 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
     _say(f"  {LABEL} · {st['label']} · {ckpt} · {plan['width']}x{plan['height']}"
          f"{' (hires ' + str(plan['base_width']) + 'x' + str(plan['base_height']) + '→)' if plan['hires'] else ''}"
          f" · seed {base}{'+' if n > 1 else ''}", quiet)
+    # 얼굴 고정 — **한 번만** 올린다(장마다 올리면 같은 사진이 n번 네트워크를 탄다).
+    # 실패해도 그림은 굽는다: 얼굴이 안 잡힌 그림이 아무 그림도 없는 것보다 낫고,
+    # 무엇이 안 됐는지는 경고로 남는다.
+    face = None
+    if face_photo:
+        try:
+            names = photomaker_models()
+            if not names:
+                warns.append("얼굴 고정을 건너뜁니다 — ComfyUI 에 PhotoMaker 모델이 없습니다.")
+            else:
+                face = {"model": names[0], "image": upload_image(face_photo)}
+        except (VNError, OSError) as e:
+            face = None
+            warns.append(f"얼굴 고정을 건너뜁니다({e}).")
     saved: list[Path] = []
     ids: list[str] = []
     stopped = False
@@ -848,7 +1014,7 @@ def generate_to_dir(prompt: str, out_dir: Path, n: int = 1, name: str = "",
         files: list[Path] = []
         try:
             pid = submit(build_graph(pos, neg, ckpt=ckpt, seed=sd, s=s, plan=plan,
-                                     name=name or scene_id or "prompt"))
+                                     name=name or scene_id or "prompt", face=face))
             ids.append(pid)
             refs = wait(pid, on_progress=on_progress, max_sec=s["timeout_sec"], quiet=quiet)
             for j, ref in enumerate(refs):
@@ -943,7 +1109,8 @@ def _record_generator(scene_id: str, ckpt: str) -> str:
 def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
                        negative: bool = True, on_progress=None, quiet: bool = False,
                        reference: bool = True, seed=None, on_each=None,
-                       should_stop=None, style: str | None = None) -> GenResult:
+                       should_stop=None, style: str | None = None,
+                       face_photo=None) -> GenResult:
     """장면의 이미지 프롬프트(prompt.grok_output)로 렌더해 images/raw/<scene>/ 에 저장.
 
     성공하면 scene_ops.record_external_generator 로 "ComfyUI · <체크포인트>" 를 남긴다(실패는 경고).
@@ -958,7 +1125,8 @@ def generate_for_scene(scene_id: str, n: int = 1, long_edge: int | None = None,
     res = generate_to_dir(prompt, RAW_DIR / scene_id, n=n, name=scene_id, long_edge=long_edge,
                           negative=negative, scene_id=scene_id, on_progress=on_progress,
                           quiet=quiet, input_images=refs, seed=seed,
-                          on_each=on_each, should_stop=should_stop, style=style)
+                          on_each=on_each, should_stop=should_stop, style=style,
+                          face_photo=face_photo)
     warn = _record_generator(scene_id, checkpoint())
     if warn:
         res.warnings.append(warn)
