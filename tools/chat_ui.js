@@ -1018,7 +1018,7 @@ async function openChat(id) {
     if (box) box.disabled = false;
   }
   if (S.chatId !== want) return;
-  showView("talk");
+  showView("talk");     // 대화를 골랐으면 대화를 보여 준다 — 이 순간의 해시는 #list 라 그걸 따르면 목록으로 되돌아간다
 }
 
 function chatLabel(c) {
@@ -1507,9 +1507,24 @@ function renderTalk() {
 const VIEWS = { list: "tabList", talk: "tabTalk", scenes: "tabScenes",
                 gallery: "tabGallery", view: "tabView" };
 
+/* 어느 화면을 보고 있는지를 주소창에 적어 둔다.
+ *
+ * 이유 둘. 새로고침하면 무조건 '대화' 로 돌아갔다 — 갤러리에서 그림을 고르다가
+ * 한 번 새로고침하면 다시 갤러리를 찾아가야 했다. 그리고 폰에서 감상 화면을
+ * 바로 열려면 북마크할 주소가 없었다. #gallery 처럼 적어 두면 둘 다 해결된다.
+ * (pushState 가 아니라 replaceState 다 — 탭을 여러 번 옮긴 것이 뒤로가기 덕미가 되면
+ *  폰에서 빠져나오는 데 열 번을 눌러야 한다.) */
+function viewFromHash() {
+  const h = String(location.hash || "").replace(/^#/, "");
+  return VIEWS[h] ? h : "";
+}
+
 function showView(v) {
   if (!VIEWS[v]) v = "talk";
   S.view = v;
+  try {
+    if (viewFromHash() !== v) history.replaceState(null, "", "#" + v);
+  } catch (e) { /* 주소창을 못 고쳐도 화면은 그대로 동작한다 */ }
   Object.keys(VIEWS).forEach((k) => {
     const b = $(VIEWS[k]);
     if (b) b.classList.toggle("on", k === v);
@@ -1619,7 +1634,7 @@ async function boot() {
   } catch (e) { S.msgs = []; }
   await loadChats();
 
-  showView("talk");
+  showView(viewFromHash() || "talk");
 
   /* 자리를 떴다 돌아왔을 때 그 사이의 진행이 보여야 한다 — 조립을 서버로 내린 이유가
    * 그것이므로, 화면을 열 때마다 돌고 있는 작업이 있는지 먼저 묻는다. */

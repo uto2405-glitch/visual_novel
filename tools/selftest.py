@@ -5898,6 +5898,155 @@ def u39(b: Box):
     ok(got is not None and 80 <= got <= 120, "남은 시간 어림이 이상하다: %r (기대 ~100)" % got)
 
 
+@test("js", "J17 통합 화면 — 부르는 함수가 전부 정의돼 있다(문법 통과와 '돌아간다'는 다르다)")
+def j17(b: Box):
+    """``node --check`` 는 **문법만** 본다. 없는 함수를 부르는 코드도 문법은 멀쩡하다 —
+    그 줄에 닿는 순간에야 ReferenceError 로 죽고, 그 줄이 '내보내기 버튼' 처럼 가끔 눌리는
+    자리면 며칠 뒤에 사용자가 발견한다.
+
+    이 파일이 특히 그렇다: 1,600줄짜리 한 장이고, 기능이 붙을 때마다 중간에 끼워 넣는다.
+    함수 이름 한 글자만 틀려도 나머지 전부는 멀쩡히 돌아간다.
+
+    판정: `이름(` 꼴로 부르는 것 중 이 파일·vn_runtime.js 에 정의가 없고 브라우저 기본
+    전역도 아닌 이름이 있으면 실패. 문자열·주석 안의 `rgba(` 같은 것도 같이 잡히므로,
+    새로 걸리는 이름이 진짜 전역이면 아래 GLOBALS 에 적어 넣으면 된다 — 그 한 줄이
+    "이건 브라우저가 주는 것" 이라는 기록이 된다.
+    """
+    p = b.p("tools/chat_ui.js")
+    if not p.exists():
+        raise Gap("tools/chat_ui.js 아직 없음 — 통합 화면 미도입")
+    js = p.read_text(encoding="utf-8")
+    rt = b.p("tools/vn_runtime.js")
+    rtsrc = rt.read_text(encoding="utf-8") if rt.exists() else ""
+
+    # 브라우저·언어가 주는 것 (여기 적힌 것만 '밖에서 온다'고 인정한다)
+    GLOBALS = {
+        "AbortController", "Array", "Blob", "Boolean", "Date", "Error", "File", "FileReader",
+        "FormData", "Image", "Intl", "JSON", "Map", "Math", "Number", "Object", "Promise",
+        "RegExp", "Set", "String", "Symbol", "TextEncoder", "URL", "URLSearchParams",
+        "Uint8Array", "WeakMap", "alert", "atob", "btoa", "clearInterval", "clearTimeout",
+        "confirm", "decodeURIComponent", "encodeURIComponent", "fetch", "isFinite", "isNaN",
+        "parseFloat", "parseInt", "queueMicrotask", "requestAnimationFrame",
+        "setInterval", "setTimeout",
+    }
+    KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "function", "typeof",
+                "await", "async", "new", "else", "do", "try", "of", "in", "case", "yield",
+                "delete", "void", "instanceof", "get", "set"}
+
+    def defined(src):
+        out = set(re.findall(r"function\s+([A-Za-z_$][\w$]*)\s*\(", src))
+        out |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", src))
+        return out
+
+    known = defined(js) | defined(rtsrc) | GLOBALS | KEYWORDS
+    called = set(re.findall(r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(", js))
+    unknown = sorted(called - known)
+    ok(not unknown,
+       "정의를 못 찾은 호출이 있다(오타이거나, 브라우저 전역이면 J17 의 GLOBALS 에 적어라): "
+       + ", ".join(unknown))
+
+    # 이 화면이 실제로 쓰는 서버 라우트가 전부 존재하는가 — 오타 난 주소는 404 한 줄로 끝난다
+    web = b.p("tools/webapp.py").read_text(encoding="utf-8")
+    used = sorted(set(re.findall(r'"(/api/[a-z0-9-]+)"', js)))
+    ok(used, "화면이 서버 라우트를 하나도 부르지 않는다 — 추출이 깨졌다")
+    missing = [r for r in used if ('"%s"' % r) not in web]
+    ok(not missing, "화면이 없는 라우트를 부른다(404 한 줄로 끝난다): " + ", ".join(missing))
+
+
+def _headless_browser() -> str:
+    """이 PC 에서 쓸 수 있는 헤드리스 브라우저 경로(없으면 "")."""
+    cands = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    for c in cands:
+        if Path(c).is_file():
+            return c
+    for name in ("chromium", "google-chrome", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return ""
+
+
+@test("js", "J18 통합 화면을 진짜 브라우저로 띄운다 — 문법이 아니라 '보이는가'를 본다", web=True)
+def j18(b: Box):
+    """정적 검사(J14·J16·J17)가 못 보는 것이 있다: **그려지는가.**
+
+    없는 함수를 부르는 코드도 문법은 멀쩡하고, 라우트 이름이 맞아도 그 응답으로 화면을
+    만드는 자리에서 죽으면 사용자가 보는 것은 빈 판이다. 실제로 이 작업 중에 openChat 이
+    잘못된 화면으로 가도록 바꿔 버린 적이 있다 — 목록에서 대화를 눌러도 목록으로 되돌아오는
+    상태였고, 문법 검사·정의 검사 둘 다 통과했다. 그건 띄워 봐야 안다.
+
+    헤드리스 브라우저로 각 탭을 열고 DOM 을 받아 확인한다. 브라우저가 없는 PC 에서는
+    건너뛴다(코드 문제가 아니라 이 기계에 없을 뿐이다).
+    """
+    exe = _headless_browser()
+    if not exe:
+        raise Gap("헤드리스 브라우저(Edge/Chrome)가 이 PC 에 없음")
+
+    # 대화가 하나도 없으면 줄이 없고, 줄마다 생기는 [내보내기] 도 없다.
+    # 빈 목록을 보고 "버튼이 없다" 라고 하면 엉뜬한 곳을 고치게 된다 — 한 줄 만든다.
+    b.wapi("/api/chat", {"messages": [{"role": "user", "content": "목록에 한 줄"}]})
+
+    profile = b.root / "logs" / "headless"
+
+    seq = {"n": 0}
+
+    def _once(hashname: str) -> str:
+        # 프로필을 **매번 새 폴더로** 둔다. 같은 경로를 지우고 다시 만들면, 앞서 띄운
+        # msedge 가 아직 내려가는 중일 때 새 프로세스가 그쪽에 일을 넘기고 **즉시 끝난다**
+        # — 빈 DOM 이 나오고, 그것이 5회 중 2회 깜빡이던 진짜 이유였다.
+        seq["n"] += 1
+        prof = profile.parent / ("headless%02d" % seq["n"])
+        prof.mkdir(parents=True, exist_ok=True)
+        out = subprocess.run(
+            [exe, "--headless", "--disable-gpu", "--no-sandbox", "--disable-extensions",
+             "--no-first-run", "--no-default-browser-check",
+             "--virtual-time-budget=9000", "--user-data-dir=" + str(prof), "--dump-dom",
+             b.url("/chat") + "#" + hashname],
+            capture_output=True, timeout=120)
+        return out.stdout.decode("utf-8", "replace")
+
+    def dom(hashname: str, must: str = "", gone: str = "", tries: int = 4) -> str:
+        """DOM 을 받는다. ``must`` 를 주면 그것이 나타날 때까지 다시 띄운다.
+
+        ``gone`` 을 주면 그 글자가 **사라질 때까지** 다시 띄운다(예: "확인 중" 은
+        상태 칩의 초기값이다 — 사라졌다면 boot 이 끝까지 갔다는 뜻).
+
+        --dump-dom 은 페이지가 끝났다고 판단한 순간 찍는다. boot 이 fetch 를 몇 번 기다리는
+        화면이라 그 순간이 가끔 이르다 — 그러면 진짜 고장과 구별이 안 된다.
+        깜빡이는 검사는 없는 검사보다 나쁘다(사람이 결과를 안 믿게 된다). 세 번 본다.
+        """
+        last = ""
+        for _ in range(max(1, tries)):
+            last = _once(hashname)
+            if (not must or must in last) and (not gone or gone not in last):
+                return last
+        return last
+
+    talk = dom("talk", "장면으로 조립", gone="글자 확인 중")
+    ok(len(talk) > 2000, "대화 화면이 거의 비어 있다(%d바이트) — 스크립트가 죽었다" % len(talk))
+    for probe, why in (("로컬 LLM 스튜디오", "앱 이름"), ('id="live"', "고정 진행 자리"),
+                       ('id="tabList"', "목록 탭 버튼"), ("장면으로 조립", "조립 버튼")):
+        ok(probe in talk, "대화 화면에 %s 가 없다" % why)
+
+    lst = dom("list", 'class="chatlist"')
+    ok('class="chatlist"' in lst, "목록 화면이 안 그려졌다 — 주소창 해시로 탭이 안 열린다")
+    for probe, why in (("가져오기", "[가져오기] 버튼"), ("내보내기", "[내보내기] 버튼"),
+                       ('type="file"', "파일 고르기"), ("+ 새 대화", "[+ 새 대화]")):
+        ok(probe in lst, "목록 화면에 %s 가 없다" % why)
+
+    # 탭마다 다른 것이 그려져야 한다 — 같은 DOM 이 나오면 해시 라우팅이 죽은 것이다
+    ok(lst != talk, "목록과 대화가 같은 화면을 그린다 — 탭 전환이 동작하지 않는다")
+
+    # 스크립트가 죽으면 이 표시들은 초기값 그대로 남는다(boot 이 끝까지 못 갔다는 뜻)
+    ok("연결" in talk or "끊김" in talk or "거부" in talk,
+       "상태 칩이 갱신되지 않았다 — boot 이 끝까지 가지 못했다")
+
+
 @test("js", "J16 통합 화면 — 굽던 그림이 새로고침 뒤에도 이어지고, 거절당한 기기가 조용해지지 않는다")
 def j16(b: Box):
     """전부 '데이터는 안전한데 사람이 두 번 일하게 되는' 종류다.
